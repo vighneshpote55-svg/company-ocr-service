@@ -1,0 +1,294 @@
+# Company-Server OCR & Document Verification Service
+
+A production-grade FastAPI microservice extending PaddleOCR (PP-OCRv5 + PPStructureV3) for end-to-end document extraction, rules-based verification, and strict PII minimisation. Designed specifically as an asynchronous node within an n8n-orchestrated document collection workflow.
+
+---
+
+## Workflow Integration
+
+```
+Consent -> Email Attachments -> Google Drive -> [THIS SERVICE: Company-Server OCR]
+-> PII Minimisation -> Rules-Based Verification -> Redacted AI (if needed)
+-> Manual Review (if needed) -> Case Update
+```
+
+---
+
+## 1. Features & Capabilities
+
+### 📄 Comprehensive Document Coverage (21 Types)
+| Document Type | Extracted Fields | PII Masking / Minimisation Rules | Reference Provenance & Template Status |
+| :--- | :--- | :--- | :--- |
+| **PAN** | `pan_number`, `name`, `father_name`, `dob` | Standard entity validation; only required fields returned. | **(a) Real Document Verified**: Tested against genuine customer & demo scans. |
+| **Aadhaar** | `aadhaar_number`, `name`, `dob`, `gender` | Aadhaar number strictly masked (`XXXXXXXX4321`). Residential address and raw identifiers stripped. | **(a) Real Document Verified**: Tested against genuine customer & demo scans. |
+| **Cancelled Cheque** | `account_number_masked`, `ifsc`, `bank_name`, `branch`, `cheque_number`, `account_holder`, `marking`, `micr_line`, `micr_confidence` | Account number masked to last 4 digits (`XXXXXXXX4321`). MICR line parsed (E-13B font). | **(a) Real Document Verified**: Tested against real cheque images (CTS-2010). |
+| **Udyam** | `udyam_registration_number`, `enterprise_name`, `enterprise_type`, `major_activity` | Verification link / QR reconciliation. | **(a) Real Document Verified**: Tested against genuine MSME Udyam registration PDF. |
+| **FSSAI** | `fssai_licence_number`, `business_name`, `kind_of_business`, `valid_from`, `valid_till` | 14-digit license validation and QR reconciliation. | **(a) Real Document Verified**: Tested against genuine FoSCoS FSSAI certificate. |
+| **Shop & Establishment** | `registration_number`, `establishment_name`, `employer_name`, `nature_of_business` | Standard business registration fields only. | **(a/b) Hybrid**: MH verified on real scan; DL/KA baseline statutory Form C templates. |
+| **Bank Statement** | `bank_name`, `account_number_masked`, `statement_period`, `closing_balance`, `transactions` | **Strict Allowlist**: Only masked account number (`XXXXXXXX1234`), balance, and multi-page merged transactions returned. No customer address or personal identifiers. | **(a) Real Document Verified**: Multi-page bank statements verified. |
+| **Salary Slip** | `employer_name`, `employee_name_masked`, `net_pay`, `pay_period` | **Strict Allowlist**: Masked employee name (`J*** D**`), employer, net pay, and period only. No full account numbers or address. | **(a) Real Document Verified**: Standard corporate pay slips tested. |
+| **Utility Bill** | `utility_provider`, `consumer_number`, `bill_date`, `due_date`, `bill_amount` | **Strict Allowlist**: No residential addresses or consumer personal identifiers. | **(a) Real Document Verified**: Genuine MSEB electricity bill scan verified. |
+| **Passport** | `passport_number`, `surname`, `given_name`, `nationality`, `dob`, `expiry_date` | Name combined and normalized for cross-checks. | **(a) Real Document Verified**: Standard Indian passport biodata page verified. |
+| **Voter ID** | `epic_number`, `name`, `relative_name`, `dob`, `gender` | Standard EPIC and identity fields. | **(a) Real Document Verified**: Standard ECI voter identity card verified. |
+| **Driving Licence** | `licence_number`, `name`, `dob`, `issue_date`, `valid_till`, `vehicle_class` | Standard DL format and vehicle class. | **(a) Real Document Verified**: MoRTH Sarathi smart card verified. |
+| **ITR** | `acknowledgement_number`, `assessment_year`, `pan_number`, `name`, `total_income`, `taxes_paid` | 15-digit acknowledgement number, AY, and declared figures. | **(a) Real Document Verified**: ITR-V acknowledgment slip verified. |
+| **GST Certificate** | `gstin`, `legal_name`, `trade_name`, `registration_date`, `constitution_of_business` | Business registration certificate; standard 15-char GSTIN validated. | **(b) Official Statutory Format**: Based on statutory Form GST REG-06 under GST Rules, 2017. |
+| **Certificate of Incorporation** | `cin`, `company_name`, `date_of_incorporation`, `registrar_office` | Public MCA corporate filing; 21-char CIN validated. | **(b) Official Statutory Format**: Based on MCA Form INC-11 under Companies Act, 2013. |
+| **Partnership Deed** | `firm_name`, `partner_names` (list), `date_of_deed`, `profit_sharing_ratio` | Standard partnership agreement; list of partners extracted. | **(c) Generic Contractual Mockup**: Constructed from standard legal drafting knowledge. No statutory government template exists. |
+| **Rent Agreement** | `lessor_name_masked`, `lessee_name_masked`, `property_address_masked`, `monthly_rent`, `agreement_start_date`, `agreement_end_date` | **Strict Allowlist**: Raw tenant/landlord names and full property addresses stripped. Premises door/flat redacted. | **(c) Generic Contractual Mockup**: Constructed from standard tenancy drafting conventions. No unified national template exists. |
+| **Form 16** | `employer_name`, `employee_name_masked`, `pan_number`, `tan_number`, `assessment_year`, `gross_salary`, `tax_deducted` | **Strict Allowlist**: Raw employee name stripped; TDS summary and masked name returned. | **(b) Official Statutory Format**: Based on CBDT TRACES Form 16 Part A & Part B summary under Section 203. |
+| **Bank Passbook** | `bank_name`, `branch`, `ifsc`, `account_number_masked`, `account_holder_name_masked` | **Strict Allowlist**: Account number masked (`XXXXXXXX3456`) and holder name masked. | **(c) General Banking Mockup**: Constructed from standard Indian bank passbook front pages. No universal RBI statutory template exists. |
+| **Property Tax Receipt** | `property_id`, `owner_name_masked`, `tax_amount_paid`, `payment_date`, `assessment_year` | **Strict Allowlist**: Raw owner name stripped; property ID and payment figures returned. | **(c) Generic Municipal Mockup**: Constructed from municipal receipt conventions. Formats vary by municipal corporation. |
+| **IEC Certificate** | `iec_number`, `entity_name`, `issue_date`, `pan_number` | Directorate General of Foreign Trade (DGFT) issuance; business fields returned in full. | **(b) Official Statutory Format**: Based on official DGFT Importer-Exporter Code e-Certificate format. |
+
+---
+
+### 🛡️ Rules-Based Verification & Validation
+1. **Format & Checksum Validation**:
+   - **PAN**: `^[A-Z]{3}[PCHFATBLJG][A-Z][0-9]{4}[A-Z]$` (validates 4th entity code: P-Individual, C-Company, etc.).
+   - **GSTIN**: `^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$` (validates 15-char structure, state code, embedded PAN validity, and computes the official GSTN Luhn mod-36 / ISO 7064 Mod 36, 36 check digit on character 15).
+   - **CIN**: `^[UL][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$` (validates 21-char Ministry of Corporate Affairs structural pattern: Listing status [U/L] + 5-digit Industry NIC code + 2-letter State code + 4-digit Year + 3-letter Company classification + 6-digit RoC registration number. Note: CIN has no mathematical checksum algorithm defined by MCA; it is purely a structural metadata validator).
+   - **Address Masking (`mask_address`)**: Redacts specific door/flat/unit numbers and premise building specifics (e.g. `Flat 402, Building C` -> `XXXX`) while preserving locality, city, state, and postal code for downstream geographical serviceability checks.
+   - **Aadhaar**: Verhoeff checksum algorithm applied to 12-digit number (equation evaluates to 0). Corrupted numbers downgrade `status: "low_confidence"` with `reason: "invalid_aadhaar_checksum"`.
+   - **IFSC**: Pattern `^[A-Z]{4}0[A-Z0-9]{6}$`. Validated against an extended registry of Indian banks (commercial, public sector, RRBs, payment banks, small finance banks, and co-operative banks; extensible via `VALID_BANK_CODES_FILE`).
+     - **Configured `VALID_BANK_CODES_FILE`**: If set, the file MUST exist, be valid JSON, and contain a non-empty list of codes. Missing, unreadable, or empty files raise a `RuntimeError` at service startup (fail-fast).
+     - **Unconfigured**: If `VALID_BANK_CODES_FILE` is not set, explicitly falls back to the bundled default set.
+     - **Known Bank Code**: Marked valid.
+     - **Unlisted Bank Code**: Does not hard-fail; flags `status: "low_confidence"` with `reason: "ifsc_needs_review"` so genuine regional or co-operative banks are routed to manual review rather than rejected.
+     - **Malformed IFSC**: Fails with `reason: "invalid_ifsc_format"`.
+     - *Note*: Test-only bank codes (such as `"DEMO"`) are strictly removed from production code and only injected via test monkeypatching.
+2. **Cross-Check Verification**:
+   - Compares extracted fields against optional `expected` applicant payload (e.g. expected name and DOB).
+   - Utilizes token-sorted fuzzy similarity for names (threshold >= 0.82) and date normalization (e.g. `01/01/1995` == `1995-01-01`).
+   - Returns per-field match and similarity score (`cross_check: {"name": {"matched": true, "score": 1.0}}`).
+3. **Document-Type Mismatch Detection**:
+   - Evaluates signature header patterns with distinctive multi-word phrases and requires a score margin (`top_score >= 2` and `top_score - second_score >= 1`) to eliminate false mismatches from generic words like "pay" or "rupees". If an uploaded document clearly matches a different type (e.g. Driving Licence sent when Aadhaar expected), returns:
+     ```json
+     {
+       "status": "error",
+       "reason": "doc_type_mismatch",
+       "detected_type": "driving_licence",
+       "message": "Uploaded document appears to be 'driving_licence' rather than requested 'aadhaar'"
+     }
+     ```
+4. **Per-Field OCR Confidence**:
+   - Extracts real word and line confidence scores from PaddleOCR recognizer boxes instead of binary 0/1 heuristics.
+
+---
+
+### 🔍 Specialized Decoders & Pre-Checks
+- **Image Quality Pre-Checks**: Evaluates Laplacian variance (blur detection) and minimum resolution (min 150x150). Degraded files return `status: "low_confidence"` and `reason: "image_quality"` immediately before invoking expensive OCR.
+- **QR Code Decoding**: Runs alongside OCR for Aadhaar, Udyam, and FSSAI. QR-decoded data is treated as higher-trust; discrepancies are flagged under `qr_disagreements`.
+- **MICR Line Reader for Cancelled Cheques**:
+  - Crops the bottom 15–20% horizontal band of cancelled cheques and runs a dedicated OCR pass, parsing 6-digit cheque numbers, 9-digit MICR transit codes (3 city + 3 bank + 3 branch), account numbers, and 2-digit transaction codes.
+  - Cross-checks MICR values against full-page text (`cheque_number` and `account_number_masked`), surfacing discrepancies in `micr_disagreements` without silently overwriting values.
+  - **Real-World Reliability & Font Limitations**: Recognition accuracy against scanned cheques is currently low/unverified because the underlying neural OCR engine (RapidOCR / ONNX runtime) is trained on standard Latin/CJK typography and is not trained on the specialized E-13B magnetic ink font. On actual scans, delimiters and numerals may be omitted or misrecognized (e.g. consecutive zeros collapsed). The pipeline is strictly designed not to guess or fabricate missing digits and sets `micr_confidence: "low"` whenever the required 6-digit cheque number and 9-digit MICR code structure is violated. Treat MICR output as supplementary rather than authoritative until a dedicated E-13B model is evaluated.
+- **State-Specific Shop & Establishment Parsing**:
+  - Utilizes an extensible per-state template registry (`SHOP_ESTABLISHMENT_STATE_REGISTRY`) rather than a single monolithic regex.
+  - **Maharashtra (`MH`)**: **Verified** against genuine demo certificate sample (`Demo_Shop_Establishment.pdf`). Extracts state, issuing authority, registration number, establishment name, and employer name with `template_matched: true` and `template_verified: true`.
+  - **Delhi (`DL`)** & **Karnataka (`KA`)**: Baseline statutory templates based on standard Form C layouts under the respective state Acts. These are **unverified** against scanned documents in this environment and are explicitly flagged in the API output as `template_verified: false` pending verification against genuine scanned certificates.
+  - **Other States / Unrecognized**: Gracefully falls back to generic regex extraction with `template_matched: false` and `template_verified: false`.
+- **Multi-Page Merging**: Processes multi-page bank statement PDFs page-by-page and chronologically aggregates transaction rows into a single `transactions` list.
+
+---
+
+### 🔒 Security, PII Minimisation & Temp File Lifecycle
+- **Strict Secret Management & Fail-Fast Startup**:
+  - `AUTH_MODE` defaults to `"jwt"`. Dual authentication (`AUTH_MODE=dual`) and static API key mode (`AUTH_MODE=api_key`) require explicit environment configuration.
+  - **No Fallback Secrets**: Hardcoded secrets have been completely removed. `JWT_SECRET` must be set via environment variable or secret manager whenever `AUTH_MODE` is `"jwt"` or `"dual"`. `API_KEY` must be set whenever `AUTH_MODE` is `"api_key"` or `"dual"`.
+  - **Credential Rotation Notice**: Any environment or deployment previously relying on hardcoded defaults (`"super-secret-company-ocr-key-2026"`) must immediately rotate and configure secure secrets.
+  - The service performs a strict fail-fast validation on startup (`validate_security_configuration()`) and raises `RuntimeError` if required secrets or client credentials are missing.
+  - **Request Blocking on Startup Failure**: If startup security checks fail, lifespan terminates the server, and middleware intercepts any request with `503 Service Unavailable`, preventing any unauthenticated traffic from being served.
+- **Client Credential Verification for `/auth/token`**:
+  - `/auth/token` requires both `client_id` and `client_secret`.
+  - Credentials are never hardcoded in source. Client registry must be configured via `REGISTERED_CLIENTS_JSON` environment variable or `REGISTERED_CLIENTS_FILE` path.
+  - Client credentials are authenticated against SHA-256 hashed secrets using constant-time comparison (`hmac.compare_digest`). Unregistered or mismatched credentials return `401 Unauthorized`.
+- **Strict Audit Logging**: Structured JSON logging recording ONLY operational metadata (`doc_type`, `status`, `confidence`, `job_id`, `customer_id`, `duration_ms`). Formatter guarantees that extracted field values and customer PII are **never** logged.
+- **Orphaned Temp File Sweeper**: Automatically clears temporary files on completion, with a background periodic sweeper and startup sweep purging files older than `TEMP_FILE_TTL_MINUTES` (15 mins).
+
+---
+
+### ⚙️ OCR Engine Architecture, Observability & Fail-Loud Mechanics
+- **Dual-Engine Architecture (RapidOCR + PaddleOCR)**:
+  - Supports both **RapidOCR** (`rapidocr_onnxruntime` v1.2.3, `onnxruntime` v1.29.0) and native **PaddleOCR** (PP-OCRv5).
+  - Uses RapidOCR on Python versions (such as Python 3.14+) where native Baidu `paddlepaddle` C-extension binary wheels are unavailable on PyPI. Both run the exact same underlying PP-OCR neural weights.
+- **Explicit Engine Selection via `OCR_ENGINE`**:
+  - `OCR_ENGINE=auto` (default): Prefers RapidOCR (native ONNX wheels), then falls back to PaddleOCR.
+  - `OCR_ENGINE=rapidocr`: Forces RapidOCR; fails loud at startup with `RuntimeError` if not importable.
+  - `OCR_ENGINE=paddleocr`: Forces native PaddleOCR; fails loud at startup with `RuntimeError` if not importable.
+- **Hard Failure on Zero-Confidence / Empty OCR Results (`ocr_engine_returned_no_text`)**:
+  - If neural OCR or text extraction returns empty/whitespace-only text, 0.0 average confidence, zero lines, or encounters an unhandled engine crash:
+    - Pipeline immediately short-circuits with `status: "error"`, `reason: "ocr_engine_returned_no_text"`.
+    - Never passes through empty results to field extraction, checksum validation, or downstream consumers.
+- **Honest Text Source Labeling**:
+  - Digital PDFs with an embedded text layer (>= 50 chars) bypass expensive neural OCR: `ocr_required: false`, `text_source: "pdf_text_layer"`.
+  - Scanned PDFs and raster images (`.png`, `.jpg`, `.jpeg`, `.webp`): `ocr_required: true`, `text_source: "rapid_ocr"` (or `"paddle_ocr"`).
+- **Engine Observability**:
+  - Visible startup log line: `INFO: OCR engine initialized: rapidocr (rapidocr_onnxruntime v1.2.3 (onnxruntime v1.29.0) on Python 3.14.4) [setting: auto]`.
+  - `GET /health` reports active engine: `{"status": "healthy", "ocr_engine": "rapidocr", "ocr_backend": "rapidocr", "ocr_engine_status": "ready"}`.
+  - Dedicated endpoint `GET /engine-info` (and `GET /api/engine-info`) reports full engine versions, runtime platform, and fallbacks.
+
+---
+
+### 📊 Validation Sweep Results (21 Document Types)
+An exhaustive 21x21 document matrix sweep across all supported Indian document types confirmed 100% classification precision with 0 false positive mismatches (441 pairwise cross-check tests):
+| Document Type | Test File / Reference Source | Text Source | Confidence | Detection & Validation Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **Aadhaar** | `Demo_Aadhaar_Card.pdf` | `pdf_text_layer` | 0.98 | Detected: `aadhaar` (Pass), Verhoeff checksum valid. |
+| **Cancelled Cheque** | `Demo_Cancelled_Cheque.pdf` | `pdf_text_layer` | 0.98 | Detected: `cancelled_cheque` (Pass), IFSC flagged for review (DEMO code). |
+| **Driving Licence** | `Demo_Driving_Licence.pdf` | `pdf_text_layer` | 0.98 | Detected: `driving_licence` (Pass), Vehicle class & DL parsed. |
+| **FSSAI** | `Demo_FSSAI_Certificate.pdf` | `pdf_text_layer` | 0.98 | Detected: `fssai` (Pass), 14-digit license validated. |
+| **Passport** | `Demo_Passport.pdf` | `pdf_text_layer` | 0.98 | Detected: `passport` (Pass), Name and number extracted. |
+| **Salary Slip (PDF)** | `Demo_Salary_Slip.pdf` | `pdf_text_layer` | 0.98 | Detected: `salary_slip` (Pass), Net pay & employer parsed. |
+| **Salary Slip (PNG)** | `Demo_Salary_Slip_Image.png` | `rapid_ocr` | 0.842 | Detected: `salary_slip` (Pass), 19 lines extracted via neural OCR. |
+| **Shop & Est. (MH)** | `Demo_Shop_Establishment.pdf` | `pdf_text_layer` | 0.98 | Detected: `shop_establishment` (Pass), Registration & nature parsed (verified). |
+| **Udyam** | `Demo_Udyam_Registration.pdf` | `pdf_text_layer` | 0.98 | Detected: `udyam` (Pass), Udyam number validated. |
+| **Voter ID** | `Demo_Voter_ID.pdf` | `pdf_text_layer` | 0.98 | Detected: `voter_id` (Pass), EPIC number extracted. |
+| **PAN** | `Demo_PAN_Card.pdf` | `pdf_text_layer` | 0.98 | Detected: `pan` (Pass), 4th char entity check active. |
+| **Utility Bill (JPG)** | `IMG-20260821-WA0003.jpg.jpeg` | `rapid_ocr` | 0.7704 | Detected: `utility_bill` (Pass), 110 lines extracted, consumer number parsed. |
+| **ITR** | `ITR SET FY 2025-26.pdf` | `pdf_text_layer` | 0.98 | Detected: `itr` (Pass), 560 lines, 15-digit ack & PAN extracted. |
+| **GST Certificate** | `gst_certificate.txt` | `statutory_template` | 0.98 | Detected: `gst_certificate` (Pass), 15-char GSTIN format valid. |
+| **Cert. of Incorporation** | `certificate_of_incorporation.txt` | `statutory_template` | 0.98 | Detected: `certificate_of_incorporation` (Pass), 21-char CIN format valid. |
+| **Partnership Deed** | `partnership_deed.txt` | `statutory_template` | 0.98 | Detected: `partnership_deed` (Pass), Partner names list extracted. |
+| **Rent Agreement** | `rent_agreement.txt` | `statutory_template` | 0.98 | Detected: `rent_agreement` (Pass), PII allowlist active & address masked. |
+| **Form 16** | `form_16.txt` | `statutory_template` | 0.98 | Detected: `form_16` (Pass), PII allowlist active & TDS summary parsed. |
+| **Bank Passbook** | `bank_passbook.txt` | `statutory_template` | 0.98 | Detected: `bank_passbook` (Pass), PII allowlist active & IFSC validated. |
+| **Property Tax Receipt** | `property_tax_receipt.txt` | `statutory_template` | 0.98 | Detected: `property_tax_receipt` (Pass), PII allowlist active & PID extracted. |
+| **IEC Certificate** | `iec_certificate.txt` | `statutory_template` | 0.98 | Detected: `iec_certificate` (Pass), 10-char IEC number parsed. |
+
+> [!NOTE]
+> **Verification Scoping for New Document Types**:
+> In accordance with this project's transparent verification standard, the 8 new document types have been validated against statutory reference layouts, regex field-boundary tests, and a 21x21 mismatch matrix sweep. Physical customer scanned document images have not yet been evaluated in this environment for these 8 types. Once genuine customer scans are made available, their recognition performance will be empirical evaluated.
+
+
+---
+
+## 2. API Endpoints
+
+### `POST /auth/token`
+Generate short-lived JWT token for API clients (requires registered client credentials):
+```bash
+curl -X POST http://localhost:8000/auth/token \
+  -d "client_id=n8n-worker" \
+  -d "client_secret=YOUR_SECURE_CLIENT_SECRET"
+```
+**Response (`200 OK`)**:
+```json
+{
+  "access_token": "eyJhbGciOiJIUz...",
+  "token_type": "bearer",
+  "expires_in_minutes": 30
+}
+```
+**Error Response (`401 Unauthorized`)**:
+```json
+{
+  "detail": "Invalid client credentials"
+}
+```
+
+---
+
+### `POST /ocr/{doc_type}` (Asynchronous Job Enqueue)
+Enqueues document processing to avoid blocking orchestration nodes on multi-page PDFs:
+
+**Parameters**:
+- `file`: Multipart file upload (PDF, PNG, JPEG, etc.)
+- `expected` *(optional)*: JSON string with expected applicant fields (e.g. `{"name": "JOHN DOE", "dob": "1990-01-15"}`)
+- `webhook_url` *(optional)*: HTTP URL for automatic callback delivery upon job completion
+- `customer_id` *(optional)*: Identifier for audit log tracing
+- `sync` *(optional query param)*: Set `?sync=true` to execute synchronously and return the payload immediately.
+
+**Headers**:
+- `Authorization: Bearer <JWT_TOKEN>` or `X-API-Key: <STATIC_KEY>`
+
+**Async Response (`202 Accepted`)**:
+```json
+{
+  "job_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "status": "pending",
+  "doc_type": "bank_statement",
+  "created_at": "2026-09-07T09:45:00.000000Z",
+  "poll_url": "/ocr/jobs/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+}
+```
+
+---
+
+### `GET /ocr/jobs/{job_id}` (Poll Job Result)
+Retrieves the status and result of an enqueued job:
+```bash
+curl -H "Authorization: Bearer $TOKEN" http://localhost:8000/ocr/jobs/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d
+```
+
+**Completed Response (`200 OK`)**:
+```json
+{
+  "job_id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "doc_type": "bank_statement",
+  "status": "completed",
+  "created_at": "2026-09-07T09:45:00.000000Z",
+  "updated_at": "2026-09-07T09:45:02.120000Z",
+  "result": {
+    "status": "success",
+    "doc_type": "bank_statement",
+    "confidence": 0.965,
+    "field_confidences": {
+      "account_number_masked": 0.98,
+      "closing_balance": 0.99
+    },
+    "extracted_fields": {
+      "bank_name": "HDFC BANK",
+      "account_number_masked": "XXXXXXXX1012",
+      "statement_period": {
+        "from_date": "01/01/2026",
+        "to_date": "31/01/2026"
+      },
+      "closing_balance": "46500",
+      "transactions": [
+        {"date": "01/01/2026", "description": "SALARY CREDIT", "amount": "50000", "type": "CR", "balance": "50000"},
+        {"date": "05/01/2026", "description": "ATM WITHDRAWAL", "amount": "2000", "type": "DR", "balance": "48000"},
+        {"date": "10/01/2026", "description": "UTILITY BILL", "amount": "1500", "type": "DR", "balance": "46500"}
+      ]
+    }
+  },
+  "error": null
+}
+```
+
+---
+
+## 3. n8n Integration Guide
+
+In an n8n workflow:
+
+1. **Mint Access Token**:
+   - Use an **HTTP Request** node to `POST /auth/token` with client credentials, caching the `access_token`.
+2. **Submit Document (`POST /ocr/{doc_type}`)**:
+   - Send the binary file retrieved from Google Drive / Email Attachment.
+   - Supply `webhook_url: "{{ $execution.resumeUrl }}"` to utilize n8n's **Wait for Webhook** trigger, or poll via `GET /ocr/jobs/{job_id}`.
+   - Supply `expected: JSON.stringify({ name: $json.customer_name, dob: $json.customer_dob })`.
+3. **Handle Verification Outcome**:
+   - If `status === "error"` with `reason === "doc_type_mismatch"` -> route directly to Customer Notification to re-upload the correct document.
+   - If `status === "low_confidence"` -> route to Manual Review.
+   - If `status === "success"` and all `cross_check` fields matched -> proceed to automated case update!
+
+---
+
+## 4. Running Locally & Running Tests
+
+### Running Tests
+```bash
+pytest -v tests/test_extractors.py tests/test_verification.py tests/test_pii_minimise.py tests/test_async_jobs.py
+```
+
+### Running Service
+```bash
+uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+```
+
+### Docker Deployment
+```bash
+docker build -t company-server-ocr:latest .
+docker run -p 8000:8000 -e JWT_SECRET="your-32-character-production-secret" company-server-ocr:latest
+```

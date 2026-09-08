@@ -1,0 +1,152 @@
+"""
+tests/test_web_api.py
+Unit and integration tests for the Document OCR Web Application REST APIs.
+Tests:
+- /api/supported-types
+- /api/stats
+- /api/upload (text-based PDF -> ocr_required=False, image -> ocr_required=True)
+- /api/documents (listing, filtering, search)
+- /api/documents/{id} (retrieval)
+- /api/documents/{id}/file (file serving)
+- /api/documents/{id}/preview (thumbnail serving)
+- DELETE /api/documents/{id}
+"""
+
+import io
+import os
+import pytest
+from fastapi.testclient import TestClient
+from PIL import Image, ImageDraw
+
+from main import app
+import document_store
+
+
+@pytest.fixture
+def client(monkeypatch):
+    monkeypatch.setenv("AUTH_MODE", "dual")
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key-at-least-32-chars-long-123456")
+    monkeypatch.setenv("API_KEY", "test-static-api-key-2026")
+    return TestClient(app)
+
+
+def test_supported_types(client):
+    response = client.get("/api/supported-types")
+    assert response.status_code == 200
+    data = response.json()
+    assert isinstance(data, list)
+    assert len(data) >= 14
+    ids = [item["id"] for item in data]
+    assert "auto" in ids
+    assert "pan" in ids
+    assert "aadhaar" in ids
+    assert "bank_statement" in ids
+
+
+def test_get_stats(client):
+    response = client.get("/api/stats")
+    assert response.status_code == 200
+    stats = response.json()
+    assert "total" in stats
+    assert "ocr_processed" in stats
+    assert "ocr_not_required" in stats
+
+
+def test_upload_image_document(client, tmp_path):
+    # Create an image with readable text in memory
+    img = Image.new("RGB", (400, 150), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.text((20, 30), "INCOME TAX DEPARTMENT", fill=(0, 0, 0))
+    draw.text((20, 60), "PERMANENT ACCOUNT NUMBER", fill=(0, 0, 0))
+    draw.text((20, 90), "ABCDE1234F", fill=(0, 0, 0))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("test_pan_card.png", buf, "image/png")},
+        data={"doc_type": "auto"},
+    )
+    assert response.status_code == 200
+    doc = response.json()
+    assert doc["id"] is not None
+    assert doc["filename"] == "test_pan_card.png"
+    assert doc["ocr_required"] is True
+    assert doc["text_source"] in ("rapid_ocr", "paddle_ocr")
+    assert doc["file_type"] == ".png"
+    doc_id = doc["id"]
+
+
+    # Verify listing includes it
+    list_res = client.get("/api/documents")
+    assert list_res.status_code == 200
+    items = list_res.json()["items"]
+    assert any(i["id"] == doc_id for i in items)
+
+    # Verify fetching by ID
+    get_res = client.get(f"/api/documents/{doc_id}")
+    assert get_res.status_code == 200
+    assert get_res.json()["id"] == doc_id
+
+    # Verify file endpoint
+    file_res = client.get(f"/api/documents/{doc_id}/file")
+    assert file_res.status_code == 200
+    assert file_res.headers["content-type"] == "image/png"
+
+    # Verify deletion
+    del_res = client.delete(f"/api/documents/{doc_id}")
+    assert del_res.status_code == 200
+    assert del_res.json()["success"] is True
+
+    # After deletion, 404
+    get_after = client.get(f"/api/documents/{doc_id}")
+    assert get_after.status_code == 404
+
+
+def test_upload_blank_image_rejected(client):
+    # Blank/unreadable images must be rejected with HTTP 422 and not saved
+    img = Image.new("RGB", (300, 100), color=(255, 255, 255))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("blank_card.png", buf, "image/png")},
+        data={"doc_type": "auto"},
+    )
+    assert response.status_code == 422
+    assert "no text or zero confidence" in response.json()["detail"]
+
+    # Verify blank document was NOT persisted to repository
+    list_res = client.get("/api/documents")
+    assert list_res.status_code == 200
+    items = list_res.json()["items"]
+    assert not any(i.get("filename") == "blank_card.png" for i in items)
+
+
+def test_upload_real_pdf_demo(client):
+    demo_pdf_path = "/home/vighnesh/Downloads/Demo_PAN_Card.pdf"
+    if not os.path.exists(demo_pdf_path):
+        pytest.skip("Demo_PAN_Card.pdf not available in Downloads")
+
+    with open(demo_pdf_path, "rb") as f:
+        pdf_bytes = f.read()
+
+    response = client.post(
+        "/api/upload",
+        files={"file": ("Demo_PAN_Card.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
+        data={"doc_type": "auto"},
+    )
+    assert response.status_code == 200
+    doc = response.json()
+    assert doc["id"] is not None
+    # Embedded text layer was detected, so OCR was not required!
+    assert doc["ocr_required"] is False
+    assert doc["text_source"] in ("pdf_text_layer", "embedded_pdf_text")
+    assert doc["doc_type"] == "pan"
+    assert "ABCDE1234F" in str(doc.get("extracted_fields", {}))
+
+    # Clean up
+    client.delete(f"/api/documents/{doc['id']}")
