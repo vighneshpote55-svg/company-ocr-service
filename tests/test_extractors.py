@@ -8,6 +8,7 @@ import pytest
 from ocr_engine import OCREngine, OCRDocumentResult, OCRLine, OCRPageResult
 from extractors import (
     extract_document_fields,
+    extract_document_fields_raw,
     mask_account_number,
     mask_aadhaar,
     EXTRACTOR_REGISTRY,
@@ -874,11 +875,18 @@ def test_partnership_deed_extractor_and_bleed():
     """
     fields, conf = extract_document_fields("partnership_deed", create_mock_doc(text))
     assert fields["firm_name"] == "MALHOTRA & DESHMUKH TRADERS"
-    assert isinstance(fields["partner_names"], list)
-    assert "MR. VIKRAM MALHOTRA" in fields["partner_names"]
-    assert "MR. ROHAN DESHMUKH" in fields["partner_names"]
+    assert "partner_names" not in fields
+    assert "raw_partner_names" not in fields
+    assert isinstance(fields["partner_names_masked"], list)
+    assert "MR. M*******" in fields["partner_names_masked"]
+    assert "MR. D*******" in fields["partner_names_masked"]
     assert fields["profit_sharing_ratio"] == "50:50"
     assert fields["date_of_deed"] == "01/04/2025"
+
+    # Verify raw extractor retains unmasked names for verification/cross-check
+    raw_fields, _ = extract_document_fields_raw("partnership_deed", create_mock_doc(text))
+    assert "MR. VIKRAM MALHOTRA" in raw_fields["partner_names"]
+    assert "MR. ROHAN DESHMUKH" in raw_fields["partner_names"]
 
     # Field-boundary bleed regression
     bleed_text = """

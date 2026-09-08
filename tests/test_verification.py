@@ -533,5 +533,16 @@ def test_cross_check_list_valued_field():
     res6 = perform_cross_check({"partner_names": []}, {"partner_names": ["VIKRAM MALHOTRA"]})
     assert res6["partner_names"]["matched"] is False
 
+    # 7. Verify cross-check works with raw_partner_names (standard post-extractor raw state)
+    raw_state = {
+        "firm_name": "MALHOTRA & DESHMUKH ENTERPRISES",
+        "raw_partner_names": ["VIKRAM MALHOTRA", "ROHAN DESHMUKH"],
+        "partner_names_masked": ["VIKRAM M*******", "ROHAN D*******"],
+    }
+    res7 = perform_cross_check(raw_state, {"name": "VIKRAM MALHOTRA"})
+    assert res7["name"]["matched"] is True
+    assert res7["name"]["score"] >= 0.95
+
+
 
 

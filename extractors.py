@@ -265,11 +265,19 @@ def extract_aadhaar(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[st
     if uid_match:
         raw_uid = uid_match.group(1).replace(" ", "")
         fields["raw_aadhaar"] = raw_uid  # Used internally by verifier, stripped before output
-        fields["aadhaar_number"] = mask_aadhaar(raw_uid)
-        confidences["aadhaar_number"] = find_line_confidence(r"\d{4}\s\d{4}\s\d{4}|\d{12}", all_lines)
+        masked_val = mask_aadhaar(raw_uid)
+        fields["aadhaar_number"] = masked_val
+        fields["aadhaar_number_masked"] = masked_val
+        conf = find_line_confidence(r"\d{4}\s\d{4}\s\d{4}|\d{12}", all_lines)
+        confidences["aadhaar_number"] = conf
+        confidences["aadhaar_number_masked"] = conf
     elif masked_match:
-        fields["aadhaar_number"] = masked_match.group(1).upper()
-        confidences["aadhaar_number"] = find_line_confidence(r"[X\d]{4}\s[X\d]{4}\s\d{4}", all_lines)
+        masked_val = masked_match.group(1).upper()
+        fields["aadhaar_number"] = masked_val
+        fields["aadhaar_number_masked"] = masked_val
+        conf = find_line_confidence(r"[X\d]{4}\s[X\d]{4}\s\d{4}", all_lines)
+        confidences["aadhaar_number"] = conf
+        confidences["aadhaar_number_masked"] = conf
 
     # Name
     name_match = re.search(
@@ -1168,7 +1176,15 @@ def extract_partnership_deed(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any]
                     seen_partners.add(cand_norm)
                     partner_names.append(raw_cand.strip())
     fields["partner_names"] = partner_names
-    confidences["partner_names"] = 0.95 if partner_names else 0.5
+    fields["raw_partner_names"] = partner_names
+    conf_val = 0.95 if partner_names else 0.5
+    confidences["partner_names"] = conf_val
+    confidences["raw_partner_names"] = conf_val
+
+    # Masked variant for PII minimisation: First name + initial per mask_person_name
+    partner_names_masked = [mask_person_name(p) for p in partner_names if p]
+    fields["partner_names_masked"] = partner_names_masked
+    confidences["partner_names_masked"] = conf_val
 
     # Date of Deed
     deed_date = re.search(
@@ -1573,6 +1589,7 @@ PII_ALLOWLIST = {
     "form_16": {"employer_name", "employee_name_masked", "pan_number", "tan_number", "assessment_year", "gross_salary", "tax_deducted"},
     "bank_passbook": {"bank_name", "branch", "ifsc", "account_number_masked", "account_holder_name_masked"},
     "property_tax_receipt": {"property_id", "owner_name_masked", "tax_amount_paid", "payment_date", "assessment_year"},
+    "partnership_deed": {"firm_name", "partner_names_masked", "date_of_deed", "profit_sharing_ratio"},
 }
 
 
@@ -1612,6 +1629,7 @@ def sanitize_extracted_fields(doc_type: str, fields: Dict[str, Any], confidences
         "raw_aadhaar", "raw_account_number", "raw_employee_name",
         "raw_lessor_name", "raw_lessee_name", "raw_property_address",
         "raw_owner_name", "raw_account_holder_name",
+        "raw_partner_names", "partner_names",
     }
 
     for k, v in fields.items():

@@ -879,21 +879,20 @@ async def upload_document_endpoint(
                         raw_fields["micr_disagreements"] = micr_data["micr_disagreements"]
 
                 checksum_valid, checksum_reason = validate_document_checksums(resolved_type, raw_fields)
+                # 4. Optional Cross-check on raw unmasked fields
+                if expected_data:
+                    try:
+                        expected_dict = json.loads(expected_data)
+                        if isinstance(expected_dict, dict):
+                            cross_check_results = perform_cross_check(raw_fields, expected_dict)
+                    except Exception:
+                        pass
                 sanitized_fields, field_confs = sanitize_extracted_fields(resolved_type, raw_fields, field_confs)
             except Exception as ex:
                 checksum_valid = False
                 checksum_reason = f"Extraction error: {str(ex)}"
         else:
             sanitized_fields = {"document_type": "Unknown / Unclassified"}
-
-        # 4. Optional Cross-check
-        if expected_data:
-            try:
-                expected_dict = json.loads(expected_data)
-                if isinstance(expected_dict, dict):
-                    cross_check_results = perform_cross_check(sanitized_fields, expected_dict)
-            except Exception:
-                pass
 
         # 5. Determine Overall Status
         doc_status = determine_document_status(
@@ -902,11 +901,10 @@ async def upload_document_endpoint(
             vault_mode=True,
         )
 
-
         # 6. Generate Thumbnail Preview
         thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
 
-        # 7. Package Result Data
+        # 7. Package Result Data (Strictly sanitized fields, no raw PII)
         result_payload = {
             "doc_type": resolved_type,
             "ocr_required": ocr_required,
@@ -916,7 +914,6 @@ async def upload_document_endpoint(
             "pages": len(doc_res.pages),
             "reason": checksum_reason,
             "extracted_fields": sanitized_fields,
-            "raw_fields": raw_fields,
             "field_confidences": field_confs,
             "extracted_text": doc_res.full_text,
             "checksum_valid": checksum_valid,

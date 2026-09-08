@@ -150,3 +150,57 @@ def test_upload_real_pdf_demo(client):
 
     # Clean up
     client.delete(f"/api/documents/{doc['id']}")
+
+
+def test_upload_cross_check_ordering_with_masked_fields(client):
+    """
+    Regression test for cross-check execution order bug:
+    Ensures that /api/upload runs perform_cross_check against raw_fields BEFORE
+    sanitize_extracted_fields. If it ran against sanitized fields, cross-checking
+    an applicant's raw name against 'employee_name_masked' (e.g. 'RAHUL S*****')
+    would fail, but running against raw fields must succeed with matched: True.
+    """
+    import json
+    # Create a synthetic salary slip image with clear unmasked employee name
+    img = Image.new("RGB", (600, 300), color=(255, 255, 255))
+    draw = ImageDraw.Draw(img)
+    draw.text((20, 30), "PAYSLIP / SALARY SLIP", fill=(0, 0, 0))
+    draw.text((20, 70), "Employer: ACME GLOBAL SOLUTIONS PVT LTD", fill=(0, 0, 0))
+    draw.text((20, 110), "Employee Name: RAHUL SHARMA", fill=(0, 0, 0))
+    draw.text((20, 150), "Pay Period: July 2026", fill=(0, 0, 0))
+    draw.text((20, 190), "Net Pay: Rs. 85,000", fill=(0, 0, 0))
+    buf = io.BytesIO()
+    img.save(buf, format="PNG")
+    buf.seek(0)
+
+    # Submit with expected_data containing the raw unmasked name
+    expected_payload = json.dumps({"name": "RAHUL SHARMA"})
+    response = client.post(
+        "/api/upload",
+        files={"file": ("test_salary_slip.png", buf, "image/png")},
+        data={"doc_type": "salary_slip", "expected_data": expected_payload},
+    )
+    assert response.status_code == 200
+    doc = response.json()
+    doc_id = doc["id"]
+
+    try:
+        # Cross-check MUST succeed against raw unmasked name
+        cross_check = doc.get("cross_check")
+        assert cross_check is not None, "cross_check result missing from response"
+        assert "name" in cross_check, f"cross_check missing 'name' field: {cross_check}"
+        assert cross_check["name"]["matched"] is True, f"Cross-check failed: {cross_check['name']}"
+        assert cross_check["name"]["score"] >= 0.95
+
+        # PII minimisation: the response extracted_fields must ONLY contain masked fields
+        ext_fields = doc.get("extracted_fields", {})
+        assert "employee_name_masked" in ext_fields
+        assert ext_fields["employee_name_masked"] == "RAHUL S*****"
+        assert "employee_name" not in ext_fields
+        assert "raw_employee_name" not in ext_fields
+        assert not any(k.startswith("raw_") for k in ext_fields.keys())
+        assert "RAHUL SHARMA" not in str(ext_fields)
+    finally:
+        # Clean up
+        client.delete(f"/api/documents/{doc_id}")
+

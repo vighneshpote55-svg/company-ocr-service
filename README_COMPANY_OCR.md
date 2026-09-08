@@ -149,7 +149,7 @@ An exhaustive 21x21 document matrix sweep across all supported Indian document t
 | **ITR** | `ITR SET FY 2025-26.pdf` | `pdf_text_layer` | 0.98 | Detected: `itr` (Pass), 560 lines, 15-digit ack & PAN extracted. |
 | **GST Certificate** | `gst_certificate.txt` | `statutory_template` | 0.98 | Detected: `gst_certificate` (Pass), 15-char GSTIN format valid. |
 | **Cert. of Incorporation** | `certificate_of_incorporation.txt` | `statutory_template` | 0.98 | Detected: `certificate_of_incorporation` (Pass), 21-char CIN format valid. |
-| **Partnership Deed** | `partnership_deed.txt` | `statutory_template` | 0.98 | Detected: `partnership_deed` (Pass), Partner names list extracted. |
+| **Partnership Deed** | `partnership_deed.txt` | `statutory_template` | 0.98 | Detected: `partnership_deed` (Pass), PII allowlist active & `partner_names_masked` list parsed. |
 | **Rent Agreement** | `rent_agreement.txt` | `statutory_template` | 0.98 | Detected: `rent_agreement` (Pass), PII allowlist active & address masked. |
 | **Form 16** | `form_16.txt` | `statutory_template` | 0.98 | Detected: `form_16` (Pass), PII allowlist active & TDS summary parsed. |
 | **Bank Passbook** | `bank_passbook.txt` | `statutory_template` | 0.98 | Detected: `bank_passbook` (Pass), PII allowlist active & IFSC validated. |

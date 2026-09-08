@@ -573,9 +573,9 @@ def test_sync_and_async_pipeline_parity_new_document_types(client, auth_header):
 
     async_pd_fields = async_pd_result["result"]["extracted_fields"]
     assert sync_pd_data["extracted_fields"] == async_pd_fields
-    assert async_pd_fields["firm_name"] == "APEX VENTURES"
-    assert isinstance(async_pd_fields["partner_names"], list)
-    assert async_pd_fields["partner_names"] == ["VIKRAM MALHOTRA", "ROHAN DESHMUKH"]
+    assert "partner_names" not in async_pd_fields
+    assert isinstance(async_pd_fields["partner_names_masked"], list)
+    assert async_pd_fields["partner_names_masked"] == ["VIKRAM M*******", "ROHAN D*******"]
     assert async_pd_fields["profit_sharing_ratio"] == "50:50"
 
 

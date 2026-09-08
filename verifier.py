@@ -514,7 +514,9 @@ def perform_cross_check(extracted_fields: Dict[str, Any], expected: Dict[str, An
                     or extracted_fields.get("lessee_name")
                     or extracted_fields.get("lessor_name")
                     or extracted_fields.get("owner_name")
+                    or extracted_fields.get("raw_partner_names")
                     or extracted_fields.get("partner_names")
+                    or extracted_fields.get("partner_names_masked")
                     or extracted_fields.get("legal_name")
                     or extracted_fields.get("company_name")
                     or extracted_fields.get("firm_name")
@@ -522,7 +524,12 @@ def perform_cross_check(extracted_fields: Dict[str, Any], expected: Dict[str, An
                     or extracted_fields.get("entity_name")
                 )
             elif key in ("partner_name", "partner_names", "partners"):
-                extracted_val = extracted_fields.get("partner_names") or extracted_fields.get("partner_name")
+                extracted_val = (
+                    extracted_fields.get("raw_partner_names")
+                    or extracted_fields.get("partner_names")
+                    or extracted_fields.get("partner_names_masked")
+                    or extracted_fields.get("partner_name")
+                )
             elif key in ("dob", "date_of_birth"):
                 extracted_val = extracted_fields.get("dob") or extracted_fields.get("date_of_birth")
             elif key in ("identifier", "id_number"):
