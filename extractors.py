@@ -89,6 +89,15 @@ def mask_address(addr: Optional[str]) -> Optional[str]:
     return masked.strip()
 
 
+def normalize_devanagari_numbers(s: Optional[str]) -> Optional[str]:
+    """Convert Devanagari numerals (०-९) to standard ASCII digits (0-9)."""
+    if not s:
+        return s
+    devanagari_digits = "०१२३४५६७८९"
+    trans = str.maketrans({char: str(i) for i, char in enumerate(devanagari_digits)})
+    return s.translate(trans)
+
+
 def find_line_confidence(pattern: str, lines: List[OCRLine], default_conf: float = 0.95) -> float:
     """Find the confidence score of the OCR line matching a specific regex pattern."""
     regex = re.compile(pattern, re.IGNORECASE)
@@ -120,6 +129,12 @@ RESIDUAL_LABEL_LINES = {
     "passbook", "account holder name", "cif no", "customer id",
     "property id", "property tax", "tax paid", "assessment no", "tax amount",
     "iec", "iec number", "importer exporter code", "dgft", "entity name",
+    # Marathi & Hindi field labels
+    "नोंदणी क्रमांक", "नोंदणी क्र", "आस्थापनेचे नाव", "दुकानाचे नाव", "मालकाचे नाव",
+    "मालकाचा तपशील", "व्यवसायाचे स्वरूप", "उद्यमाचे नाव", "उद्यम नोंदणी क्रमांक",
+    "उद्यमाचा प्रकार", "मुख्य कार्यकलाप", "मालमत्ता क्रमांक", "मालमत्ता कर",
+    "कर आकारणी", "भरलेली रक्कम", "पावती क्रमांक", "परवाना देणारा", "परवाना घेणारा",
+    "भाडेकरार", "मासिक भाडे", "डिपॉझिट", "जन्मतारीख", "जन्म तारीख", "लिंग", "पत्ता", "आधार क्रमांक",
 }
 
 
@@ -279,34 +294,36 @@ def extract_aadhaar(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[st
         confidences["aadhaar_number"] = conf
         confidences["aadhaar_number_masked"] = conf
 
-    # Name
+    # Name (English or Devanagari)
     name_match = re.search(
-        r"(?:Name)[\s:]*(?:\r?\n)?[\s:]*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Aadhaar|DOB|Date|Gender|Address|Father|Mother|Husband|Year|YOB)\b))",
+        r"(?:Name|नाव|नाम)[\s:]*(?:\r?\n)?[\s:]*([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Aadhaar|DOB|Date|Gender|Address|Father|Mother|Husband|Year|YOB|आधार|जन्म|लिंग|पत्ता)\b))",
         text,
         re.IGNORECASE,
     )
     if name_match:
         cand = clean_field_value(name_match.group(1))
-        if not re.search(r"^(?:Aadhaar|DOB|Gender|Address|Date|Year|YOB)\b", cand, re.I):
+        if not re.search(r"^(?:Aadhaar|DOB|Gender|Address|Date|Year|YOB|आधार|जन्म|लिंग|पत्ता)\b", cand, re.I):
             fields["name"] = cand
             confidences["name"] = find_line_confidence(fields["name"], all_lines)
 
     # DOB / Year of Birth
-    dob_match = re.search(r"(?:DOB|Date of Birth)[\s:]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", text, re.IGNORECASE)
+    dob_match = re.search(r"(?:DOB|Date of Birth|जन्मतारीख|जन्म\s*तारीख|जन्म\s*तिथि)[\s:]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", text, re.IGNORECASE)
     if dob_match:
         fields["dob"] = dob_match.group(1).replace("-", "/").replace(".", "/")
         confidences["dob"] = find_line_confidence(dob_match.group(1), all_lines)
     else:
-        yob_match = re.search(r"(?:Year of Birth|YOB)[\s:]+(\d{4})", text, re.IGNORECASE)
+        yob_match = re.search(r"(?:Year of Birth|YOB|जन्म\s*वर्ष)[\s:]+(\d{4})", text, re.IGNORECASE)
         if yob_match:
             fields["dob"] = yob_match.group(1)
             confidences["dob"] = find_line_confidence(yob_match.group(1), all_lines)
 
     # Gender
-    gender_match = re.search(r"\b(MALE|FEMALE|TRANSGENDER)\b", text, re.IGNORECASE)
+    gender_match = re.search(r"\b(MALE|FEMALE|TRANSGENDER)\b|(पुरुष|स्त्री|महिला|तृतीयपंथी)", text, re.IGNORECASE)
     if gender_match:
-        fields["gender"] = gender_match.group(1).capitalize()
-        confidences["gender"] = find_line_confidence(gender_match.group(1), all_lines)
+        val = gender_match.group(1) or gender_match.group(2)
+        dev_gen_map = {"पुरुष": "Male", "स्त्री": "Female", "महिला": "Female", "तृतीयपंथी": "Transgender"}
+        fields["gender"] = dev_gen_map.get(val, val.capitalize())
+        confidences["gender"] = find_line_confidence(val, all_lines)
 
     # NOTE: Address is intentionally stripped from response to prevent PII leakage.
     cleaned_fields = {k: clean_field_value(v) for k, v in fields.items()}
@@ -393,7 +410,7 @@ def extract_udyam(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str,
 
     # Enterprise Name
     name_match = re.search(
-        r"(?:Enterprise\s*Name|Name of Enterprise)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:SNo|S\.No|Type of Enterprise|Classification|Major Activity|Social Category|Date|Official Address)\b))",
+        r"(?:उद्यमाचे\s*नाव|उद्यम\s*का\s*नाम|Enterprise\s*Name|Name of Enterprise)[\s:]*([^\r\n:]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:SNo|S\.No|Type of Enterprise|उद्यमाचा\s*प्रकार|Classification|Major Activity|मुख्य\s*कार्यकलाप|Social Category|Date|Official Address)\b))",
         text,
         re.IGNORECASE,
     )
@@ -401,16 +418,20 @@ def extract_udyam(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str,
         fields["enterprise_name"] = clean_field_value(name_match.group(1))
         confidences["enterprise_name"] = find_line_confidence(fields["enterprise_name"], all_lines)
 
-    # Type of Enterprise (Micro / Small / Medium)
-    type_match = re.search(r"\b(Micro|Small|Medium)\b", text, re.IGNORECASE)
+    # Type of Enterprise (Micro / Small / Medium / सूक्ष्म / लघु / मध्यम)
+    type_match = re.search(r"\b(Micro|Small|Medium)\b|(सूक्ष्म|लघु|मध्यम)", text, re.IGNORECASE)
     if type_match:
-        fields["enterprise_type"] = type_match.group(1).capitalize()
+        val = type_match.group(1) or type_match.group(2)
+        dev_map = {"सूक्ष्म": "Micro", "लघु": "Small", "मध्यम": "Medium"}
+        fields["enterprise_type"] = dev_map.get(val, val.capitalize())
         confidences["enterprise_type"] = 0.98
 
-    # Major Activity (Services / Manufacturing)
-    activity_match = re.search(r"\b(Services|Manufacturing)\b", text, re.IGNORECASE)
+    # Major Activity (Services / Manufacturing / सेवा / उत्पादन / विनिर्माण)
+    activity_match = re.search(r"\b(Services|Manufacturing)\b|(सेवाएं|सेवा|उत्पादन|विनिर्माण)", text, re.IGNORECASE)
     if activity_match:
-        fields["major_activity"] = activity_match.group(1).capitalize()
+        val = activity_match.group(1) or activity_match.group(2)
+        act_map = {"सेवा": "Services", "सेवाएं": "Services", "उत्पादन": "Manufacturing", "विनिर्माण": "Manufacturing"}
+        fields["major_activity"] = act_map.get(val, val.capitalize())
         confidences["major_activity"] = 0.98
 
     cleaned_fields = {k: clean_field_value(v) for k, v in fields.items()}
@@ -480,9 +501,15 @@ SHOP_ESTABLISHMENT_STATE_REGISTRY: Dict[str, Dict[str, Any]] = {
             r"Municipal\s+Corporation\s+of\s+Greater\s+Mumbai",
             r"Pune\s+Municipal\s+Corporation",
             r"\bMAHARASHTRA\b",
+            r"महाराष्ट्र\s*शासन",
+            r"कामगार\s*आयुक्त",
+            r"बृहन्मुंबई\s*महानगरपालिका",
+            r"पुणे\s*महानगरपालिका",
+            r"आपले\s*सरकार",
+            r"दुकान\s*(?:आणि|व)\s*आस्थापना",
         ],
         "reg_no_patterns": [
-            r"(?:Registration\s*Number|Reg\s*No\.?|Certificate\s*No\.?)[\s:]*([A-Za-z0-9\-\/]{5,30})",
+            r"(?:नोंदणी\s*(?:क्रमांक|क्र\.?)|Registration\s*Number|Reg\s*No\.?|Certificate\s*No\.?)[\s:]*([A-Za-z0-9\-\/]{5,30})",
             r"\b(SHOP-[A-Z0-9\-]+)\b",
             r"\b(MH[0-9A-Z\-\/]{6,25})\b",
         ],
@@ -568,14 +595,14 @@ def extract_shop_establishment(doc_res: OCRDocumentResult) -> Tuple[Dict[str, An
 
     # Fallback / Generic Registration Number if not matched by state template
     if not fields.get("registration_number"):
-        reg_match = re.search(r"(?:Registration\s*Number|Reg\s*No\.?)[\s:]*([A-Za-z0-9\-\/]{5,25})", text, re.IGNORECASE)
+        reg_match = re.search(r"(?:नोंदणी\s*(?:क्रमांक|क्र\.?)|Registration\s*Number|Reg\s*No\.?)[\s:]*([A-Za-z0-9\-\/]{5,25})", text, re.IGNORECASE)
         if reg_match:
             fields["registration_number"] = reg_match.group(1).strip()
             confidences["registration_number"] = find_line_confidence(reg_match.group(1), all_lines)
 
     # Establishment Name
     est_match = re.search(
-        r"(?:Name\s*of\s*Establishment|(?<!&\s)(?<!and\s)(?<!of\s)\bEstablishment\b)[\s:]+([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Registration|Reg|Employer|Nature\s*of\s*Business|Address)\b))",
+        r"(?:आस्थापनेचे\s*नाव|दुकानाचे\s*नाव|Name\s*of\s*Establishment|(?<!&\s)(?<!and\s)(?<!of\s)\bEstablishment\b)[\s:]+([^\r\n:]{2,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Employer|नोंदणी|मालक|Nature\s*of\s*Business|व्यवसाय|Address|पत्ता)\b))",
         text,
         re.IGNORECASE,
     )
@@ -585,7 +612,7 @@ def extract_shop_establishment(doc_res: OCRDocumentResult) -> Tuple[Dict[str, An
 
     # Employer Name
     emp_match = re.search(
-        r"(?:Employer|Name of Employer)[\s:]*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Registration|Reg|Establishment|Nature of Business)\b))",
+        r"(?:मालकाचे\s*नाव|Employer|Name of Employer)[\s:]*([^\r\n:]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Establishment|नोंदणी|आस्थापना|Nature of Business|व्यवसाय)\b))",
         text,
         re.IGNORECASE,
     )
@@ -595,7 +622,7 @@ def extract_shop_establishment(doc_res: OCRDocumentResult) -> Tuple[Dict[str, An
 
     # Nature of Business
     nature_match = re.search(
-        r"(?:Nature of Business)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Registration|Reg|Employer|Date)\b))",
+        r"(?:व्यवसायाचे\s*स्वरूप|Nature of Business)[\s:]*([^\r\n:]{2,50}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Employer|Date|तारीख|दिनांक)\b))",
         text,
         re.IGNORECASE,
     )
@@ -1222,7 +1249,7 @@ def extract_rent_agreement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
 
     # Lessor Name
     lessor_match = re.search(
-        r"(?:LESSOR|LANDLORD|FIRST\s*PARTY)[\s,:-]*([A-Za-z][A-Za-z \t.'-]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:hereinafter|son\s+of|daughter\s+of|wife\s+of|residing|and|lessee|tenant|second\s+party)\b))",
+        r"(?:परवाना\s*देणारा|पट्टा\s*देणारा|घरमालक|LESSOR|LANDLORD|FIRST\s*PARTY)[\s,:-]*([^\r\n:]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:hereinafter|son\s+of|daughter\s+of|wife\s+of|residing|and|lessee|tenant|second\s+party|परवाना\s*घेणारा|पट्टा\s*घेणारा|भाडेकरू)\b))",
         text,
         re.IGNORECASE,
     )
@@ -1234,7 +1261,7 @@ def extract_rent_agreement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
 
     # Lessee Name
     lessee_match = re.search(
-        r"(?:LESSEE|TENANT|SECOND\s*PARTY)[\s,:-]*([A-Za-z][A-Za-z \t.'-]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:hereinafter|son\s+of|daughter\s+of|wife\s+of|residing|and|lessor|premises|rent)\b))",
+        r"(?:परवाना\s*घेणारा|पट्टा\s*घेणारा|भाडेकरू|LESSEE|TENANT|SECOND\s*PARTY)[\s,:-]*([^\r\n:]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:hereinafter|son\s+of|daughter\s+of|wife\s+of|residing|and|lessor|premises|rent|परवाना\s*देणारा|भाडे)\b))",
         text,
         re.IGNORECASE,
     )
@@ -1258,7 +1285,7 @@ def extract_rent_agreement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
 
     # Monthly Rent
     rent_match = re.search(
-        r"(?:Monthly\s*Rent|Rent\s*per\s*month)[\s:]*(?:Rs\.?|INR)?\s*([0-9,]+(?:\.[0-9]{2})?)",
+        r"(?:मासिक\s*भाडे|Monthly\s*Rent|Rent\s*per\s*month)[\s:]*(?:Rs\.?|INR|रु\.?)?\s*([0-9,]+(?:\.[0-9]{2})?)",
         text,
         re.IGNORECASE,
     )
@@ -1344,7 +1371,7 @@ def extract_form_16(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[st
 
     # Assessment Year
     ay_match = re.search(
-        r"(?:Assessment\s*Year|AY)[\s:]*([0-9]{4}\s*-\s*(?:[0-9]{2}|[0-9]{4}))",
+        r"(?:Assessment\s*Year|AY)[\s:]*([0-9]{4}\s*-\s*(?:[0-9]{4}|[0-9]{2}))",
         text,
         re.IGNORECASE,
     )
@@ -1452,17 +1479,18 @@ def extract_property_tax_receipt(doc_res: OCRDocumentResult) -> Tuple[Dict[str, 
 
     # Property ID / Number
     pid_match = re.search(
-        r"(?:Property\s*(?:ID|No|Number)|Assessment\s*No|Index\s*No|Tax\s*Bill\s*No)[\s:]*([A-Za-z0-9\-\/]{4,25})",
+        r"(?:मालमत्ता\s*(?:क्रमांक|क्र\.?)|इंडेक्स\s*(?:क्रमांक|क्र\.?)|Property\s*(?:ID|No|Number)|Assessment\s*No|Index\s*No|Tax\s*Bill\s*No)[\s:]*([A-Za-z0-9\-\/\u0966-\u096F]{4,25})",
         text,
         re.IGNORECASE,
     )
     if pid_match:
-        fields["property_id"] = pid_match.group(1)
+        raw_pid = normalize_devanagari_numbers(pid_match.group(1))
+        fields["property_id"] = raw_pid
         confidences["property_id"] = find_line_confidence(pid_match.group(1), all_lines)
 
     # Owner Name
     owner_match = re.search(
-        r"(?:Owner\s*Name|Name\s*of\s*(?:the\s*)?Owner|Tax\s*Payer\s*Name)[\s:]*([A-Za-z][A-Za-z \t.'-]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Property|Ward|Zone|Address|Assessment|Tax|Amount)\b))",
+        r"(?:मालकाचे\s*नाव|करदात्याचे\s*नाव|भोगवटादाराचे\s*नाव|Owner\s*Name|Name\s*of\s*(?:the\s*)?Owner|Tax\s*Payer\s*Name)[\s:]*([^\r\n:]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Property|Ward|Zone|Address|Assessment|Tax|Amount|मालमत्ता|प्रभाग|कर|रक्कम)\b))",
         text,
         re.IGNORECASE,
     )
@@ -1474,7 +1502,7 @@ def extract_property_tax_receipt(doc_res: OCRDocumentResult) -> Tuple[Dict[str, 
 
     # Tax Amount Paid
     tax_match = re.search(
-        r"(?:Tax\s*Amount\s*Paid|Total\s*Amount\s*Paid|Amount\s*Paid)[\s:]*(?:Rs\.?|INR)?\s*([0-9,]+(?:\.[0-9]{2})?)",
+        r"(?:भरलेली\s*रक्कम|एकूण\s*रक्कम|Tax\s*Amount\s*Paid|Total\s*Amount\s*Paid|Amount\s*Paid)[\s:]*(?:Rs\.?|INR|रु\.?)?\s*([0-9,]+(?:\.[0-9]{2})?)",
         text,
         re.IGNORECASE,
     )
@@ -1484,7 +1512,7 @@ def extract_property_tax_receipt(doc_res: OCRDocumentResult) -> Tuple[Dict[str, 
 
     # Payment Date
     date_match = re.search(
-        r"(?:Payment\s*Date|Receipt\s*Date|Date\s*of\s*Payment)[\s:]*(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
+        r"(?:पावती\s*(?:दिनांक|तारीख)|दिनांक|Payment\s*Date|Receipt\s*Date|Date\s*of\s*Payment)[\s:]*(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
         text,
         re.IGNORECASE,
     )
@@ -1494,7 +1522,7 @@ def extract_property_tax_receipt(doc_res: OCRDocumentResult) -> Tuple[Dict[str, 
 
     # Assessment Year
     ay_match = re.search(
-        r"(?:Assessment\s*Year|AY)[\s:]*([0-9]{4}\s*-\s*(?:[0-9]{2}|[0-9]{4}))",
+        r"(?:कर\s*आकारणी\s*वर्ष|आकारणी\s*वर्ष|Assessment\s*Year|AY)[\s:]*([0-9]{4}\s*-\s*(?:[0-9]{4}|[0-9]{2}))",
         text,
         re.IGNORECASE,
     )
@@ -1593,6 +1621,74 @@ PII_ALLOWLIST = {
 }
 
 
+LANGUAGE_META_FIELDS = {
+    "detected_languages",
+    "partial_language_coverage",
+    "language_review_required",
+    "language_coverage_notes",
+}
+
+CORE_FIELDS_PER_DOC_TYPE = {
+    "shop_establishment": {"registration_number", "establishment_name"},
+    "udyam": {"udyam_registration_number", "enterprise_name"},
+    "property_tax_receipt": {"property_id", "tax_amount_paid"},
+    "rent_agreement": {"monthly_rent", "lessor_name_masked"},
+    "aadhaar": {"aadhaar_number", "name"},
+}
+
+
+def check_language_coverage(doc_type: str, text: str, fields: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Check if the document contains Devanagari script content and whether
+    core fields were successfully extracted.
+    If core fields are missing on a Devanagari document, flags:
+    partial_language_coverage=True, language_review_required=True
+    to avoid hallucinating unverified semantic structures.
+    """
+    devanagari_chars = len(re.findall(r"[\u0900-\u097F]", text))
+    has_devanagari = devanagari_chars >= 15
+
+    detected_languages = ["en"]
+    if has_devanagari:
+        # Note: Hindi and Marathi share the Devanagari script
+        detected_languages.append("devanagari")
+
+    res: Dict[str, Any] = {
+        "detected_languages": detected_languages,
+        "partial_language_coverage": False,
+        "language_review_required": False,
+        "language_coverage_notes": None,
+    }
+
+    if not has_devanagari:
+        return res
+
+    core_req = CORE_FIELDS_PER_DOC_TYPE.get(doc_type)
+    if not core_req:
+        return res
+
+    missing = []
+    for f in core_req:
+        # check both masked and unmasked variants
+        raw_key = f"raw_{f.replace('_masked', '')}" if f.endswith("_masked") else f
+        if not fields.get(f) and not fields.get(raw_key):
+            missing.append(f)
+
+    if missing:
+        res["partial_language_coverage"] = True
+        res["language_review_required"] = True
+        res["language_coverage_notes"] = (
+            f"Document contains Devanagari script text ({devanagari_chars} characters), but core field(s) "
+            f"could not be extracted: {', '.join(sorted(missing))}. Manual review recommended."
+        )
+    else:
+        res["language_coverage_notes"] = (
+            f"Devanagari script text detected ({devanagari_chars} characters); all core fields extracted successfully."
+        )
+
+    return res
+
+
 def extract_document_fields_raw(doc_type: str, doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, float]]:
     """
     Run appropriate extractor for doc_type and return RAW fields (including unmasked
@@ -1606,6 +1702,11 @@ def extract_document_fields_raw(doc_type: str, doc_res: OCRDocumentResult) -> Tu
         k: (clean_field_value(v, field_name=k, doc_type=doc_type) if isinstance(v, str) else v)
         for k, v in fields.items()
     }
+    # Run language coverage check
+    coverage_meta = check_language_coverage(doc_type, doc_res.full_text, cleaned_fields)
+    cleaned_fields.update(coverage_meta)
+    for k in coverage_meta:
+        confidences[k] = 1.0
     return cleaned_fields, confidences
 
 
@@ -1613,11 +1714,12 @@ def sanitize_extracted_fields(doc_type: str, fields: Dict[str, Any], confidences
     """
     Sanitize extracted fields AFTER verification and cross-check.
     - Applies strict PII allowlist for bank_statement, salary_slip, utility_bill.
+    - Preserves language coverage metadata fields.
     - Strictly strips all 'raw_' prefix keys and transient unmasked identifiers.
     """
     # 1. Apply PII allowlist filtering if applicable
     if doc_type in PII_ALLOWLIST:
-        allowed = PII_ALLOWLIST[doc_type]
+        allowed = PII_ALLOWLIST[doc_type] | LANGUAGE_META_FIELDS
         filtered_fields = {k: v for k, v in fields.items() if k in allowed}
         filtered_conf = {k: v for k, v in confidences.items() if k in allowed}
         return filtered_fields, filtered_conf

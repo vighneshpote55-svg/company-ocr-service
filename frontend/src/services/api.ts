@@ -71,7 +71,7 @@ export class ApiService {
   }
 
   public isAuthenticated(): boolean {
-    return Boolean(this.token || this.apiKey);
+    return true;
   }
 
   public onUnauthorized(listener: () => void): () => void {
@@ -112,14 +112,7 @@ export class ApiService {
     if (!isFormData) {
       headers['Content-Type'] = 'application/json';
     }
-
-    if (this.token) {
-      headers['Authorization'] = `Bearer ${this.token}`;
-    }
-    if (this.apiKey) {
-      headers['X-API-Key'] = this.apiKey;
-    }
-
+    // Authentication disabled by default: requests sent without auth headers
     return headers;
   }
 
@@ -256,13 +249,6 @@ export class ApiService {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', this.getUrl('/api/upload'));
 
-      if (this.token) {
-        xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
-      }
-      if (this.apiKey) {
-        xhr.setRequestHeader('X-API-Key', this.apiKey);
-      }
-
       xhr.upload.onprogress = (evt) => {
         if (evt.lengthComputable && onProgress) {
           const pct = Math.round((evt.loaded / evt.total) * 60);
@@ -306,18 +292,12 @@ export class ApiService {
   public getFileUrl(docId: string, download = false): string {
     const params = new URLSearchParams();
     if (download) params.set('download', 'true');
-    if (this.token) params.set('token', this.token);
-    else if (this.apiKey) params.set('api_key', this.apiKey);
     const qs = params.toString();
     return this.getUrl(`/api/documents/${docId}/file${qs ? '?' + qs : ''}`);
   }
 
   public getPreviewUrl(docId: string): string {
-    const params = new URLSearchParams();
-    if (this.token) params.set('token', this.token);
-    else if (this.apiKey) params.set('api_key', this.apiKey);
-    const qs = params.toString();
-    return this.getUrl(`/api/documents/${docId}/preview${qs ? '?' + qs : ''}`);
+    return this.getUrl(`/api/documents/${docId}/preview`);
   }
 }
 

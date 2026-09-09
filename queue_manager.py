@@ -72,6 +72,12 @@ class AsyncJobQueue:
             webhook_url=webhook_url,
             customer_id=customer_id,
         )
+        # Bounded in-memory job retention (evict oldest finished jobs when threshold exceeded)
+        if len(self._jobs) > 2000:
+            terminal_keys = [k for k, j in self._jobs.items() if j.status in ("completed", "failed", "error", "low_confidence")]
+            for k in terminal_keys[:200]:
+                self._jobs.pop(k, None)
+
         self._jobs[job_id] = record
         return record
 

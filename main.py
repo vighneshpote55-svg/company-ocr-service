@@ -57,6 +57,7 @@ from ocr_engine import (
     OCREngine,
     OCRDocumentResult,
     check_pdf_text_layer,
+    get_languages_for_doc_type,
     get_ocr_engine_info,
     render_pdf_pages_to_images,
     render_thumbnail,
@@ -252,8 +253,9 @@ def execute_ocr_pipeline(
             }
 
     # 2. OCR Extraction
+    languages = get_languages_for_doc_type(doc_type)
     try:
-        doc_res: OCRDocumentResult = ocr_engine.process_file(file_path)
+        doc_res: OCRDocumentResult = ocr_engine.process_file(file_path, languages=languages)
     except Exception as ex:
         duration_ms = (time.time() - start_time) * 1000
         logger.error("OCR engine crashed for job %s: %s", job_id, ex, exc_info=True)
@@ -804,11 +806,13 @@ async def upload_document_endpoint(
 
     try:
         # 1. Text Layer Detection & OCR
+        requested_type = (doc_type or "").strip().lower()
+        init_langs = get_languages_for_doc_type(requested_type) if requested_type and requested_type != "auto" else None
         try:
             if ext == ".pdf":
-                doc_res = ocr_engine.process_pdf(temp_path)
+                doc_res = ocr_engine.process_pdf(temp_path, languages=init_langs)
             else:
-                doc_res = ocr_engine.process_file(temp_path)
+                doc_res = ocr_engine.process_file(temp_path, languages=init_langs)
         except Exception as ex:
             logger.error("OCR extraction exception in /api/ingest: %s", ex, exc_info=True)
             doc_res = OCRDocumentResult(
@@ -842,10 +846,20 @@ async def upload_document_endpoint(
             )
 
         # 2. Document Type Classification
-        requested_type = (doc_type or "").strip().lower()
         if not requested_type or requested_type == "auto":
             detected = detect_document_type(doc_res.full_text)
             resolved_type = detected if detected else "unknown"
+            # If resolved_type uses Devanagari passes and the initial pass was English-only,
+            # and OCR was actually required, execute the bilingual pass now
+            auto_langs = get_languages_for_doc_type(resolved_type)
+            if auto_langs and len(auto_langs) > 1 and doc_res.ocr_required:
+                try:
+                    if ext == ".pdf":
+                        doc_res = ocr_engine.process_pdf(temp_path, languages=auto_langs)
+                    else:
+                        doc_res = ocr_engine.process_file(temp_path, languages=auto_langs)
+                except Exception as ex:
+                    logger.warning("Secondary Devanagari pass in /api/upload failed: %s", ex)
         else:
             resolved_type = requested_type
 

@@ -180,6 +180,11 @@ def get_ocr_engine_info() -> Dict[str, Any]:
         "paddleocr_version": paddle_ver,
         "python_version": platform.python_version(),
         "pdf_fallback": "pdftotext",
+        "devanagari_model_available": bool(
+            HAS_DEVANAGARI_MODEL
+            or os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "devanagari_PP-OCRv4_rec_infer.onnx"))
+            or os.path.exists(os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", "devanagari_PP-OCRv3_rec_infer.onnx"))
+        ),
     }
 
 
@@ -221,6 +226,212 @@ def get_paddleocr_instance():
         except Exception:
             pass
     return _paddleocr_instance
+
+
+# ------------------------------------------------------------------------------
+# Multi-Language OCR Configuration & Devanagari Engine
+# ------------------------------------------------------------------------------
+
+_devanagari_ocr_instance = None
+HAS_DEVANAGARI_MODEL = False
+
+# Mapping of document type to required language passes
+# Maharashtra-originating documents and national IDs enable Devanagari alongside English.
+DOC_TYPE_LANGUAGES: Dict[str, List[str]] = {
+    "shop_establishment": ["en", "mr"],
+    "udyam": ["en", "hi", "mr"],
+    "property_tax_receipt": ["en", "mr"],
+    "rent_agreement": ["en", "mr"],
+    "aadhaar": ["en", "hi"],
+}
+
+
+def get_languages_for_doc_type(doc_type: Optional[str]) -> List[str]:
+    """Return list of language codes to execute for a given document type."""
+    if not doc_type:
+        return ["en"]
+    return DOC_TYPE_LANGUAGES.get(doc_type.lower().strip(), ["en"])
+
+
+def get_devanagari_ocr_instance():
+    """
+    Lazily initialize and reuse Devanagari OCR instance for Hindi/Marathi text recognition.
+    PaddleOCR: maps 'mr' and 'hi' to unified 'devanagari' model family.
+    RapidOCR: loads devanagari ONNX recognition model with devanagari_dict.txt.
+    """
+    global _devanagari_ocr_instance, HAS_DEVANAGARI_MODEL
+    if _devanagari_ocr_instance is not None:
+        return _devanagari_ocr_instance
+
+    if _ocr_backend == "paddleocr":
+        try:
+            from paddleocr import PaddleOCR
+            _devanagari_ocr_instance = PaddleOCR(use_angle_cls=True, lang="devanagari", show_log=False)
+            HAS_DEVANAGARI_MODEL = True
+            logger.info("PaddleOCR Devanagari engine initialized successfully")
+            return _devanagari_ocr_instance
+        except Exception as e:
+            logger.warning("PaddleOCR Devanagari model initialization failed: %s", e)
+            return None
+
+    # RapidOCR backend (ONNX runtime)
+    try:
+        from rapidocr_onnxruntime.utils import UpdateParameters
+        orig_update_rec = UpdateParameters.update_rec_params
+
+        def custom_update_rec(self, config, rec_dict):
+            if rec_dict:
+                need_remove_prefix = ["rec_model_path", "rec_keys_path"]
+                new_rec_dict = {}
+                for k, v in rec_dict.items():
+                    if k in need_remove_prefix:
+                        k = k.split("rec_")[1]
+                    new_rec_dict[k] = v
+                if "model_path" not in new_rec_dict:
+                    new_rec_dict["model_path"] = config.get("model_path", "")
+                config.update(new_rec_dict)
+            return config
+
+        UpdateParameters.update_rec_params = custom_update_rec
+
+        from rapidocr_onnxruntime import RapidOCR
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+        candidate_dirs = [
+            os.path.join(base_dir, "models"),
+            "/home/vighnesh/PaddleOCR/models",
+            "/opt/models",
+        ]
+        model_path = None
+        dict_path = None
+
+        for cdir in candidate_dirs:
+            v4 = os.path.join(cdir, "devanagari_PP-OCRv4_rec_infer.onnx")
+            v3 = os.path.join(cdir, "devanagari_PP-OCRv3_rec_infer.onnx")
+            d = os.path.join(cdir, "devanagari_dict.txt")
+            if not model_path:
+                if os.path.exists(v4):
+                    model_path = v4
+                elif os.path.exists(v3):
+                    model_path = v3
+            if not dict_path and os.path.exists(d):
+                dict_path = d
+
+        if not dict_path:
+            dict_path = os.path.join(base_dir, "ppocr", "utils", "dict", "devanagari_dict.txt")
+
+        if model_path and os.path.exists(dict_path):
+            _devanagari_ocr_instance = RapidOCR(
+                rec_model_path=model_path,
+                rec_keys_path=dict_path,
+            )
+            HAS_DEVANAGARI_MODEL = True
+            logger.info("RapidOCR Devanagari engine initialized (model=%s, dict=%s)", model_path, dict_path)
+            return _devanagari_ocr_instance
+        else:
+            logger.warning(
+                "Devanagari OCR model or dict not found on disk (model=%s, dict=%s)",
+                model_path,
+                dict_path,
+            )
+            return None
+    except Exception as ex:
+        logger.warning("RapidOCR Devanagari initialization failed: %s", ex)
+        return None
+
+
+def _calc_bbox_overlap(b1: Optional[List[List[float]]], b2: Optional[List[List[float]]]) -> Tuple[float, float]:
+    """Compute IoU and intersection-over-min-area between two 4-point bounding boxes."""
+    if not b1 or not b2 or len(b1) < 4 or len(b2) < 4:
+        return 0.0, 0.0
+    x1_min, y1_min = min(p[0] for p in b1), min(p[1] for p in b1)
+    x1_max, y1_max = max(p[0] for p in b1), max(p[1] for p in b1)
+
+    x2_min, y2_min = min(p[0] for p in b2), min(p[1] for p in b2)
+    x2_max, y2_max = max(p[0] for p in b2), max(p[1] for p in b2)
+
+    iw = max(0.0, min(x1_max, x2_max) - max(x1_min, x2_min))
+    ih = max(0.0, min(y1_max, y2_max) - max(y1_min, y2_min))
+    iarea = iw * ih
+    a1 = max(0.0, (x1_max - x1_min) * (y1_max - y1_min))
+    a2 = max(0.0, (x2_max - x2_min) * (y2_max - y2_min))
+    uarea = a1 + a2 - iarea
+    if uarea <= 0.0 or a1 <= 0.0 or a2 <= 0.0:
+        return 0.0, 0.0
+    return iarea / uarea, iarea / min(a1, a2)
+
+
+def merge_ocr_lines(lines_en: List[OCRLine], lines_dev: List[OCRLine]) -> List[OCRLine]:
+    """
+    Intelligently merge OCR lines from English and Devanagari passes.
+    Matches bounding boxes across passes via spatial overlap:
+    - If Devanagari candidate contains genuine Devanagari characters (\\u0900-\\u097F)
+      and has adequate confidence, choose Devanagari (since English model outputs ASCII garbage for Devanagari).
+    - If neither or both contain Devanagari, select line with higher confidence.
+    - Unmatched boxes from either pass are retained.
+    Lines are sorted top-to-bottom in reading order.
+    """
+    if not lines_dev:
+        return lines_en
+    if not lines_en:
+        return lines_dev
+
+    has_devanagari_chars = re.compile(r"[\u0900-\u097F]")
+    matched_dev_indices = set()
+    merged: List[OCRLine] = []
+
+    for line_en in lines_en:
+        best_dev_idx = None
+        best_overlap = 0.0
+
+        for idx, line_dev in enumerate(lines_dev):
+            if idx in matched_dev_indices:
+                continue
+            iou, io_min = _calc_bbox_overlap(line_en.bbox, line_dev.bbox)
+            if (iou >= 0.35 or io_min >= 0.50) and io_min > best_overlap:
+                best_overlap = io_min
+                best_dev_idx = idx
+
+        if best_dev_idx is not None:
+            matched_dev_indices.add(best_dev_idx)
+            line_dev = lines_dev[best_dev_idx]
+            dev_has_script = bool(has_devanagari_chars.search(line_dev.text))
+            en_has_script = bool(has_devanagari_chars.search(line_en.text))
+
+            if dev_has_script and not en_has_script:
+                # Devanagari model recognized native script; English model produced ASCII substitute
+                if line_dev.confidence >= 0.50 or line_dev.confidence >= (line_en.confidence - 0.20):
+                    merged.append(line_dev)
+                elif line_en.confidence > line_dev.confidence:
+                    merged.append(line_en)
+                else:
+                    merged.append(line_dev)
+            elif en_has_script and not dev_has_script:
+                merged.append(line_en)
+            else:
+                # Both or neither have script: choose higher confidence
+                if line_dev.confidence > line_en.confidence:
+                    merged.append(line_dev)
+                else:
+                    merged.append(line_en)
+        else:
+            merged.append(line_en)
+
+    # Add unmatched lines from Devanagari pass
+    for idx, line_dev in enumerate(lines_dev):
+        if idx not in matched_dev_indices:
+            merged.append(line_dev)
+
+    # Sort lines in natural top-to-bottom, left-to-right reading order
+    def _sort_key(line: OCRLine):
+        if line.bbox and len(line.bbox) >= 4:
+            min_y = min(p[1] for p in line.bbox)
+            min_x = min(p[0] for p in line.bbox)
+            return (round(min_y / 15.0) * 15.0, min_x)
+        return (0.0, 0.0)
+
+    merged.sort(key=_sort_key)
+    return merged
 
 
 
@@ -379,34 +590,62 @@ class OCREngine:
         self.use_gpu = use_gpu
         self.paddle = get_paddleocr_instance()
 
-    def process_image(self, img: Image.Image, page_num: int = 1) -> OCRPageResult:
-        """Run OCR on a single PIL Image."""
+    @staticmethod
+    def get_languages_for_doc_type(doc_type: Optional[str]) -> List[str]:
+        return get_languages_for_doc_type(doc_type)
+
+    def _run_single_engine_ocr(self, engine, arr) -> List[OCRLine]:
+        """Run a single OCR engine instance on a numpy RGB image array."""
+        lines: List[OCRLine] = []
+        if _ocr_backend == "rapidocr":
+            results, elapse = engine(arr)
+            if results:
+                for item in results:
+                    bbox = item[0]
+                    txt = item[1]
+                    score = float(item[2])
+                    lines.append(OCRLine(text=txt, confidence=score, bbox=bbox))
+        else:
+            results = engine.ocr(arr, cls=True)
+            if results and results[0]:
+                for item in results[0]:
+                    bbox = item[0]
+                    txt, score = item[1]
+                    lines.append(OCRLine(text=txt, confidence=float(score), bbox=bbox))
+        return lines
+
+    def process_image(
+        self,
+        img: Image.Image,
+        page_num: int = 1,
+        languages: Optional[List[str]] = None,
+    ) -> OCRPageResult:
+        """
+        Run OCR on a single PIL Image.
+        Optionally executes bilingual pass (English + Devanagari) if Marathi/Hindi languages are configured.
+        """
         engine = get_paddleocr_instance()
         if engine is not None:
             try:
                 import numpy as np
                 arr = np.array(img.convert("RGB"))
-                lines: List[OCRLine] = []
-                total_conf = 0.0
+                lines_en = self._run_single_engine_ocr(engine, arr)
 
-                if _ocr_backend == "rapidocr":
-                    results, elapse = engine(arr)
-                    if results:
-                        for item in results:
-                            bbox = item[0]
-                            txt = item[1]
-                            score = float(item[2])
-                            lines.append(OCRLine(text=txt, confidence=score, bbox=bbox))
-                            total_conf += score
+                # Determine if a Devanagari pass is requested
+                needs_devanagari = False
+                if languages:
+                    lang_set = {l.lower().strip() for l in languages}
+                    if any(l in lang_set for l in ("hi", "mr", "devanagari")):
+                        needs_devanagari = True
+
+                dev_engine = get_devanagari_ocr_instance() if needs_devanagari else None
+                if dev_engine is not None:
+                    lines_dev = self._run_single_engine_ocr(dev_engine, arr)
+                    lines = merge_ocr_lines(lines_en, lines_dev)
                 else:
-                    results = engine.ocr(arr, cls=True)
-                    if results and results[0]:
-                        for item in results[0]:
-                            bbox = item[0]
-                            txt, score = item[1]
-                            lines.append(OCRLine(text=txt, confidence=float(score), bbox=bbox))
-                            total_conf += float(score)
+                    lines = lines_en
 
+                total_conf = sum(l.confidence for l in lines)
                 avg_conf = (total_conf / len(lines)) if lines else 0.0
                 full_text = "\n".join([line.text for line in lines])
                 return OCRPageResult(
@@ -438,7 +677,11 @@ class OCREngine:
             engine_error="neural_ocr_engine_not_available",
         )
 
-    def process_pdf(self, pdf_path: str) -> OCRDocumentResult:
+    def process_pdf(
+        self,
+        pdf_path: str,
+        languages: Optional[List[str]] = None,
+    ) -> OCRDocumentResult:
         """
         Process a multi-page PDF document.
         First checks if the PDF has an embedded text layer (>= 50 chars).
@@ -446,7 +689,7 @@ class OCREngine:
             OCR is not required. Extracts embedded text directly.
             ocr_required=False, text_source="pdf_text_layer"
         If text layer does NOT exist (scanned / image-only):
-            OCR is required. Renders pages to images and runs neural OCR.
+            OCR is required. Renders pages to images and runs neural OCR with configured languages.
             ocr_required=True, text_source="rapid_ocr" / "paddle_ocr"
         """
         has_text_layer, full_text, pages_text = check_pdf_text_layer(pdf_path, min_char_threshold=50)
@@ -485,7 +728,7 @@ class OCREngine:
 
         if rendered_images:
             for idx, img in enumerate(rendered_images, start=1):
-                page_res = self.process_image(img, page_num=idx)
+                page_res = self.process_image(img, page_num=idx, languages=languages)
                 page_results.append(page_res)
         else:
             # Fallback if rendering completely failed
@@ -521,14 +764,18 @@ class OCREngine:
             engine_error=combined_error,
         )
 
-    def process_file(self, file_path: str) -> OCRDocumentResult:
-        """Unified entry point to process either an image or a PDF."""
+    def process_file(
+        self,
+        file_path: str,
+        languages: Optional[List[str]] = None,
+    ) -> OCRDocumentResult:
+        """Unified entry point to process either an image or a PDF with language pass support."""
         lower = file_path.lower()
         if lower.endswith(".pdf"):
-            return self.process_pdf(file_path)
+            return self.process_pdf(file_path, languages=languages)
         else:
             with Image.open(file_path) as img:
-                page_res = self.process_image(img.copy(), page_num=1)
+                page_res = self.process_image(img.copy(), page_num=1, languages=languages)
                 source_name = "rapid_ocr" if _ocr_backend == "rapidocr" else "paddle_ocr"
                 return OCRDocumentResult(
                     pages=[page_res],

@@ -17,6 +17,7 @@ from PIL import Image
 os.environ["JWT_SECRET"] = "test-secret-key-for-unit-tests-only-32bytes"
 os.environ["API_KEY"] = "test-static-api-key-2026"
 os.environ["AUTH_MODE"] = "dual"
+os.environ["AUTH_ENABLED"] = "true"
 
 from main import app
 from security import (
@@ -30,12 +31,18 @@ from security import (
 @pytest.fixture(autouse=True)
 def setup_test_auth():
     """Setup test secrets and register standard test client."""
+    import main
+    main._startup_security_error = None
+    os.environ["AUTH_ENABLED"] = "true"
+    os.environ["AUTH_MODE"] = "dual"
     os.environ["JWT_SECRET"] = "test-secret-key-for-unit-tests-only-32bytes"
     os.environ["API_KEY"] = "test-static-api-key-2026"
     clear_registered_clients()
     register_client("n8n-node", "super-secret-n8n-token-credential")
     yield
     clear_registered_clients()
+    main._startup_security_error = None
+    os.environ.pop("AUTH_ENABLED", None)
 
 
 @pytest.fixture
@@ -213,6 +220,25 @@ def test_integration_startup_failure_blocks_serving_requests(monkeypatch):
     resp = test_client.get("/health")
     assert resp.status_code == 503
     assert "startup security check failed" in resp.json()["detail"]
+
+
+def test_service_starts_cleanly_when_auth_disabled(monkeypatch):
+    """When AUTH_MODE=disabled, the service starts cleanly with zero secrets configured and serves requests."""
+    monkeypatch.delenv("AUTH_ENABLED", raising=False)
+    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("REGISTERED_CLIENTS_JSON", raising=False)
+    monkeypatch.delenv("REGISTERED_CLIENTS_FILE", raising=False)
+    clear_registered_clients()
+
+    with TestClient(app) as test_client:
+        resp = test_client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json()["status"] in ("healthy", "ok")
+
+        # Also verify unauthenticated requests to protected endpoints succeed
+        assert test_client.get("/api/stats").status_code == 200
 
 
 

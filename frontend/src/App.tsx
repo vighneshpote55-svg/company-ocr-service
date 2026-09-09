@@ -21,7 +21,6 @@ import { ExtractedTextViewer } from './components/ExtractedTextViewer';
 import { JsonResultViewer } from './components/JsonResultViewer';
 import { DocumentsTable } from './components/DocumentsTable';
 import { SettingsModal } from './components/SettingsModal';
-import { LoginView } from './components/LoginView';
 import { Toast } from './components/Toast';
 import type { ToastMessage } from './components/Toast';
 
@@ -42,7 +41,6 @@ export const App: React.FC = () => {
     failed: 0,
   });
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(api.isAuthenticated());
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
@@ -102,11 +100,6 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const unsubscribeAuth = api.onUnauthorized(() => {
-      setIsAuthenticated(false);
-      addToast('Session expired or unauthorized. Please sign in again.', 'info');
-    });
-
     loadData();
 
     // Periodic health poll every 25 seconds
@@ -120,7 +113,6 @@ export const App: React.FC = () => {
     }, 25000);
 
     return () => {
-      unsubscribeAuth();
       clearInterval(interval);
     };
   }, [loadData]);
@@ -163,20 +155,6 @@ export const App: React.FC = () => {
     }
   };
 
-  if (!isAuthenticated) {
-    return (
-      <>
-        <LoginView
-          onLoginSuccess={() => {
-            setIsAuthenticated(true);
-            loadData();
-          }}
-        />
-        <Toast toasts={toasts} onDismiss={removeToast} />
-      </>
-    );
-  }
-
   return (
     <div className="app-layout">
       <Sidebar
@@ -195,11 +173,6 @@ export const App: React.FC = () => {
           isBackendConnected={isBackendConnected}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onRefresh={loadData}
-          onLogout={() => {
-            api.logout();
-            setIsAuthenticated(false);
-            addToast('Signed out successfully.', 'info');
-          }}
           isRefreshing={isRefreshing}
         />
 

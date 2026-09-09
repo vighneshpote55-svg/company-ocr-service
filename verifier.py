@@ -281,9 +281,9 @@ DOC_SIGNATURES = {
     ],
     "aadhaar": [
         r"UNIQUE IDENTIFICATION AUTHORITY OF INDIA|UIDAI",
-        r"AADHAAR|AADHAR",
+        r"AADHAAR|AADHAR|माझे\s*आधार|मेरा\s*आधार",
         r"MERA AADHAAR|MERA AADHAR",
-        r"GOVERNMENT OF INDIA.*AADHAAR|GOVT OF INDIA.*AADHAAR",
+        r"GOVERNMENT OF INDIA.*AADHAAR|GOVT OF INDIA.*AADHAAR|भारतीय\s*विशिष्ट\s*(?:ओळख|पहचान)\s*प्राधिकरण",
         r"\bXXXX\s+XXXX\s+[0-9]{4}\b|\b[2-9][0-9]{3}\s+[0-9]{4}\s+[0-9]{4}\b",
     ],
     "cancelled_cheque": [
@@ -314,11 +314,11 @@ DOC_SIGNATURES = {
         r"TRANSPORT DEPARTMENT|MOTOR VEHICLES ACT|UNION OF INDIA.*DRIVING",
     ],
     "udyam": [
-        r"UDYAM REGISTRATION",
+        r"UDYAM REGISTRATION|उद्यम\s*नोंदणी|उद्यम\s*पंजीकरण",
         r"UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]+",
-        r"ENTERPRISE NAME|NAME OF ENTERPRISE",
-        r"TYPE OF ENTERPRISE|ENTERPRISE TYPE",
-        r"MINISTRY OF MICRO.*SMALL AND MEDIUM",
+        r"ENTERPRISE NAME|NAME OF ENTERPRISE|उद्यमाचे\s*नाव|उद्यम\s*का\s*नाम",
+        r"TYPE OF ENTERPRISE|ENTERPRISE TYPE|उद्यमाचा\s*प्रकार",
+        r"MINISTRY OF MICRO.*SMALL AND MEDIUM|सूक्ष्म,\s*लघु\s*(?:व|आणि|एवं)\s*मध्यम\s*उद्योग",
     ],
     "fssai": [
         r"FOOD SAFETY AND STANDARDS AUTHORITY",
@@ -327,10 +327,10 @@ DOC_SIGNATURES = {
         r"KIND OF BUSINESS",
     ],
     "shop_establishment": [
-        r"SHOP & ESTABLISHMENT|SHOPS & ESTABLISHMENTS",
-        r"SHOPS AND COMMERCIAL",
-        r"ESTABLISHMENT REGISTRATION",
-        r"NATURE OF BUSINESS",
+        r"SHOP & ESTABLISHMENT|SHOPS & ESTABLISHMENTS|दुकान\s*(?:आणि|व|एवं)\s*(?:आस्थापना|स्थापना)",
+        r"SHOPS AND COMMERCIAL|आस्थापना\s*नोंदणी|स्थापना\s*पंजीकरण",
+        r"ESTABLISHMENT REGISTRATION|महाराष्ट्र\s*शासन|कामगार\s*आयुक्त",
+        r"NATURE OF BUSINESS|व्यवसायाचे\s*स्वरूप",
     ],
     "bank_statement": [
         r"ACCOUNT STATEMENT",
@@ -380,10 +380,10 @@ DOC_SIGNATURES = {
         r"INDIAN PARTNERSHIP ACT",
     ],
     "rent_agreement": [
-        r"RENT AGREEMENT|LEASE AGREEMENT|TENANCY AGREEMENT",
-        r"LESSOR AND LESSEE|LANDLORD AND TENANT",
-        r"MONTHLY RENT|PREMISES ON LEASE",
-        r"SECURITY DEPOSIT.*RENT|RENT.*SECURITY DEPOSIT|REFUNDABLE SECURITY DEPOSIT",
+        r"RENT AGREEMENT|LEASE AGREEMENT|TENANCY AGREEMENT|भाडेकरार|भाडे\s*करार|परवाना\s*करार",
+        r"LESSOR AND LESSEE|LANDLORD AND TENANT|परवाना\s*देणारा|घरमालक",
+        r"MONTHLY RENT|PREMISES ON LEASE|मासिक\s*भाडे",
+        r"SECURITY DEPOSIT.*RENT|RENT.*SECURITY DEPOSIT|REFUNDABLE SECURITY DEPOSIT|डिपॉझिट",
     ],
     "form_16": [
         r"FORM NO\.?\s*16\b",
@@ -398,10 +398,10 @@ DOC_SIGNATURES = {
         r"CUSTOMER ID|CIF NO|CUSTOMER NO",
     ],
     "property_tax_receipt": [
-        r"PROPERTY TAX RECEIPT|PROPERTY TAX PAYMENT",
-        r"MUNICIPAL CORPORATION|NAGAR NIGAM|MUNICIPAL COUNCIL",
-        r"PROPERTY TAX PAID|PROPERTY TAX ASSESSMENT",
-        r"PROPERTY ID|ASSESSMENT NO|INDEX NO|TAX BILL NO",
+        r"PROPERTY TAX RECEIPT|PROPERTY TAX PAYMENT|मालमत्ता\s*कर|घरपट्टी",
+        r"MUNICIPAL CORPORATION|NAGAR NIGAM|MUNICIPAL COUNCIL|महानगरपालिका|नगरपरिषद|नगर\s*पंचायत",
+        r"PROPERTY TAX PAID|PROPERTY TAX ASSESSMENT|मालमत्ता\s*कर\s*पावती|कर\s*पावती",
+        r"PROPERTY ID|ASSESSMENT NO|INDEX NO|TAX BILL NO|मालमत्ता\s*(?:क्रमांक|क्र\.?)|पावती\s*(?:क्रमांक|क्र\.?)",
     ],
     "iec_certificate": [
         r"IMPORT EXPORT CODE|IMPORTER EXPORTER CODE",

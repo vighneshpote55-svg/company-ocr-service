@@ -92,13 +92,79 @@ Consent -> Email Attachments -> Google Drive -> [THIS SERVICE: Company-Server OC
 
 ---
 
-### 🔒 Security, PII Minimisation & Temp File Lifecycle
+### 🌐 Multi-Language OCR Support (English / Marathi / Hindi)
+Many regional Indian business and property documents are issued bilingual or entirely in regional vernacular. To support Maharashtra operations reliably without introducing noisy overhead on other documents, the service provides generalized multi-language recognition:
+
+#### 1. Per-Document-Type Language Matrix (`DOC_TYPE_LANGUAGES`)
+| Document Type | Configured Language Passes | Devanagari Model Active? | Verified Field Capabilities & Notes |
+| :--- | :--- | :--- | :--- |
+| **Shop & Establishment** | `["en", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | Maharashtra Form-G / Gumasta: `नोंदणी क्रमांक` (Registration No), `आस्थापनेचे नाव` (Establishment Name), `मालकाचे नाव` (Employer/Owner Name), `व्यवसायाचे स्वरूप` (Nature of Business). |
+| **Udyam Registration** | `["en", "hi", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | MSME certificate: `उद्यमाचे नाव` (Enterprise Name), `सूक्ष्म/लघु/मध्यम` mapped to `Micro/Small/Medium`, `उत्पादन/सेवा` mapped to `Manufacturing/Services`. |
+| **Property Tax Receipt** | `["en", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | Municipal receipts (BMC / PMC): `मालमत्ता क्रमांक` (Property ID), `करदात्याचे नाव` (Owner Name Masked), `भरलेली रक्कम` (Amount Paid), `आकारणी वर्ष` (Assessment Year). |
+| **Rent Agreement** | `["en", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | Leave & License: `परवाना देणारा` (Lessor Masked), `परवाना घेणारा` (Lessee Masked), `मासिक भाडे` (Monthly Rent). |
+| **Aadhaar Card** | `["en", "hi"]` | **Yes** (`devanagari_PP-OCRv4`) | Bilingual UIDAI cards: Devanagari name, `जन्मतारीख` (DOB), `पुरुष/स्त्री` mapped to `Male/Female`. |
+| **All Other 16 Types** | `["en"]` | **No** (English only) | Retains pure English recognition to prevent latency degradation and avoid out-of-vocabulary misidentifications. |
+
+#### 2. Dual-Pass Neural Recognition & Intelligent Line Merging
+- **Unified Devanagari Model**: Both Marathi and Hindi use the Devanagari script. In PaddleOCR/RapidOCR, character recognition utilizes the unified `devanagari_PP-OCRv4_rec_infer.onnx` neural recognizer with `devanagari_dict.txt`.
+- **Script Recognition vs. Language Semantics**: The neural model accurately reads individual Devanagari glyphs across both Hindi and Marathi. However, vocabulary and field labels differ between the languages. The field extractors use verified language-specific regex patterns and do not assume word patterns transfer automatically.
+- **Bounding Box IoU Merging**:
+  - Because English OCR engines often interpret Devanagari script as random ASCII garbage (e.g. `HRI 9` for `महाराष्ट्र शासन`), the merge algorithm computes spatial IoU overlap across lines.
+  - When lines overlap and the Devanagari pass contains characters in the `\u0900-\u097F` block with sufficient confidence (>= 0.50), the Devanagari line is prioritized over the English ASCII garble.
+  - Non-overlapping lines from both passes are preserved and sorted top-to-bottom.
+
+#### 3. Honest Language Coverage & Manual Review Guardrail
+- If a document contains significant Devanagari text (>= 15 glyphs) but core fields cannot be extracted with high confidence, the service explicitly refuses to guess and outputs:
+  ```json
+  {
+    "detected_languages": ["en", "devanagari"],
+    "partial_language_coverage": true,
+    "language_review_required": true,
+    "language_coverage_notes": "Document contains Devanagari script text (124 characters), but core field(s) could not be extracted: registration_number, establishment_name. Manual review recommended."
+  }
+  ```
+- This ensures human verification is flagged for unfamiliar regional layouts while automated extraction proceeds safely for recognized standard formats.
+
+---
+
+### 🔒 Security, Authentication & Deployment Configuration
+
+> [!WARNING]
+> **Authentication is Disabled by Default (`AUTH_MODE=disabled`)**
+> In this configuration, all routes (`/api/upload`, `/ocr/{doc_type}`, `/api/stats`, `/api/documents`, `/api/documents/{id}/file`, etc.) accept unauthenticated requests anonymously with no Authorization header or token required.
+> 
+> **Public Deployment Warning**: Deploying this service to a public IP or public domain without authentication exposes document ingestion, document vault files, and extracted financial/identity data to anyone on the internet.
+
+#### How to Re-Enable Authentication (Zero Code Changes)
+To re-enable full JWT or API-key authentication before public deployment, simply configure the following environment variables:
+
+1. **Enable JWT Authentication**:
+   ```bash
+   export AUTH_MODE="jwt"
+   export JWT_SECRET="your-secure-32-character-production-secret"
+   export REGISTERED_CLIENTS_JSON='{"client-app-id": "client-secure-secret"}'
+   ```
+2. **Or Enable Dual Mode (JWT + Static API Key)**:
+   ```bash
+   export AUTH_MODE="dual"
+   export JWT_SECRET="your-secure-32-character-production-secret"
+   export REGISTERED_CLIENTS_JSON='{"client-app-id": "client-secure-secret"}'
+   export API_KEY="your-static-api-key-for-internal-services"
+   ```
+
+When `AUTH_MODE` is set to `"jwt"`, `"api_key"`, or `"dual"`:
+- The service activates strict fail-fast validation on startup (`validate_security_configuration()`) and refuses to start if required secrets or client registries are missing.
+- Every endpoint strictly enforces HTTP `401 Unauthorized` on missing or invalid Bearer tokens / API keys.
+- Clients mint short-lived tokens via `POST /auth/token` with registered client credentials.
+- In the React frontend, credentials and Base URL can be configured directly in the **Settings** modal (`SettingsModal.tsx`), and the dormant `LoginView.tsx` screen can be re-attached to the routing tree.
+
+---
+
+### 🛡️ PII Minimisation & Temp File Lifecycle
 - **Strict Secret Management & Fail-Fast Startup**:
-  - `AUTH_MODE` defaults to `"jwt"`. Dual authentication (`AUTH_MODE=dual`) and static API key mode (`AUTH_MODE=api_key`) require explicit environment configuration.
-  - **No Fallback Secrets**: Hardcoded secrets have been completely removed. `JWT_SECRET` must be set via environment variable or secret manager whenever `AUTH_MODE` is `"jwt"` or `"dual"`. `API_KEY` must be set whenever `AUTH_MODE` is `"api_key"` or `"dual"`.
-  - **Credential Rotation Notice**: Any environment or deployment previously relying on hardcoded defaults (`"super-secret-company-ocr-key-2026"`) must immediately rotate and configure secure secrets.
-  - The service performs a strict fail-fast validation on startup (`validate_security_configuration()`) and raises `RuntimeError` if required secrets or client credentials are missing.
-  - **Request Blocking on Startup Failure**: If startup security checks fail, lifespan terminates the server, and middleware intercepts any request with `503 Service Unavailable`, preventing any unauthenticated traffic from being served.
+  - In `AUTH_MODE='jwt'`, `AUTH_MODE='dual'`, or `AUTH_MODE='api_key'`, hardcoded secrets are strictly forbidden. `JWT_SECRET` and `API_KEY` must be explicitly injected via secret management.
+  - Any deployment relying on hardcoded keys must immediately rotate credentials.
+  - If startup security checks fail in enabled auth modes, lifespan raises `RuntimeError` and middleware returns `503 Service Unavailable`, preventing any unauthenticated traffic from leaking.
 - **Client Credential Verification for `/auth/token`**:
   - `/auth/token` requires both `client_id` and `client_secret`.
   - Credentials are never hardcoded in source. Client registry must be configured via `REGISTERED_CLIENTS_JSON` environment variable or `REGISTERED_CLIENTS_FILE` path.

@@ -26,18 +26,24 @@ import document_store
 from security import create_access_token
 
 
-@pytest.fixture
-def client(monkeypatch):
-    monkeypatch.setenv("AUTH_MODE", "dual")
-    monkeypatch.setenv("JWT_SECRET", "test-secret-key-at-least-32-chars-long-123456")
-    monkeypatch.setenv("API_KEY", "test-static-api-key-2026")
-    return TestClient(app)
+@pytest.fixture(autouse=True)
+def reset_app_security(monkeypatch):
+    import main
+    main._startup_security_error = None
+    monkeypatch.delenv("AUTH_ENABLED", raising=False)
+    monkeypatch.setenv("AUTH_MODE", "disabled")
+    monkeypatch.delenv("JWT_SECRET", raising=False)
+    monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.delenv("REGISTERED_CLIENTS_JSON", raising=False)
+    monkeypatch.delenv("REGISTERED_CLIENTS_FILE", raising=False)
+    yield
+    main._startup_security_error = None
 
 
 @pytest.fixture
-def auth_headers():
-    token = create_access_token(subject="test-client")
-    return {"Authorization": f"Bearer {token}"}
+def client():
+    with TestClient(app) as test_client:
+        yield test_client
 
 
 def test_public_endpoints_remain_open(client):
@@ -59,45 +65,58 @@ def test_public_endpoints_remain_open(client):
     assert "bank_statement" in ids
 
 
-def test_upload_unauthenticated_rejected_401(client):
-    """Unauthenticated requests to POST /api/upload must be rejected with HTTP 401."""
-    img = Image.new("RGB", (200, 100), color=(255, 255, 255))
-    buf = io.BytesIO()
-    img.save(buf, format="PNG")
-    buf.seek(0)
+def test_unauthenticated_requests_succeed_by_default(client):
+    """By default (AUTH_MODE=disabled), requests succeed without authentication headers or tokens."""
+    # 1. Stats and listings
+    stats_res = client.get("/api/stats")
+    assert stats_res.status_code == 200
+    assert "total" in stats_res.json()
 
-    # 1. No auth headers at all
-    res = client.post(
-        "/api/upload",
-        files={"file": ("test.png", buf, "image/png")},
-        data={"doc_type": "auto"},
-    )
-    assert res.status_code == 401
-    assert "Missing or invalid authentication credentials" in res.json().get("detail", "")
+    docs_res = client.get("/api/documents")
+    assert docs_res.status_code == 200
+    assert "items" in docs_res.json()
 
-    # 2. Invalid bearer token
-    buf.seek(0)
-    res_bad = client.post(
-        "/api/upload",
-        files={"file": ("test.png", buf, "image/png")},
-        data={"doc_type": "auto"},
-        headers={"Authorization": "Bearer invalid-garbage-token"},
-    )
-    assert res_bad.status_code == 401
+    # 2. Non-existent document returns 404 Not Found, NEVER 401 Unauthorized
+    assert client.get("/api/documents/non-existent-doc-id").status_code == 404
+    assert client.get("/api/documents/non-existent-doc-id/file").status_code == 404
+    assert client.get("/api/documents/non-existent-doc-id/preview").status_code == 404
+    assert client.delete("/api/documents/non-existent-doc-id").status_code == 404
 
 
-def test_dashboard_endpoints_unauthenticated_rejected_401(client):
-    """Vault data and stats endpoints must be strictly protected against unauthenticated requests."""
-    assert client.get("/api/stats").status_code == 401
-    assert client.get("/api/documents").status_code == 401
-    assert client.get("/api/documents/non-existent-doc-id").status_code == 401
-    assert client.get("/api/documents/non-existent-doc-id/file").status_code == 401
-    assert client.get("/api/documents/non-existent-doc-id/preview").status_code == 401
-    assert client.delete("/api/documents/non-existent-doc-id").status_code == 401
+def test_auth_mode_jwt_enforces_401_when_explicitly_enabled(monkeypatch):
+    """When AUTH_MODE=jwt is explicitly configured, endpoints enforce 401 on unauthenticated requests."""
+    secret = "test-secret-key-at-least-32-chars-long-123456"
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("AUTH_MODE", "jwt")
+    monkeypatch.setenv("JWT_SECRET", secret)
+    monkeypatch.setenv("REGISTERED_CLIENTS_JSON", json.dumps({"test-client": "secret123"}))
+
+    with TestClient(app) as test_client:
+        img = Image.new("RGB", (200, 100), color=(255, 255, 255))
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        buf.seek(0)
+
+        # 1. Unauthenticated POST /api/upload returns 401
+        res = test_client.post(
+            "/api/upload",
+            files={"file": ("test.png", buf, "image/png")},
+            data={"doc_type": "auto"},
+        )
+        assert res.status_code == 401
+        assert "Missing or invalid authentication credentials" in res.json().get("detail", "")
+
+        # 2. Unauthenticated GET /api/stats returns 401
+        assert test_client.get("/api/stats").status_code == 401
+
+        # 3. Authenticated request with valid JWT token succeeds
+        token = create_access_token(subject="test-client")
+        auth_res = test_client.get("/api/stats", headers={"Authorization": f"Bearer {token}"})
+        assert auth_res.status_code == 200
 
 
-def test_get_stats(client, auth_headers):
-    response = client.get("/api/stats", headers=auth_headers)
+def test_get_stats(client):
+    response = client.get("/api/stats")
     assert response.status_code == 200
     stats = response.json()
     assert "total" in stats
@@ -105,7 +124,7 @@ def test_get_stats(client, auth_headers):
     assert "ocr_not_required" in stats
 
 
-def test_upload_image_document(client, auth_headers, tmp_path):
+def test_upload_image_document(client, tmp_path):
     # Create an image with readable text in memory
     img = Image.new("RGB", (400, 150), color=(255, 255, 255))
     draw = ImageDraw.Draw(img)
@@ -120,7 +139,6 @@ def test_upload_image_document(client, auth_headers, tmp_path):
         "/api/upload",
         files={"file": ("test_pan_card.png", buf, "image/png")},
         data={"doc_type": "auto"},
-        headers=auth_headers,
     )
     assert response.status_code == 200
     doc = response.json()
@@ -132,43 +150,37 @@ def test_upload_image_document(client, auth_headers, tmp_path):
     doc_id = doc["id"]
 
     # Verify listing includes it
-    list_res = client.get("/api/documents", headers=auth_headers)
+    list_res = client.get("/api/documents")
     assert list_res.status_code == 200
     items = list_res.json()["items"]
     assert any(i["id"] == doc_id for i in items)
 
     # Verify fetching by ID
-    get_res = client.get(f"/api/documents/{doc_id}", headers=auth_headers)
+    get_res = client.get(f"/api/documents/{doc_id}")
     assert get_res.status_code == 200
     assert get_res.json()["id"] == doc_id
 
-    # Verify file endpoint via Header
-    file_res = client.get(f"/api/documents/{doc_id}/file", headers=auth_headers)
+    # Verify file endpoint directly without auth headers
+    file_res = client.get(f"/api/documents/{doc_id}/file")
     assert file_res.status_code == 200
     assert file_res.headers["content-type"] == "image/png"
 
-    # Verify file endpoint via query param (?token=) for browser img/iframe tags
-    token = create_access_token(subject="browser-user")
-    file_query_res = client.get(f"/api/documents/{doc_id}/file?token={token}")
-    assert file_query_res.status_code == 200
-    assert file_query_res.headers["content-type"] == "image/png"
-
-    # Verify preview endpoint via query param (?token=)
-    preview_query_res = client.get(f"/api/documents/{doc_id}/preview?token={token}")
-    assert preview_query_res.status_code == 200
-    assert preview_query_res.headers["content-type"] == "image/png"
+    # Verify preview endpoint directly without auth headers
+    preview_res = client.get(f"/api/documents/{doc_id}/preview")
+    assert preview_res.status_code == 200
+    assert preview_res.headers["content-type"] == "image/png"
 
     # Verify deletion
-    del_res = client.delete(f"/api/documents/{doc_id}", headers=auth_headers)
+    del_res = client.delete(f"/api/documents/{doc_id}")
     assert del_res.status_code == 200
     assert del_res.json()["success"] is True
 
     # After deletion, 404
-    get_after = client.get(f"/api/documents/{doc_id}", headers=auth_headers)
+    get_after = client.get(f"/api/documents/{doc_id}")
     assert get_after.status_code == 404
 
 
-def test_upload_blank_image_rejected(client, auth_headers):
+def test_upload_blank_image_rejected(client):
     # Blank/unreadable images must be rejected with HTTP 422 and not saved
     img = Image.new("RGB", (300, 100), color=(255, 255, 255))
     buf = io.BytesIO()
@@ -179,19 +191,18 @@ def test_upload_blank_image_rejected(client, auth_headers):
         "/api/upload",
         files={"file": ("blank_card.png", buf, "image/png")},
         data={"doc_type": "auto"},
-        headers=auth_headers,
     )
     assert response.status_code == 422
     assert "no text or zero confidence" in response.json()["detail"]
 
     # Verify blank document was NOT persisted to repository
-    list_res = client.get("/api/documents", headers=auth_headers)
+    list_res = client.get("/api/documents")
     assert list_res.status_code == 200
     items = list_res.json()["items"]
     assert not any(i.get("filename") == "blank_card.png" for i in items)
 
 
-def test_upload_real_pdf_demo(client, auth_headers):
+def test_upload_real_pdf_demo(client):
     demo_pdf_path = "/home/vighnesh/Downloads/Demo_PAN_Card.pdf"
     if not os.path.exists(demo_pdf_path):
         pytest.skip("Demo_PAN_Card.pdf not available in Downloads")
@@ -203,7 +214,6 @@ def test_upload_real_pdf_demo(client, auth_headers):
         "/api/upload",
         files={"file": ("Demo_PAN_Card.pdf", io.BytesIO(pdf_bytes), "application/pdf")},
         data={"doc_type": "auto"},
-        headers=auth_headers,
     )
     assert response.status_code == 200
     doc = response.json()
@@ -215,10 +225,10 @@ def test_upload_real_pdf_demo(client, auth_headers):
     assert "ABCDE1234F" in str(doc.get("extracted_fields", {}))
 
     # Clean up
-    client.delete(f"/api/documents/{doc['id']}", headers=auth_headers)
+    client.delete(f"/api/documents/{doc['id']}")
 
 
-def test_upload_cross_check_ordering_with_masked_fields(client, auth_headers):
+def test_upload_cross_check_ordering_with_masked_fields(client):
     """
     Regression test for cross-check execution order bug:
     Ensures that /api/upload runs perform_cross_check against raw_fields BEFORE
@@ -244,7 +254,6 @@ def test_upload_cross_check_ordering_with_masked_fields(client, auth_headers):
         "/api/upload",
         files={"file": ("test_salary_slip.png", buf, "image/png")},
         data={"doc_type": "salary_slip", "expected_data": expected_payload},
-        headers=auth_headers,
     )
     assert response.status_code == 200
     doc = response.json()
@@ -268,4 +277,4 @@ def test_upload_cross_check_ordering_with_masked_fields(client, auth_headers):
         assert "RAHUL SHARMA" not in str(ext_fields)
     finally:
         # Clean up
-        client.delete(f"/api/documents/{doc_id}", headers=auth_headers)
+        client.delete(f"/api/documents/{doc_id}")

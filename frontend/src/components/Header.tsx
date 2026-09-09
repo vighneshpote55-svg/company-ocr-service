@@ -1,12 +1,11 @@
 import React from 'react';
-import { Settings, RefreshCw, LogOut } from 'lucide-react';
+import { Settings, RefreshCw } from 'lucide-react';
 
 interface HeaderProps {
   title: string;
   isBackendConnected: boolean;
   onOpenSettings: () => void;
   onRefresh: () => void;
-  onLogout?: () => void;
   isRefreshing?: boolean;
 }
 
@@ -15,7 +14,6 @@ export const Header: React.FC<HeaderProps> = ({
   isBackendConnected,
   onOpenSettings,
   onRefresh,
-  onLogout,
   isRefreshing = false,
 }) => {
   return (
@@ -50,18 +48,6 @@ export const Header: React.FC<HeaderProps> = ({
           <Settings size={15} />
           <span style={{ fontSize: '0.8rem' }}>Settings</span>
         </button>
-
-        {onLogout && (
-          <button
-            className="btn btn-secondary"
-            onClick={onLogout}
-            style={{ padding: '0.45rem 0.75rem', borderColor: 'var(--border-subtle)' }}
-            title="Sign Out"
-          >
-            <LogOut size={15} color="var(--accent-rose)" />
-            <span style={{ fontSize: '0.8rem' }}>Sign Out</span>
-          </button>
-        )}
       </div>
     </header>
   );

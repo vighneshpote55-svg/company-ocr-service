@@ -252,7 +252,7 @@ def get_stats() -> Dict[str, int]:
     ocr_processed = sum(1 for d in items if d.get("ocr_required") is True)
     ocr_not_required = sum(1 for d in items if d.get("ocr_required") is False)
     failed = sum(1 for d in items if d.get("status") in ("error", "failed"))
-    completed = sum(1 for d in items if d.get("status") in ("success", "completed", "low_confidence"))
+    completed = sum(1 for d in items if d.get("status") in ("success", "completed", "low_confidence", "warning"))
 
     return {
         "total": total,

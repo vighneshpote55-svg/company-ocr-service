@@ -81,6 +81,8 @@ def log_audit_event(
     record.audit_data = audit_data
     audit_logger.handle(record)
     _audit_log_buffer.append(audit_data)
+    if len(_audit_log_buffer) > 1000:
+        del _audit_log_buffer[:200]
     return audit_data
 
 

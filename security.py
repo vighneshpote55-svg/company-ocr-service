@@ -23,8 +23,19 @@ JWT_EXPIRATION_MINUTES = int(os.getenv("JWT_EXPIRATION_MINUTES", "30"))
 _registered_clients: Dict[str, str] = {}
 
 
+def is_auth_enabled() -> bool:
+    """
+    Check if authentication is active.
+    Authentication is DISABLED by default unless AUTH_ENABLED is explicitly set to 'true'.
+    """
+    val = os.getenv("AUTH_ENABLED", "").lower().strip()
+    return val in ("true", "1", "yes")
+
+
 def get_auth_mode() -> str:
-    """Retrieve current AUTH_MODE, defaulting to 'jwt'."""
+    """Retrieve current AUTH_MODE. Returns 'disabled' unless AUTH_ENABLED=true."""
+    if not is_auth_enabled():
+        return "disabled"
     return os.getenv("AUTH_MODE", "jwt").lower().strip()
 
 
@@ -46,9 +57,13 @@ def get_static_api_key() -> Optional[str]:
 def validate_security_configuration():
     """
     Fail-fast check on service startup.
-    Ensures that required secrets and client credentials are explicitly set and not left empty or defaulted.
+    Ensures that required secrets and client credentials are explicitly set when auth is enabled.
+    In AUTH_MODE='disabled' (default), this check passes immediately with zero required secrets.
     """
     mode = get_auth_mode()
+    if mode in ("disabled", "none", "off", "false"):
+        return
+
     if mode in ("jwt", "dual"):
         jwt_sec = os.getenv("JWT_SECRET")
         if not jwt_sec or not jwt_sec.strip():
@@ -204,6 +219,13 @@ async def authenticate_request(
     ?api_key= query parameter).
     """
     mode = get_auth_mode()
+    if mode in ("disabled", "none", "off", "false"):
+        return {
+            "sub": "anonymous",
+            "auth_method": "none",
+            "auth_mode": "disabled",
+        }
+
     static_key = get_static_api_key()
 
     # 1. If static API Key mode strictly required
