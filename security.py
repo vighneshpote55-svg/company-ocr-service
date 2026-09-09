@@ -13,7 +13,7 @@ import json
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
-from fastapi import HTTPException, Header, status
+from fastapi import HTTPException, Header, Query, status
 import jwt
 
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
@@ -195,31 +195,42 @@ def verify_jwt_token(token: str) -> dict:
 async def authenticate_request(
     authorization: Optional[str] = Header(None),
     x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    token: Optional[str] = Query(None),
+    api_key: Optional[str] = Query(None),
 ) -> dict:
     """
-    Authenticate incoming request using either JWT Bearer token or static API Key.
+    Authenticate incoming request using either JWT Bearer token (via Authorization
+    header or ?token= query parameter) or static API Key (via X-API-Key header or
+    ?api_key= query parameter).
     """
     mode = get_auth_mode()
     static_key = get_static_api_key()
 
     # 1. If static API Key mode strictly required
     if mode == "api_key":
-        if x_api_key and static_key and hmac.compare_digest(x_api_key, static_key):
+        key_candidate = x_api_key or api_key
+        if key_candidate and static_key and hmac.compare_digest(key_candidate, static_key):
             return {"sub": "api_key_client", "auth_method": "api_key"}
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or missing X-API-Key header",
         )
 
-    # 2. Check JWT Bearer token
+    # 2. Check JWT Bearer token (from Authorization header or query parameter)
+    jwt_candidate = None
     if authorization and authorization.startswith("Bearer "):
-        token = authorization.split(" ", 1)[1].strip()
-        payload = verify_jwt_token(token)
+        jwt_candidate = authorization.split(" ", 1)[1].strip()
+    elif token:
+        jwt_candidate = token.strip()
+
+    if jwt_candidate:
+        payload = verify_jwt_token(jwt_candidate)
         payload["auth_method"] = "jwt"
         return payload
 
     # 3. Check static API Key (fallback only if AUTH_MODE == 'dual')
-    if mode == "dual" and x_api_key and static_key and hmac.compare_digest(x_api_key, static_key):
+    key_candidate = x_api_key or api_key
+    if mode == "dual" and key_candidate and static_key and hmac.compare_digest(key_candidate, static_key):
         return {"sub": "api_key_client", "auth_method": "api_key"}
 
     # If neither provided or matched

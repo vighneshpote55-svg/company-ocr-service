@@ -693,8 +693,10 @@ def test_persisted_records_never_contain_raw_pii_or_unmasked_values(monkeypatch)
     """
     import main
     from starlette.testclient import TestClient
+    from security import create_access_token
 
     client = TestClient(main.app)
+    auth_header = {"Authorization": f"Bearer {create_access_token(subject='test-client')}"}
 
     masked_test_cases = [
         {
@@ -829,6 +831,7 @@ def test_persisted_records_never_contain_raw_pii_or_unmasked_values(monkeypatch)
             "/api/upload",
             files={"file": (f"test_{doc_type}.png", file_bytes, "image/png")},
             data={"doc_type": doc_type, "expected_data": tc["expected_data"]},
+            headers=auth_header,
         )
         assert resp.status_code == 200, f"Upload failed for {doc_type}: {resp.text}"
         upload_resp = resp.json()
@@ -903,7 +906,7 @@ def test_persisted_records_never_contain_raw_pii_or_unmasked_values(monkeypatch)
 
         finally:
             # Clean up after test
-            client.delete(f"/api/documents/{doc_id}")
+            client.delete(f"/api/documents/{doc_id}", headers=auth_header)
 
     # Conceptual verification check: assert that if raw_fields WAS in a document dict,
     # our validator flags it as a leak (proving this test would catch the bug)

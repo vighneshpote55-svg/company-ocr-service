@@ -11,8 +11,8 @@ interface SettingsModalProps {
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSaved }) => {
   const currentConfig = api.getConfig();
   const [baseUrl, setBaseUrl] = useState(currentConfig.baseUrl);
-  const [clientId, setClientId] = useState(currentConfig.clientId || 'test-client');
-  const [clientSecret, setClientSecret] = useState(currentConfig.clientSecret || 'test-secret');
+  const [clientId, setClientId] = useState(currentConfig.clientId || '');
+  const [clientSecret, setClientSecret] = useState(currentConfig.clientSecret || '');
   const [bearerToken, setBearerToken] = useState(currentConfig.token || '');
   const [apiKey, setApiKey] = useState(currentConfig.apiKey || '');
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
@@ -114,7 +114,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                   className="form-input"
                   value={clientId}
                   onChange={(e) => setClientId(e.target.value)}
-                  placeholder="test-client"
+                  placeholder="Enter client ID"
                 />
               </div>
               <div className="form-group">

@@ -638,7 +638,9 @@ async def get_supported_types():
 
 
 @app.get("/api/stats")
-async def get_dashboard_stats():
+async def get_dashboard_stats(
+    auth: dict = Depends(authenticate_request),
+):
     """Retrieve aggregate document statistics for the dashboard."""
     return document_store.get_stats()
 
@@ -651,6 +653,7 @@ async def list_documents_endpoint(
     status: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
+    auth: dict = Depends(authenticate_request),
 ):
     """Retrieve paginated list of uploaded documents with search and filtering."""
     items = document_store.list_documents(
@@ -678,7 +681,10 @@ async def list_documents_endpoint(
 
 
 @app.get("/api/documents/{doc_id}")
-async def get_document_endpoint(doc_id: str):
+async def get_document_endpoint(
+    doc_id: str,
+    auth: dict = Depends(authenticate_request),
+):
     """Retrieve full details, extracted fields, and verification results of a document."""
     doc = document_store.get_document(doc_id)
     if not doc:
@@ -693,6 +699,7 @@ async def get_document_endpoint(doc_id: str):
 async def get_document_file_endpoint(
     doc_id: str,
     download: bool = Query(False),
+    auth: dict = Depends(authenticate_request),
 ):
     """Serve the original uploaded document for in-browser PDF or image preview (inline) or download."""
     file_path = document_store.get_document_file_path(doc_id)
@@ -723,7 +730,10 @@ async def get_document_file_endpoint(
 
 
 @app.get("/api/documents/{doc_id}/preview")
-async def get_document_preview_endpoint(doc_id: str):
+async def get_document_preview_endpoint(
+    doc_id: str,
+    auth: dict = Depends(authenticate_request),
+):
     """Serve the thumbnail image preview for the document."""
     preview_path = document_store.get_document_preview_path(doc_id)
     if not preview_path or not os.path.exists(preview_path):
@@ -735,7 +745,10 @@ async def get_document_preview_endpoint(doc_id: str):
 
 
 @app.delete("/api/documents/{doc_id}")
-async def delete_document_endpoint(doc_id: str):
+async def delete_document_endpoint(
+    doc_id: str,
+    auth: dict = Depends(authenticate_request),
+):
     """Permanently delete a document, its stored files, and metadata record."""
     deleted = document_store.delete_document(doc_id)
     if not deleted:
@@ -751,6 +764,7 @@ async def upload_document_endpoint(
     file: UploadFile = File(...),
     doc_type: Optional[str] = Form(None),
     expected_data: Optional[str] = Form(None),
+    auth: dict = Depends(authenticate_request),
 ):
     """
     Direct browser upload endpoint:

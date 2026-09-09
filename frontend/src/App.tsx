@@ -21,6 +21,7 @@ import { ExtractedTextViewer } from './components/ExtractedTextViewer';
 import { JsonResultViewer } from './components/JsonResultViewer';
 import { DocumentsTable } from './components/DocumentsTable';
 import { SettingsModal } from './components/SettingsModal';
+import { LoginView } from './components/LoginView';
 import { Toast } from './components/Toast';
 import type { ToastMessage } from './components/Toast';
 
@@ -41,6 +42,7 @@ export const App: React.FC = () => {
     failed: 0,
   });
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(api.isAuthenticated());
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
@@ -61,13 +63,24 @@ export const App: React.FC = () => {
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      // 1. Health check
+      // 1. Public endpoints
       await api.checkHealth();
       setIsBackendConnected(true);
 
-      // 2. Fetch supported types, stats, documents, and engine info in parallel
-      const [typesData, statsData, docsData, engineData] = await Promise.all([
+      const [typesData, engineData] = await Promise.all([
         api.getSupportedTypes().catch(() => []),
+        api.getEngineInfo().catch(() => null),
+      ]);
+      setSupportedTypes(typesData);
+      if (engineData) setEngineInfo(engineData);
+
+      // Only fetch protected data if authenticated
+      if (!api.isAuthenticated()) {
+        return;
+      }
+
+      // 2. Fetch protected stats and documents in parallel
+      const [statsData, docsData] = await Promise.all([
         api.getStats().catch(() => ({
           total: 0,
           ocr_processed: 0,
@@ -76,13 +89,10 @@ export const App: React.FC = () => {
           failed: 0,
         })),
         api.getDocuments({ limit: 100 }).catch(() => ({ items: [], total: 0 })),
-        api.getEngineInfo().catch(() => null),
       ]);
 
-      setSupportedTypes(typesData);
       setStats(statsData);
       setDocuments(docsData.items);
-      if (engineData) setEngineInfo(engineData);
     } catch (err: any) {
       setIsBackendConnected(false);
       addToast('Cannot connect to FastAPI OCR server. Check settings or start backend.', 'error');
@@ -92,6 +102,11 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const unsubscribeAuth = api.onUnauthorized(() => {
+      setIsAuthenticated(false);
+      addToast('Session expired or unauthorized. Please sign in again.', 'info');
+    });
+
     loadData();
 
     // Periodic health poll every 25 seconds
@@ -104,7 +119,10 @@ export const App: React.FC = () => {
       }
     }, 25000);
 
-    return () => clearInterval(interval);
+    return () => {
+      unsubscribeAuth();
+      clearInterval(interval);
+    };
   }, [loadData]);
 
   const handleDocumentUploaded = (doc: DocumentItem) => {
@@ -145,6 +163,20 @@ export const App: React.FC = () => {
     }
   };
 
+  if (!isAuthenticated) {
+    return (
+      <>
+        <LoginView
+          onLoginSuccess={() => {
+            setIsAuthenticated(true);
+            loadData();
+          }}
+        />
+        <Toast toasts={toasts} onDismiss={removeToast} />
+      </>
+    );
+  }
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -163,6 +195,11 @@ export const App: React.FC = () => {
           isBackendConnected={isBackendConnected}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onRefresh={loadData}
+          onLogout={() => {
+            api.logout();
+            setIsAuthenticated(false);
+            addToast('Signed out successfully.', 'info');
+          }}
           isRefreshing={isRefreshing}
         />
 

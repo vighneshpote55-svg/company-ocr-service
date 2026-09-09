@@ -511,6 +511,7 @@ def test_sync_and_async_pipeline_parity_new_document_types(client, auth_header):
         "/api/upload",
         files={"file": ("passbook.png", pb_bytes, "image/png")},
         data={"doc_type": "bank_passbook"},
+        headers=auth_header,
     )
     assert resp_sync_pb.status_code == 200
     sync_pb_data = resp_sync_pb.json()
@@ -556,6 +557,7 @@ def test_sync_and_async_pipeline_parity_new_document_types(client, auth_header):
         "/api/upload",
         files={"file": ("partnership_deed.png", pd_bytes, "image/png")},
         data={"doc_type": "partnership_deed"},
+        headers=auth_header,
     )
     assert resp_sync_pd.status_code == 200
     sync_pd_data = resp_sync_pd.json()
