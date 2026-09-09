@@ -136,27 +136,34 @@ Many regional Indian business and property documents are issued bilingual or ent
 > **Public Deployment Warning**: Deploying this service to a public IP or public domain without authentication exposes document ingestion, document vault files, and extracted financial/identity data to anyone on the internet.
 
 #### How to Re-Enable Authentication (Zero Code Changes)
-To re-enable full JWT or API-key authentication before public deployment, simply configure the following environment variables:
+To re-enable full JWT or API-key authentication before public deployment, configure the environment variables:
 
 1. **Enable JWT Authentication**:
    ```bash
+   export AUTH_ENABLED="true"
    export AUTH_MODE="jwt"
    export JWT_SECRET="your-secure-32-character-production-secret"
    export REGISTERED_CLIENTS_JSON='{"client-app-id": "client-secure-secret"}'
    ```
 2. **Or Enable Dual Mode (JWT + Static API Key)**:
    ```bash
+   export AUTH_ENABLED="true"
    export AUTH_MODE="dual"
    export JWT_SECRET="your-secure-32-character-production-secret"
    export REGISTERED_CLIENTS_JSON='{"client-app-id": "client-secure-secret"}'
    export API_KEY="your-static-api-key-for-internal-services"
    ```
 
-When `AUTH_MODE` is set to `"jwt"`, `"api_key"`, or `"dual"`:
-- The service activates strict fail-fast validation on startup (`validate_security_configuration()`) and refuses to start if required secrets or client registries are missing.
-- Every endpoint strictly enforces HTTP `401 Unauthorized` on missing or invalid Bearer tokens / API keys.
-- Clients mint short-lived tokens via `POST /auth/token` with registered client credentials.
-- In the React frontend, credentials and Base URL can be configured directly in the **Settings** modal (`SettingsModal.tsx`), and the dormant `LoginView.tsx` screen can be re-attached to the routing tree.
+#### Dynamic Runtime Auth Discovery (`GET /api/auth-status`)
+The frontend is dynamically auth-aware at runtime:
+- **`GET /api/auth-status`** (and `/auth-status`, `/health`): Returns `{"auth_enabled": bool, "auth_mode": string}` without requiring authentication.
+- **When `auth_enabled: false` (default)**: The frontend bypasses login entirely, does not send `Authorization` headers, and loads the document dashboard immediately.
+- **When `auth_enabled: true`**:
+  - The React frontend displays `LoginView.tsx` demanding authentication before dashboard access.
+  - Users sign in via `POST /auth/token` (or API Key), which stores the session token in `localStorage`.
+  - `api.ts` automatically attaches `Authorization: Bearer <token>` to all API requests, file downloads (`/api/documents/{id}/file`), previews, and `POST /api/upload` multipart requests.
+  - A **Sign Out** button appears in the navigation header.
+  - If a session expires or returns `401 Unauthorized`, `api.ts` clears stored credentials and automatically prompts the user to re-authenticate.
 
 ---
 

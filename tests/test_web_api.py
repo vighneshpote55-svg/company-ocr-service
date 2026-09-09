@@ -83,36 +83,97 @@ def test_unauthenticated_requests_succeed_by_default(client):
     assert client.delete("/api/documents/non-existent-doc-id").status_code == 404
 
 
-def test_auth_mode_jwt_enforces_401_when_explicitly_enabled(monkeypatch):
-    """When AUTH_MODE=jwt is explicitly configured, endpoints enforce 401 on unauthenticated requests."""
+def test_auth_status_endpoint_reports_correct_state(client, monkeypatch):
+    """Verify /api/auth-status reports runtime auth configuration to frontend."""
+    # 1. Default: auth disabled
+    res = client.get("/api/auth-status")
+    assert res.status_code == 200
+    data = res.json()
+    assert data["auth_enabled"] is False
+    assert data["auth_mode"] == "disabled"
+
+    # Also test /auth-status alias and /health field
+    alias_res = client.get("/auth-status")
+    assert alias_res.status_code == 200
+    assert alias_res.json()["auth_enabled"] is False
+
+    health_res = client.get("/health")
+    assert health_res.status_code == 200
+    assert health_res.json()["auth_enabled"] is False
+
+    # 2. When AUTH_ENABLED=true
+    monkeypatch.setenv("AUTH_ENABLED", "true")
+    monkeypatch.setenv("AUTH_MODE", "jwt")
+    monkeypatch.setenv("JWT_SECRET", "test-secret-key-at-least-32-chars-long-123456")
+    monkeypatch.setenv("REGISTERED_CLIENTS_JSON", json.dumps({"test-client": "secret123"}))
+
+    with TestClient(app) as test_client:
+        auth_res = test_client.get("/api/auth-status")
+        assert auth_res.status_code == 200
+        auth_data = auth_res.json()
+        assert auth_data["auth_enabled"] is True
+        assert auth_data["auth_mode"] == "jwt"
+
+
+def test_authenticated_flow_login_then_upload_document_success(monkeypatch):
+    """
+    Regression test for frontend-backend auth flow:
+    When auth is enabled, verifies end-to-end flow:
+    1. Unauthenticated upload fails with 401
+    2. Client logs in via /auth/token and obtains access token
+    3. Authenticated upload with Bearer token succeeds with 200 OK
+    """
     secret = "test-secret-key-at-least-32-chars-long-123456"
     monkeypatch.setenv("AUTH_ENABLED", "true")
     monkeypatch.setenv("AUTH_MODE", "jwt")
     monkeypatch.setenv("JWT_SECRET", secret)
-    monkeypatch.setenv("REGISTERED_CLIENTS_JSON", json.dumps({"test-client": "secret123"}))
+    monkeypatch.setenv("REGISTERED_CLIENTS_JSON", json.dumps({"frontend-app": "app-secret-password-123"}))
 
     with TestClient(app) as test_client:
-        img = Image.new("RGB", (200, 100), color=(255, 255, 255))
+        img = Image.new("RGB", (300, 100), color=(255, 255, 255))
+        draw = ImageDraw.Draw(img)
+        draw.text((10, 20), "INCOME TAX DEPARTMENT", fill=(0, 0, 0))
+        draw.text((10, 50), "ABCDE1234F", fill=(0, 0, 0))
         buf = io.BytesIO()
         img.save(buf, format="PNG")
         buf.seek(0)
 
-        # 1. Unauthenticated POST /api/upload returns 401
-        res = test_client.post(
+        # Step 1: Unauthenticated request to /api/upload MUST fail with 401
+        unauth_res = test_client.post(
             "/api/upload",
-            files={"file": ("test.png", buf, "image/png")},
+            files={"file": ("pan_test.png", buf, "image/png")},
             data={"doc_type": "auto"},
         )
-        assert res.status_code == 401
-        assert "Missing or invalid authentication credentials" in res.json().get("detail", "")
+        assert unauth_res.status_code == 401
 
-        # 2. Unauthenticated GET /api/stats returns 401
-        assert test_client.get("/api/stats").status_code == 401
+        # Step 2: Login via /auth/token using client credentials
+        login_res = test_client.post(
+            "/auth/token",
+            data={
+                "client_id": "frontend-app",
+                "client_secret": "app-secret-password-123",
+            },
+        )
+        assert login_res.status_code == 200
+        token = login_res.json()["access_token"]
+        assert token is not None
 
-        # 3. Authenticated request with valid JWT token succeeds
-        token = create_access_token(subject="test-client")
-        auth_res = test_client.get("/api/stats", headers={"Authorization": f"Bearer {token}"})
-        assert auth_res.status_code == 200
+        # Step 3: Call /api/upload with Bearer token in Authorization header
+        buf.seek(0)
+        auth_upload_res = test_client.post(
+            "/api/upload",
+            files={"file": ("pan_test.png", buf, "image/png")},
+            data={"doc_type": "auto"},
+            headers={"Authorization": f"Bearer {token}"},
+        )
+        assert auth_upload_res.status_code == 200
+        doc = auth_upload_res.json()
+        assert doc["id"] is not None
+        assert doc["filename"] == "pan_test.png"
+
+        # Step 4: Clean up document
+        del_res = test_client.delete(f"/api/documents/{doc['id']}", headers={"Authorization": f"Bearer {token}"})
+        assert del_res.status_code == 200
 
 
 def test_get_stats(client):

@@ -1,21 +1,28 @@
-import type { DocumentItem, DashboardStats, SupportedType, AuthConfig, EngineInfo } from '../types';
+import type { DocumentItem, DashboardStats, SupportedType, AuthConfig, EngineInfo, AuthStatusResponse } from '../types';
 
 const STORAGE_KEY_BASE_URL = 'ocr_app_base_url';
 const SESSION_KEY_TOKEN = 'ocr_session_jwt_token';
 
 export function getStoredBaseUrl(): string {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY_BASE_URL);
-    if (raw) return raw;
+    if (typeof localStorage !== 'undefined') {
+      const raw = localStorage.getItem(STORAGE_KEY_BASE_URL);
+      if (raw) return raw;
+    }
   } catch (e) {
     // Ignore storage read error
   }
-  return window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin;
+  if (typeof window !== 'undefined' && window.location) {
+    return window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin;
+  }
+  return 'http://localhost:8000';
 }
 
 export function saveStoredBaseUrl(url: string): void {
   try {
-    localStorage.setItem(STORAGE_KEY_BASE_URL, url);
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem(STORAGE_KEY_BASE_URL, url);
+    }
   } catch (e) {
     // Ignore storage write error
   }
@@ -25,12 +32,16 @@ export class ApiService {
   private baseUrl: string;
   private token: string | null = null;
   private apiKey: string | null = null;
+  private authEnabled: boolean = false;
+  private authMode: string = 'disabled';
   private unauthorizedListeners: Array<() => void> = [];
 
   constructor() {
     this.baseUrl = getStoredBaseUrl();
     try {
-      this.token = sessionStorage.getItem(SESSION_KEY_TOKEN);
+      if (typeof sessionStorage !== 'undefined') {
+        this.token = sessionStorage.getItem(SESSION_KEY_TOKEN);
+      }
     } catch (e) {
       this.token = null;
     }
@@ -48,10 +59,12 @@ export class ApiService {
   public setToken(token: string | null) {
     this.token = token;
     try {
-      if (token) {
-        sessionStorage.setItem(SESSION_KEY_TOKEN, token);
-      } else {
-        sessionStorage.removeItem(SESSION_KEY_TOKEN);
+      if (typeof sessionStorage !== 'undefined') {
+        if (token) {
+          sessionStorage.setItem(SESSION_KEY_TOKEN, token);
+        } else {
+          sessionStorage.removeItem(SESSION_KEY_TOKEN);
+        }
       }
     } catch (e) {
       // Ignore session storage error
@@ -70,8 +83,46 @@ export class ApiService {
     return this.apiKey;
   }
 
+  public async checkAuthStatus(): Promise<AuthStatusResponse> {
+    try {
+      const res = await fetch(this.getUrl('/api/auth-status'));
+      if (res.ok) {
+        const data: AuthStatusResponse = await res.json();
+        this.authEnabled = Boolean(data.auth_enabled);
+        this.authMode = data.auth_mode || 'disabled';
+        return data;
+      }
+    } catch (e) {
+      console.warn('Failed to fetch /api/auth-status, checking /health:', e);
+    }
+
+    // Fallback: check /health
+    try {
+      const health = await this.checkHealth();
+      this.authEnabled = Boolean(health.auth_enabled);
+      this.authMode = health.auth_mode || 'disabled';
+      return { auth_enabled: this.authEnabled, auth_mode: this.authMode };
+    } catch {
+      this.authEnabled = false;
+      this.authMode = 'disabled';
+      return { auth_enabled: false, auth_mode: 'disabled' };
+    }
+  }
+
+  public isAuthEnabled(): boolean {
+    return this.authEnabled;
+  }
+
+  public setAuthEnabled(enabled: boolean, mode: string = 'jwt') {
+    this.authEnabled = enabled;
+    this.authMode = mode;
+  }
+
   public isAuthenticated(): boolean {
-    return true;
+    if (!this.authEnabled) {
+      return true;
+    }
+    return Boolean(this.token || this.apiKey);
   }
 
   public onUnauthorized(listener: () => void): () => void {
@@ -112,7 +163,14 @@ export class ApiService {
     if (!isFormData) {
       headers['Content-Type'] = 'application/json';
     }
-    // Authentication disabled by default: requests sent without auth headers
+    // Only attach auth headers if backend reports auth is enabled and a credential exists
+    if (this.authEnabled) {
+      if (this.token) {
+        headers['Authorization'] = `Bearer ${this.token}`;
+      } else if (this.apiKey) {
+        headers['X-API-Key'] = this.apiKey;
+      }
+    }
     return headers;
   }
 
@@ -130,7 +188,7 @@ export class ApiService {
     return res;
   }
 
-  public async checkHealth(): Promise<{ status: string; version: string }> {
+  public async checkHealth(): Promise<{ status: string; version: string; auth_enabled?: boolean; auth_mode?: string }> {
     const res = await fetch(this.getUrl('/health'));
     if (!res.ok) {
       throw new Error(`Server returned HTTP ${res.status}`);
@@ -249,6 +307,14 @@ export class ApiService {
       const xhr = new XMLHttpRequest();
       xhr.open('POST', this.getUrl('/api/upload'));
 
+      if (this.authEnabled) {
+        if (this.token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+        } else if (this.apiKey) {
+          xhr.setRequestHeader('X-API-Key', this.apiKey);
+        }
+      }
+
       xhr.upload.onprogress = (evt) => {
         if (evt.lengthComputable && onProgress) {
           const pct = Math.round((evt.loaded / evt.total) * 60);
@@ -292,11 +358,22 @@ export class ApiService {
   public getFileUrl(docId: string, download = false): string {
     const params = new URLSearchParams();
     if (download) params.set('download', 'true');
+    if (this.authEnabled) {
+      if (this.token) params.set('token', this.token);
+      else if (this.apiKey) params.set('api_key', this.apiKey);
+    }
     const qs = params.toString();
     return this.getUrl(`/api/documents/${docId}/file${qs ? '?' + qs : ''}`);
   }
 
   public getPreviewUrl(docId: string): string {
+    if (this.authEnabled) {
+      const params = new URLSearchParams();
+      if (this.token) params.set('token', this.token);
+      else if (this.apiKey) params.set('api_key', this.apiKey);
+      const qs = params.toString();
+      return this.getUrl(`/api/documents/${docId}/preview${qs ? '?' + qs : ''}`);
+    }
     return this.getUrl(`/api/documents/${docId}/preview`);
   }
 }

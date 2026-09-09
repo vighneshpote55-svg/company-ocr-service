@@ -21,6 +21,7 @@ import { ExtractedTextViewer } from './components/ExtractedTextViewer';
 import { JsonResultViewer } from './components/JsonResultViewer';
 import { DocumentsTable } from './components/DocumentsTable';
 import { SettingsModal } from './components/SettingsModal';
+import { LoginView } from './components/LoginView';
 import { Toast } from './components/Toast';
 import type { ToastMessage } from './components/Toast';
 
@@ -41,6 +42,8 @@ export const App: React.FC = () => {
     failed: 0,
   });
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
+  const [authEnabled, setAuthEnabled] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(api.isAuthenticated());
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
@@ -61,19 +64,26 @@ export const App: React.FC = () => {
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      // 1. Public endpoints
+      // 1. Check health & dynamic backend auth status
       await api.checkHealth();
       setIsBackendConnected(true);
 
-      const [typesData, engineData] = await Promise.all([
+      const [authStatus, typesData, engineData] = await Promise.all([
+        api.checkAuthStatus().catch(() => ({ auth_enabled: false, auth_mode: 'disabled' })),
         api.getSupportedTypes().catch(() => []),
         api.getEngineInfo().catch(() => null),
       ]);
+
+      const isEnabled = Boolean(authStatus.auth_enabled);
+      setAuthEnabled(isEnabled);
+      const authed = api.isAuthenticated();
+      setIsAuthenticated(authed);
+
       setSupportedTypes(typesData);
       if (engineData) setEngineInfo(engineData);
 
-      // Only fetch protected data if authenticated
-      if (!api.isAuthenticated()) {
+      // Only fetch protected data if not gated by enabled auth
+      if (isEnabled && !authed) {
         return;
       }
 
@@ -100,6 +110,13 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
+    const unsubscribeAuth = api.onUnauthorized(() => {
+      if (api.isAuthEnabled()) {
+        setIsAuthenticated(false);
+        addToast('Session expired or unauthorized. Please sign in again.', 'info');
+      }
+    });
+
     loadData();
 
     // Periodic health poll every 25 seconds
@@ -113,6 +130,7 @@ export const App: React.FC = () => {
     }, 25000);
 
     return () => {
+      unsubscribeAuth();
       clearInterval(interval);
     };
   }, [loadData]);
@@ -155,6 +173,21 @@ export const App: React.FC = () => {
     }
   };
 
+  // Only gate the dashboard if the backend actually reports auth is enabled AND user has no valid token
+  if (authEnabled && !isAuthenticated) {
+    return (
+      <>
+        <LoginView
+          onLoginSuccess={() => {
+            setIsAuthenticated(true);
+            loadData();
+          }}
+        />
+        <Toast toasts={toasts} onDismiss={removeToast} />
+      </>
+    );
+  }
+
   return (
     <div className="app-layout">
       <Sidebar
@@ -173,6 +206,15 @@ export const App: React.FC = () => {
           isBackendConnected={isBackendConnected}
           onOpenSettings={() => setIsSettingsOpen(true)}
           onRefresh={loadData}
+          onLogout={
+            authEnabled
+              ? () => {
+                  api.logout();
+                  setIsAuthenticated(false);
+                  addToast('Signed out successfully.', 'info');
+                }
+              : undefined
+          }
           isRefreshing={isRefreshing}
         />
 

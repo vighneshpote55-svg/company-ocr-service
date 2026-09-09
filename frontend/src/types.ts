@@ -78,3 +78,9 @@ export interface AuthConfig {
   clientId?: string;
   clientSecret?: string;
 }
+
+export interface AuthStatusResponse {
+  auth_enabled: boolean;
+  auth_mode: string;
+}
+

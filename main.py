@@ -68,6 +68,8 @@ from queue_manager import JobRecord, job_queue
 from security import (
     authenticate_request,
     create_access_token,
+    get_auth_mode,
+    is_auth_enabled,
     validate_security_configuration,
     verify_client_credentials,
 )
@@ -583,7 +585,7 @@ async def issue_token(
 @app.get("/health")
 @app.get("/api/health")
 async def health():
-    """Health check endpoint reporting operational status and active OCR engine."""
+    """Health check endpoint reporting operational status, active OCR engine, and auth state."""
     engine_info = get_ocr_engine_info()
     return {
         "status": "healthy",
@@ -592,6 +594,21 @@ async def health():
         "ocr_engine": engine_info["active_engine"],
         "ocr_backend": engine_info["active_engine"],
         "ocr_engine_status": engine_info["status"],
+        "auth_enabled": is_auth_enabled(),
+        "auth_mode": get_auth_mode(),
+    }
+
+
+@app.get("/auth-status")
+@app.get("/api/auth-status")
+async def auth_status_endpoint():
+    """
+    Public unauthenticated endpoint returning current authentication configuration.
+    Enables frontend client to dynamically adjust its authentication gating at runtime.
+    """
+    return {
+        "auth_enabled": is_auth_enabled(),
+        "auth_mode": get_auth_mode(),
     }
 
 
