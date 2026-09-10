@@ -31,13 +31,18 @@ from ocr_engine import (
 from extractors import (
     check_language_coverage,
     extract_aadhaar,
+    extract_bank_passbook,
     extract_document_fields,
     extract_document_fields_raw,
     extract_pan,
     extract_property_tax_receipt,
     extract_rent_agreement,
+    extract_salary_slip,
     extract_shop_establishment,
     extract_udyam,
+    extract_utility_bill,
+    mask_account_number,
+    mask_person_name,
     normalize_devanagari_numbers,
 )
 from verifier import detect_document_type
@@ -60,17 +65,22 @@ def test_doc_type_languages_configuration():
     assert get_languages_for_doc_type("property_tax_receipt") == ["en", "mr"]
     assert get_languages_for_doc_type("rent_agreement") == ["en", "mr"]
     assert get_languages_for_doc_type("aadhaar") == ["en", "hi"]
+    assert get_languages_for_doc_type("utility_bill") == ["en", "hi", "mr"]
+    assert get_languages_for_doc_type("salary_slip") == ["en", "hi", "mr"]
+    assert get_languages_for_doc_type("bank_passbook") == ["en", "hi", "mr"]
 
     # English-only documents
     assert get_languages_for_doc_type("pan") == ["en"]
     assert get_languages_for_doc_type("bank_statement") == ["en"]
-    assert get_languages_for_doc_type("salary_slip") == ["en"]
     assert get_languages_for_doc_type("gst_certificate") == ["en"]
     assert get_languages_for_doc_type(None) == ["en"]
     assert get_languages_for_doc_type("unknown_type") == ["en"]
 
     # OCREngine staticmethod parity
     assert OCREngine.get_languages_for_doc_type("shop_establishment") == ["en", "mr"]
+    assert OCREngine.get_languages_for_doc_type("salary_slip") == ["en", "hi", "mr"]
+    assert OCREngine.get_languages_for_doc_type("bank_passbook") == ["en", "hi", "mr"]
+    assert OCREngine.get_languages_for_doc_type("utility_bill") == ["en", "hi", "mr"]
 
 
 def test_devanagari_ocr_engine_initialization():
@@ -430,6 +440,18 @@ def test_devanagari_signatures_detect_document_type():
     rent_text = "भाडेकरार परवाना देणारा मासिक भाडे डिपॉझिट"
     assert detect_document_type(rent_text) == "rent_agreement"
 
+    # Utility Bill Devanagari signature
+    util_text = "महाराष्ट्र राज्य विद्युत वितरण कंपनी मर्यादित महावितरण वीज देयक ग्राहक क्रमांक देयक रक्कम अंतिम तारीख"
+    assert detect_document_type(util_text) == "utility_bill"
+
+    # Salary Slip Devanagari signature
+    salary_text = "महाराष्ट्र शासन वेतन पावती मिळकत कपात निव्वळ वेतन माहे ऑगस्ट 2024"
+    assert detect_document_type(salary_text) == "salary_slip"
+
+    # Bank Passbook Devanagari signature
+    passbook_text = "पुणे जिल्हा मध्यवर्ती सहकारी बँक मर्यादित बचत खाते पासबुक खातेदाराचे नाव खाते क्रमांक"
+    assert detect_document_type(passbook_text) == "bank_passbook"
+
 
 # ==============================================================================
 # 7. Udyam Major Activity & Devanagari Header Regression Tests
@@ -563,4 +585,333 @@ def test_engine_info_contains_sidebar_display_fields():
     assert "engine" in info
     assert "active_engine" in info
     assert info["status"] in ("ready", "unavailable")
+
+
+# ==============================================================================
+# 8. Utility Bill Devanagari & Guardrail Tests
+# ==============================================================================
+
+def test_extract_utility_bill_marathi():
+    """
+    Verify Marathi utility bill extraction (e.g. Mahavitaran / MSEDCL electricity bill)
+    with Marathi field labels: ग्राहक क्रमांक, देयक दिनांक, देय दिनांक, देयक रक्कम.
+    """
+    sample_text = """
+    महाराष्ट्र राज्य विद्युत वितरण कंपनी मर्यादित
+    महावितरण वीज देयक
+    ग्राहक क्रमांक : 177453132860
+    देयक दिनांक : 18/10/2024
+    देय दिनांक : 07/11/2024
+    देयक रक्कम : Rs. 1200.00
+    """
+    doc_res = _make_doc_res(sample_text)
+    fields, _ = extract_utility_bill(doc_res)
+
+    assert fields.get("utility_provider") == "Mahavitaran (MSEDCL)"
+    assert fields.get("consumer_number") == "177453132860"
+    assert fields.get("bill_date") == "18/10/2024"
+    assert fields.get("due_date") == "07/11/2024"
+    assert fields.get("bill_amount") == "1200.00"
+
+    # End-to-end extraction with language coverage
+    e2e_fields, _ = extract_document_fields("utility_bill", doc_res)
+    assert e2e_fields["utility_provider"] == "Mahavitaran (MSEDCL)"
+    assert e2e_fields["consumer_number"] == "177453132860"
+    assert e2e_fields["bill_amount"] == "1200.00"
+    assert "devanagari" in e2e_fields["detected_languages"]
+    assert e2e_fields["partial_language_coverage"] is False
+    assert e2e_fields["language_review_required"] is False
+
+
+def test_utility_bill_devanagari_numbers_normalization():
+    """
+    Verify conversion of Devanagari numerals (०१२३४५६७८९) in consumer number,
+    dates, and amount.
+    """
+    dev_num_text = """
+    महावितरण वीज देयक
+    ग्राहक क्रमांक : १७७४५३१३२८६०
+    देयक दिनांक : १८-१०-२०२४
+    देय दिनांक : ०७-११-२०२४
+    देयक रक्कम : रु. १,२००.५०
+    """
+    doc_res = _make_doc_res(dev_num_text)
+    fields, _ = extract_utility_bill(doc_res)
+
+    assert fields.get("consumer_number") == "177453132860"
+    assert fields.get("bill_date") == "18/10/2024"
+    assert fields.get("due_date") == "07/11/2024"
+    assert fields.get("bill_amount") == "1200.50"
+
+
+def test_utility_bill_language_coverage_guardrail_true_positive():
+    """
+    True-positive test case for utility_bill:
+    When a utility bill contains significant Devanagari content (>= 10 characters),
+    but core fields (consumer_number and/or bill_amount) fail to extract,
+    partial_language_coverage and language_review_required must be set to True.
+    """
+    incomplete_bill_text = """
+    महाराष्ट्र राज्य विद्युत वितरण कंपनी मर्यादित
+    विद्युत नियम व शर्ती संबंधी जाहीर सूचना
+    सर्व ग्राहकांनी सौर ऊर्जा प्रकल्पाचा लाभ घ्यावा.
+    अधिक माहितीसाठी अधिकृत संकेतस्थळास भेट द्या.
+    """
+    doc_res = _make_doc_res(incomplete_bill_text)
+    fields, _ = extract_document_fields("utility_bill", doc_res)
+
+    assert "devanagari" in fields["detected_languages"]
+    assert fields["partial_language_coverage"] is True
+    assert fields["language_review_required"] is True
+    assert "Manual review recommended" in fields["language_coverage_notes"]
+    assert "consumer_number" in fields["language_coverage_notes"]
+    assert "bill_amount" in fields["language_coverage_notes"]
+
+
+def test_utility_bill_language_coverage_guardrail_true_negative():
+    """
+    True-negative test case for utility_bill:
+    When a utility bill has significant Devanagari content (>= 10 characters),
+    and all mandatory core fields (consumer_number and bill_amount) extract cleanly,
+    the guardrail must stay False.
+    """
+    successful_bill_text = """
+    महावितरण वीज देयक
+    ग्राहक क्रमांक: 177453132860
+    देयक रक्कम: Rs. 1200.00
+    अंतिम तारीख: 07-11-2024
+    """
+    doc_res = _make_doc_res(successful_bill_text)
+    fields, _ = extract_document_fields("utility_bill", doc_res)
+
+    assert fields.get("consumer_number") == "177453132860"
+    assert fields.get("bill_amount") == "1200.00"
+    assert "devanagari" in fields["detected_languages"]
+    assert fields["partial_language_coverage"] is False
+    assert fields["language_review_required"] is False
+    assert "all core fields extracted successfully" in fields["language_coverage_notes"]
+
+
+# ==============================================================================
+# 9. Salary Slip & Bank Passbook Devanagari Tests
+# ==============================================================================
+
+def test_extract_salary_slip_marathi():
+    """
+    Verify Marathi salary slip extraction (Zilla Parishad / State Government)
+    with field labels: कार्यालयाचे नाव / संस्था, कर्मचाऱ्याचे नाव, निव्वळ वेतन, माहे.
+    Verify strict PII masking on employee name.
+    """
+    sample_text = """
+    महाराष्ट्र शासन
+    जिल्हा परिषद पुणे
+    वेतन पावती
+    कर्मचाऱ्याचे नाव: रमेश पवार
+    माहे: ऑगस्ट २०२४
+    निव्वळ वेतन: रु. ४५,०००.००
+    """
+    doc_res = _make_doc_res(sample_text)
+    fields, _ = extract_salary_slip(doc_res)
+
+    assert fields.get("employer_name") == "महाराष्ट्र शासन"
+    assert fields.get("employee_name_masked") == "रमेश प***"
+    assert fields.get("net_pay") == "45000.00"
+    assert fields.get("pay_period") == "ऑगस्ट 2024"
+
+    # End-to-end extraction through extract_document_fields (with PII minimisation)
+    e2e_fields, _ = extract_document_fields("salary_slip", doc_res)
+    assert e2e_fields["employer_name"] == "महाराष्ट्र शासन"
+    assert e2e_fields["employee_name_masked"] == "रमेश प***"
+    assert e2e_fields["net_pay"] == "45000.00"
+    assert e2e_fields["pay_period"] == "ऑगस्ट 2024"
+    assert "raw_employee_name" not in e2e_fields
+    assert "employee_name" not in e2e_fields
+    assert "devanagari" in e2e_fields["detected_languages"]
+    assert e2e_fields["partial_language_coverage"] is False
+    assert e2e_fields["language_review_required"] is False
+    assert "all core fields extracted successfully" in e2e_fields["language_coverage_notes"]
+
+
+def test_salary_slip_name_masking_parity():
+    """
+    Verify that Marathi employee names are masked with the exact same
+    rules as English names (first token preserved, second token initial + asterisks).
+    """
+    assert mask_person_name("रमेश पवार") == "रमेश प***"
+    assert mask_person_name("सुरेश विष्णू सावंत") == "सुरेश स****"
+    assert mask_person_name("JOHN DOE") == "JOHN D**"
+
+    # Ensure raw name is stripped in e2e
+    sample_text = """
+    कार्यालयाचे नाव: महाराष्ट्र राज्य परिवहन महामंडळ
+    कर्मचाऱ्याचे नाव: सुरेश विष्णू सावंत
+    निव्वळ वेतन: रु. ३२,५००.००
+    वेतन महिना: ०८/२०२४
+    """
+    doc_res = _make_doc_res(sample_text)
+    e2e_fields, _ = extract_document_fields("salary_slip", doc_res)
+    assert e2e_fields["employee_name_masked"] == "सुरेश स****"
+    assert "raw_employee_name" not in e2e_fields
+    assert "सुरेश विष्णू सावंत" not in str(e2e_fields)
+
+
+def test_salary_slip_language_coverage_guardrail_true_positive():
+    """
+    True-positive test case for salary_slip:
+    When a salary slip contains significant Devanagari text (>= 10 chars),
+    but core fields (employer_name and/or net_pay) fail to extract,
+    partial_language_coverage and language_review_required must be set to True.
+    """
+    incomplete_salary_text = """
+    महाराष्ट्र शासन परिपत्रक
+    सर्व कर्मचाऱ्यांना सूचित करण्यात येते की नवीन नियमावली लागू करण्यात येत आहे.
+    अधिक माहितीसाठी संबंधित विभागाशी संपर्क साधावा.
+    """
+    doc_res = _make_doc_res(incomplete_salary_text)
+    fields, _ = extract_document_fields("salary_slip", doc_res)
+
+    assert "devanagari" in fields["detected_languages"]
+    assert fields["partial_language_coverage"] is True
+    assert fields["language_review_required"] is True
+    assert "Manual review recommended" in fields["language_coverage_notes"]
+    assert "net_pay" in fields["language_coverage_notes"]
+
+
+def test_salary_slip_language_coverage_guardrail_true_negative():
+    """
+    True-negative test case for salary_slip:
+    When a salary slip contains significant Devanagari text (>= 10 chars),
+    and all core fields (employer_name and net_pay) extract cleanly,
+    the guardrail must stay False.
+    """
+    sample_text = """
+    कार्यालयाचे नाव: पुणे महानगरपालिका
+    कर्मचारी नाव: अनिल कांबळे
+    निव्वळ वेतन: रु. ५०,०००
+    माहे: जुलै २०२४
+    """
+    doc_res = _make_doc_res(sample_text)
+    fields, _ = extract_document_fields("salary_slip", doc_res)
+
+    assert fields.get("employer_name") == "पुणे महानगरपालिका"
+    assert fields.get("net_pay") == "50000"
+    assert "devanagari" in fields["detected_languages"]
+    assert fields["partial_language_coverage"] is False
+    assert fields["language_review_required"] is False
+    assert "all core fields extracted successfully" in fields["language_coverage_notes"]
+
+
+def test_extract_bank_passbook_marathi():
+    """
+    Verify Marathi bank passbook extraction (e.g. Urban Co-operative Bank, RRB)
+    with field labels: बँकेचे नाव, बचत खाते पासबुक, शाखा, खाते क्रमांक, खातेदाराचे नाव, आयएफएससी.
+    Verify strict PII masking on account number and holder name.
+    """
+    sample_text = """
+    पुणे जिल्हा मध्यवर्ती सहकारी बँक मर्यादित
+    बचत खाते पासबुक
+    शाखा: शिवाजीनगर
+    खाते क्रमांक: १२३४५६७८९०१२
+    खातेदाराचे नाव: रमेश पवार
+    आयएफएससी: PDCB0000123
+    """
+    doc_res = _make_doc_res(sample_text)
+    fields, _ = extract_bank_passbook(doc_res)
+
+    assert fields.get("bank_name") == "पुणे जिल्हा मध्यवर्ती सहकारी बँक मर्यादित"
+    assert fields.get("branch") == "शिवाजीनगर"
+    assert fields.get("account_number_masked") == "XXXXXXXX9012"
+    assert fields.get("account_holder_name_masked") == "रमेश प***"
+    assert fields.get("ifsc") == "PDCB0000123"
+
+    # End-to-end extraction through extract_document_fields (with PII minimisation)
+    e2e_fields, _ = extract_document_fields("bank_passbook", doc_res)
+    assert e2e_fields["bank_name"] == "पुणे जिल्हा मध्यवर्ती सहकारी बँक मर्यादित"
+    assert e2e_fields["branch"] == "शिवाजीनगर"
+    assert e2e_fields["account_number_masked"] == "XXXXXXXX9012"
+    assert e2e_fields["account_holder_name_masked"] == "रमेश प***"
+    assert e2e_fields["ifsc"] == "PDCB0000123"
+    assert "raw_account_number" not in e2e_fields
+    assert "raw_account_holder_name" not in e2e_fields
+    assert "123456789012" not in str(e2e_fields)
+    assert "devanagari" in e2e_fields["detected_languages"]
+    assert e2e_fields["partial_language_coverage"] is False
+    assert e2e_fields["language_review_required"] is False
+    assert "all core fields extracted successfully" in e2e_fields["language_coverage_notes"]
+
+
+def test_bank_passbook_account_and_name_masking_parity():
+    """
+    Verify masking parity for Devanagari account number and account holder name.
+    Raw account number and name must NEVER leak into e2e extraction result.
+    """
+    assert mask_account_number("123456789012") == "XXXXXXXX9012"
+    assert mask_account_number(normalize_devanagari_numbers("९८७६५४३२१०९८")) == "XXXXXXXX1098"
+
+    sample_text = """
+    बँकेचे नाव: महाराष्ट्र ग्रामीण बँक
+    शाखा: औरंगाबाद
+    खाते क्रमांक: ९८७६५४३२१०९८
+    खातेदाराचे नाव: सुनील महादेव शिंदे
+    IFSC: MAHG0004567
+    """
+    doc_res = _make_doc_res(sample_text)
+    e2e_fields, _ = extract_document_fields("bank_passbook", doc_res)
+
+    assert e2e_fields["account_number_masked"] == "XXXXXXXX1098"
+    assert e2e_fields["account_holder_name_masked"] == "सुनील श****"
+    assert "raw_account_number" not in e2e_fields
+    assert "raw_account_holder_name" not in e2e_fields
+    assert "987654321098" not in str(e2e_fields)
+    assert "सुनील महादेव शिंदे" not in str(e2e_fields)
+
+
+def test_bank_passbook_language_coverage_guardrail_true_positive():
+    """
+    True-positive test case for bank_passbook:
+    When a bank passbook contains significant Devanagari text (>= 10 chars),
+    but core fields (account_number_masked and/or bank_name) fail to extract,
+    partial_language_coverage and language_review_required must be set to True.
+    """
+    incomplete_passbook_text = """
+    महाराष्ट्र राज्य सहकारी बँक नियमावली
+    ग्राहकांसाठी महत्त्वाची सूचना: केवायसी कागदपत्रे वेळेवर सादर करावीत.
+    शाखा कार्यालय वेळ सकाळी १० ते दुपारी ४ पर्यंत.
+    """
+    doc_res = _make_doc_res(incomplete_passbook_text)
+    fields, _ = extract_document_fields("bank_passbook", doc_res)
+
+    assert "devanagari" in fields["detected_languages"]
+    assert fields["partial_language_coverage"] is True
+    assert fields["language_review_required"] is True
+    assert "Manual review recommended" in fields["language_coverage_notes"]
+    assert "account_number_masked" in fields["language_coverage_notes"]
+
+
+def test_bank_passbook_language_coverage_guardrail_true_negative():
+    """
+    True-negative test case for bank_passbook:
+    When a bank passbook contains significant Devanagari text (>= 10 chars),
+    and all core fields (account_number_masked and bank_name) extract cleanly,
+    the guardrail must stay False.
+    """
+    sample_text = """
+    ठाणे जनता सहकारी बँक
+    बचत खाते पासबुक
+    शाखा: ठाणे पश्चिम
+    खाते क्रमांक: 554433221100
+    खातेदाराचे नाव: अमित जोशी
+    आयएफएससी: TJSB0000002
+    """
+    doc_res = _make_doc_res(sample_text)
+    fields, _ = extract_document_fields("bank_passbook", doc_res)
+
+    assert fields.get("bank_name") == "ठाणे जनता सहकारी बँक"
+    assert fields.get("account_number_masked") == "XXXXXXXX1100"
+    assert "devanagari" in fields["detected_languages"]
+    assert fields["partial_language_coverage"] is False
+    assert fields["language_review_required"] is False
+    assert "all core fields extracted successfully" in fields["language_coverage_notes"]
+
+
 

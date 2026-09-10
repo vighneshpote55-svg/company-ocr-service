@@ -1085,4 +1085,40 @@ def test_mask_address_quality_and_preservation():
     assert mask_address("") is None
 
 
+def test_marathi_salary_slip_and_passbook_bleed_regression():
+    """
+    Field-boundary bleed regression tests for Marathi salary_slip and bank_passbook:
+    Verify that subsequent field headers in Marathi do NOT bleed into extracted values.
+    """
+    # 1. Salary slip bleed: Employer Name immediately followed by employee name header
+    salary_bleed_text = """
+    कार्यालयाचे नाव: जिल्हा परिषद प्राथमिक शिक्षण विभाग पुणे
+    कर्मचाऱ्याचे नाव: रमेश विष्णू पवार
+    निव्वळ वेतन: रु. ४५,०००.००
+    माहे: ऑगस्ट २०२४
+    """
+    s_fields, _ = extract_document_fields("salary_slip", create_mock_doc(salary_bleed_text))
+    assert s_fields["employer_name"] == "जिल्हा परिषद प्राथमिक शिक्षण विभाग पुणे"
+    assert "कर्मचाऱ्याचे नाव" not in s_fields["employer_name"]
+    assert s_fields["employee_name_masked"] == "रमेश प***"
+    assert "निव्वळ वेतन" not in s_fields["employee_name_masked"]
+
+    # 2. Bank passbook bleed: Bank Name / Holder Name followed immediately by next header
+    passbook_bleed_text = """
+    बँकेचे नाव: पुणे जिल्हा मध्यवर्ती सहकारी बँक मर्यादित
+    शाखेचे नाव: शिवाजीनगर
+    खातेदाराचे नाव: रमेश विष्णू पवार
+    खाते क्रमांक: १२३४५६७८९०१२
+    IFSC: PDCB0000123
+    """
+    b_fields, _ = extract_document_fields("bank_passbook", create_mock_doc(passbook_bleed_text))
+    assert b_fields["bank_name"] == "पुणे जिल्हा मध्यवर्ती सहकारी बँक मर्यादित"
+    assert "शाखेचे नाव" not in b_fields["bank_name"]
+    assert b_fields["branch"] == "शिवाजीनगर"
+    assert "खातेदाराचे नाव" not in b_fields["branch"]
+    assert b_fields["account_holder_name_masked"] == "रमेश प***"
+    assert "खाते क्रमांक" not in b_fields["account_holder_name_masked"]
+
+
+
 

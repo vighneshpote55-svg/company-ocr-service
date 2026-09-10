@@ -253,6 +253,9 @@ DOC_TYPE_LANGUAGES: Dict[str, List[str]] = {
     "property_tax_receipt": ["en", "mr"],
     "rent_agreement": ["en", "mr"],
     "aadhaar": ["en", "hi"],
+    "utility_bill": ["en", "hi", "mr"],
+    "salary_slip": ["en", "hi", "mr"],
+    "bank_passbook": ["en", "hi", "mr"],
 }
 
 
@@ -405,8 +408,16 @@ def merge_ocr_lines(lines_en: List[OCRLine], lines_dev: List[OCRLine]) -> List[O
         if best_dev_idx is not None:
             matched_dev_indices.add(best_dev_idx)
             line_dev = lines_dev[best_dev_idx]
-            dev_has_script = bool(has_devanagari_chars.search(line_dev.text))
-            en_has_script = bool(has_devanagari_chars.search(line_en.text))
+
+            # Require genuine Devanagari script (at least 2 characters, or 1 character with no Latin letters)
+            # to prevent noisy ASCII lines with a single stray Devanagari glyph from overriding clear English OCR.
+            dev_chars_dev = len(has_devanagari_chars.findall(line_dev.text))
+            lat_chars_dev = len(re.findall(r"[A-Za-z]", line_dev.text))
+            dev_has_script = (dev_chars_dev >= 2) or (dev_chars_dev >= 1 and lat_chars_dev == 0)
+
+            dev_chars_en = len(has_devanagari_chars.findall(line_en.text))
+            lat_chars_en = len(re.findall(r"[A-Za-z]", line_en.text))
+            en_has_script = (dev_chars_en >= 2) or (dev_chars_en >= 1 and lat_chars_en == 0)
 
             if dev_has_script and not en_has_script:
                 # Devanagari model recognized native script; English model produced ASCII substitute

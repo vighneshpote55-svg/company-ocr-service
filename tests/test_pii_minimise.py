@@ -914,5 +914,131 @@ def test_persisted_records_never_contain_raw_pii_or_unmasked_values(monkeypatch)
     assert "raw_fields" in buggy_record or any(k.startswith("raw_") for k in buggy_record.keys())
 
 
+def test_marathi_salary_slip_and_passbook_persisted_records_never_contain_raw_pii(monkeypatch):
+    """
+    End-to-end regression test for Marathi salary_slip and bank_passbook:
+    Verify that when documents with regional Devanagari labels and sensitive values
+    (employee name, bank account number, account holder name) are uploaded:
+    1. /api/upload response fields are strictly minimised.
+    2. Persisted document in document_store has no raw_* keys.
+    3. On-disk JSON file has no raw_* keys or unmasked PII.
+    4. document_store.list_documents() index entries have no raw_* keys.
+    5. In-memory audit logs never capture unmasked employee names or account numbers.
+    """
+    import main
+    from starlette.testclient import TestClient
+    from security import create_access_token
+
+    client = TestClient(main.app)
+    auth_header = {"Authorization": f"Bearer {create_access_token(subject='test-client')}"}
+
+    test_cases = [
+        {
+            "doc_type": "salary_slip",
+            "text": """
+            महाराष्ट्र शासन
+            जिल्हा परिषद पुणे
+            वेतन पावती
+            कार्यालयाचे नाव: जिल्हा परिषद प्राथमिक शिक्षण विभाग पुणे
+            कर्मचाऱ्याचे नाव: रमेश विष्णू पवार
+            माहे: ऑगस्ट २०२४
+            निव्वळ वेतन: रु. ४५,०००.००
+            """,
+            "expected_data": json.dumps({"name": "रमेश विष्णू पवार"}),
+            "sensitive_unmasked": ["रमेश विष्णू पवार"],
+            "required_masked_keys": ["employee_name_masked"],
+        },
+        {
+            "doc_type": "bank_passbook",
+            "text": """
+            पुणे जिल्हा मध्यवर्ती सहकारी बँक मर्यादित
+            बचत खाते पासबुक
+            शाखा: शिवाजीनगर
+            खाते क्रमांक: ९८७६५४३२१०९८
+            खातेदाराचे नाव: सुनील महादेव शिंदे
+            आयएफएससी: PDCB0000123
+            """,
+            "expected_data": json.dumps({"name": "सुनील महादेव शिंदे"}),
+            "sensitive_unmasked": ["९८७६५४३२१०९८", "987654321098", "सुनील महादेव शिंदे"],
+            "required_masked_keys": ["account_number_masked", "account_holder_name_masked"],
+        },
+    ]
+
+    for tc in test_cases:
+        doc_type = tc["doc_type"]
+        sample_text = tc["text"]
+
+        lines = [OCRLine(text=l.strip(), confidence=0.98) for l in sample_text.strip().splitlines() if l.strip()]
+        mock_doc = OCRDocumentResult(
+            pages=[OCRPageResult(page_num=1, full_text=sample_text, lines=lines, average_confidence=0.98)],
+            full_text=sample_text,
+            average_confidence=0.98,
+        )
+        monkeypatch.setattr(main.ocr_engine, "process_file", lambda *a, **kw: mock_doc)
+        monkeypatch.setattr(main.ocr_engine, "process_image", lambda *a, **kw: mock_doc)
+
+        dummy_img = Image.new("RGB", (300, 100), color=(255, 255, 255))
+        img_buf = io.BytesIO()
+        dummy_img.save(img_buf, format="PNG")
+        file_bytes = img_buf.getvalue()
+
+        clear_audit_log_buffer()
+
+        resp = client.post(
+            "/api/upload",
+            files={"file": (f"test_marathi_{doc_type}.png", file_bytes, "image/png")},
+            data={"doc_type": doc_type, "expected_data": tc["expected_data"]},
+            headers=auth_header,
+        )
+        assert resp.status_code == 200, f"Upload failed for Marathi {doc_type}: {resp.text}"
+        upload_resp = resp.json()
+        doc_id = upload_resp["id"]
+
+        try:
+            persisted = document_store.get_document(doc_id)
+            assert persisted is not None
+
+            disk_result_path = os.path.join(document_store.RESULTS_DIR, f"{doc_id}.json")
+            assert os.path.exists(disk_result_path)
+            with open(disk_result_path, "r", encoding="utf-8") as f:
+                disk_record = json.load(f)
+
+            index_records = document_store.list_documents()
+            matched_index = next((item for item in index_records if item.get("id") == doc_id), None)
+            assert matched_index is not None
+
+            records_to_check = [
+                ("upload_response", upload_resp),
+                ("get_document", persisted),
+                ("disk_file", disk_record),
+                ("index_record", matched_index),
+            ]
+
+            for rec_name, record in records_to_check:
+                assert "raw_fields" not in record, f"raw_fields found in {rec_name} for {doc_type}"
+                for k in record.keys():
+                    assert not k.startswith("raw_"), f"root key '{k}' starts with raw_ in {rec_name}"
+
+                ext_fields = record.get("extracted_fields") or record.get("fields", {})
+                for k in ext_fields.keys():
+                    assert not k.startswith("raw_"), f"key '{k}' starts with raw_ in {rec_name}"
+
+                for sensitive_val in tc["sensitive_unmasked"]:
+                    assert sensitive_val not in str(ext_fields), f"Sensitive value '{sensitive_val}' leaked into {rec_name}"
+
+                for masked_key in tc["required_masked_keys"]:
+                    assert masked_key in ext_fields, f"Masked key '{masked_key}' missing from {rec_name}"
+
+            # Audit logs verification: no raw PII in audit buffer
+            audit_entries = get_audit_log_buffer()
+            for entry in audit_entries:
+                for sensitive_val in tc["sensitive_unmasked"]:
+                    assert sensitive_val not in str(entry), f"PII leaked into audit log: {sensitive_val}"
+
+        finally:
+            client.delete(f"/api/documents/{doc_id}", headers=auth_header)
+
+
+
 
 

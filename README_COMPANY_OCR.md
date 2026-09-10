@@ -103,14 +103,17 @@ Many regional Indian business and property documents are issued bilingual or ent
 | **Property Tax Receipt** | `["en", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | Municipal receipts (BMC / PMC): `मालमत्ता क्रमांक` (Property ID), `करदात्याचे नाव` (Owner Name Masked), `भरलेली रक्कम` (Amount Paid), `आकारणी वर्ष` (Assessment Year). |
 | **Rent Agreement** | `["en", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | Leave & License: `परवाना देणारा` (Lessor Masked), `परवाना घेणारा` (Lessee Masked), `मासिक भाडे` (Monthly Rent). |
 | **Aadhaar Card** | `["en", "hi"]` | **Yes** (`devanagari_PP-OCRv4`) | Bilingual UIDAI cards: Devanagari name, `जन्मतारीख` (DOB), `पुरुष/स्त्री` mapped to `Male/Female`. |
-| **All Other 16 Types** | `["en"]` | **No** (English only) | Retains pure English recognition to prevent latency degradation and avoid out-of-vocabulary misidentifications. |
+| **Utility Bill** | `["en", "hi", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | Electricity/Water/Gas (MSEDCL/Mahavitaran, Tata Power, BMC): `ग्राहक क्रमांक` (Consumer No), `देयक रक्कम` (Bill Amount), `देय दिनांक` / `अंतिम तारीख` (Due Date), `देयक दिनांक` (Bill Date). |
+| **Salary Slip** | `["en", "hi", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | State government bodies (Zilla Parishad, Maharashtra Police, MSRTC, municipal schools): `कार्यालयाचे नाव` (Employer/Office Name), `कर्मचाऱ्याचे नाव` (Employee Name Masked), `निव्वळ वेतन` (Net Pay), `माहे` / `वेतन महिना` (Pay Period). Strict PII masking enforced. |
+| **Bank Passbook** | `["en", "hi", "mr"]` | **Yes** (`devanagari_PP-OCRv4`) | Urban Co-operative Banks and Regional Rural Banks: `बँकेचे नाव` (Bank Name), `शाखा` (Branch), `खाते क्रमांक` (Account Number Masked), `खातेदाराचे नाव` (Account Holder Name Masked), `आयएफएससी` (IFSC). Strict PII masking enforced. |
+| **All Other 13 Types** | `["en"]` | **No** (English only) | Retains pure English recognition to prevent latency degradation and avoid out-of-vocabulary misidentifications. |
 
 #### 2. Dual-Pass Neural Recognition & Intelligent Line Merging
 - **Unified Devanagari Model**: Both Marathi and Hindi use the Devanagari script. In PaddleOCR/RapidOCR, character recognition utilizes the unified `devanagari_PP-OCRv4_rec_infer.onnx` neural recognizer with `devanagari_dict.txt`.
 - **Script Recognition vs. Language Semantics**: The neural model accurately reads individual Devanagari glyphs across both Hindi and Marathi. However, vocabulary and field labels differ between the languages. The field extractors use verified language-specific regex patterns and do not assume word patterns transfer automatically.
 - **Bounding Box IoU Merging**:
   - Because English OCR engines often interpret Devanagari script as random ASCII garbage (e.g. `HRI 9` for `महाराष्ट्र शासन`), the merge algorithm computes spatial IoU overlap across lines.
-  - When lines overlap and the Devanagari pass contains characters in the `\u0900-\u097F` block with sufficient confidence (>= 0.50), the Devanagari line is prioritized over the English ASCII garble.
+  - When lines overlap and the Devanagari pass contains genuine Devanagari script (at least 2 Devanagari characters or 1 character without Latin letters) with sufficient confidence (>= 0.50), the Devanagari line is prioritized over the English ASCII garble. Stray misrecognized Devanagari glyphs in noisy ASCII passes are safely rejected.
   - Non-overlapping lines from both passes are preserved and sorted top-to-bottom.
 
 #### 3. Honest Language Coverage & Manual Review Guardrail
@@ -125,19 +128,22 @@ The service employs an explicit guardrail to prevent silent hallucinations on un
      - **Property Tax Receipt**: `property_id` AND `tax_amount_paid` (both mandatory)
      - **Rent Agreement**: `monthly_rent` AND `lessor_name_masked` (both mandatory)
      - **Aadhaar Card**: `aadhaar_number` AND `name` (both mandatory)
+     - **Utility Bill**: `consumer_number` AND `bill_amount` (both mandatory)
+     - **Salary Slip**: `employer_name` AND `net_pay` (both mandatory)
+     - **Bank Passbook**: `account_number_masked` AND `bank_name` (both mandatory)
   When triggered, the service refuses to guess and outputs:
   ```json
   {
     "detected_languages": ["en", "devanagari"],
     "partial_language_coverage": true,
     "language_review_required": true,
-    "language_coverage_notes": "Document contains Devanagari script text (124 characters), but core field(s) could not be extracted: enterprise_name, udyam_registration_number. Manual review recommended."
+    "language_coverage_notes": "Document contains Devanagari script text (124 characters), but core field(s) could not be extracted: consumer_number, bill_amount. Manual review recommended."
   }
   ```
 
 - **When the Guardrail Stays `false` (True-Negative)**:
   - **Devanagari Present + All Core Fields Extracted**:
-    If $\ge 10$ Devanagari characters are present (e.g. Government of India / MSME ministry banner on an Udyam certificate), but all required core fields are successfully parsed:
+    If $\ge 10$ Devanagari characters are present (e.g. Mahavitaran bill with Marathi tables, Udyam Ministry banner, or Marathi ZP payslip), but all required core fields are successfully parsed:
     ```json
     {
       "detected_languages": ["en", "devanagari"],
@@ -156,6 +162,25 @@ The service employs an explicit guardrail to prevent silent hallucinations on un
     }
     ```
 - This dual-condition design ensures human reviewers are alerted only when regional layouts actually impede automated processing, rather than on every document with a bilingual header emblem.
+
+#### 4. Audit of Regional Language Exposure Across Remaining 13 Document Types
+Following the rollout of Devanagari support to `salary_slip` and `bank_passbook` (now 8 multilingual document types: `shop_establishment`, `udyam`, `property_tax_receipt`, `rent_agreement`, `aadhaar`, `utility_bill`, `salary_slip`, `bank_passbook`), an audit of the remaining 13 document types identifies their practical exposure to Devanagari/regional-language content in Indian commercial and identity workflows:
+
+| Priority / Risk Level | Document Types | Practical Regional Exposure & Context |
+| :--- | :--- | :--- |
+| **High Priority (High Likelihood)** | **`partnership_deed`** | Deeds executed on Maharashtra non-judicial stamp paper (`महाराष्ट्र मुद्रांक शुल्क`) are frequently drafted in Marathi or bilingual formats (`भागीदारी करारनामा`). |
+| | **`voter_id`** | ECI voter cards are issued bilingual with Devanagari script for name, father's name, and address (`मतदार ओळखपत्र`). |
+| | **`bank_statement`** | While scheduled commercial banks issue statements in English, Gramin and District Central Co-op Banks occasionally generate bilingual statements. |
+| **Medium Priority** | **`driving_licence`** | State Transport Department (RTO) smart cards / mParivahan PDFs often feature bilingual state headers and field titles. |
+| | **`cancelled_cheque`** | CTS-2010 cheques adhere to national clearing standards in English, though local cooperative banks may include Marathi bank titles or watermarks. |
+| | **`fssai`** | State food safety registrations occasionally carry bilingual department seals, though certificates are predominantly standardized in English. |
+| **Low Priority (Standardized English)** | **`pan`** | National NSDL/UTIITSL format. Central government Hindi emblem is present, but core alphanumeric PAN and names are Latin. |
+| | **`passport`** | Standard Republic of India passport; machine-readable zone (MRZ) and primary bio-data fields are standardized Latin. |
+| | **`gst_certificate`** | National GSTN portal generates standardized English certificates (`FORM GST REG-06`). |
+| | **`certificate_of_incorporation`** | MCA21 portal generates standardized English corporate certificates. |
+| | **`itr`** | Income Tax Department ITR-V acknowledgements are standardized English documents. |
+| | **`form_16`** | TRACES portal generates standardized English tax deduction certificates. |
+| | **`iec_certificate`** | DGFT portal generates standardized English Import Export Code certificates. |
 
 ---
 

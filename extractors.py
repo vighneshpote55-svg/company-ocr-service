@@ -135,6 +135,16 @@ RESIDUAL_LABEL_LINES = {
     "उद्यमाचा प्रकार", "मुख्य कार्यकलाप", "मालमत्ता क्रमांक", "मालमत्ता कर",
     "कर आकारणी", "भरलेली रक्कम", "पावती क्रमांक", "परवाना देणारा", "परवाना घेणारा",
     "भाडेकरार", "मासिक भाडे", "डिपॉझिट", "जन्मतारीख", "जन्म तारीख", "लिंग", "पत्ता", "आधार क्रमांक",
+    # Salary Slip labels (Marathi & Hindi)
+    "कार्यालयाचे नाव", "संस्थेचे नाव", "विभागाचे नाव", "कंपनीचे नाव", "नियोक्त्याचे नाव",
+    "कर्मचाऱ्याचे नाव", "कर्मचारी नाव", "कर्मचारी का नाम", "अधिकाऱ्याचे नाव", "सेवकाचे नाव",
+    "निव्वळ वेतन", "निव्वळ देय रक्कम", "निव्वळ देय", "हाती येणारे वेतन", "शुद्ध वेतन", "कुल शुद्ध देय",
+    "वेतन महिना", "माहे", "कालावधी",
+    # Bank Passbook labels (Marathi & Hindi)
+    "बँकेचे नाव", "बैंक का नाम", "शाखेचे नाव", "शाखा कोड", "शाखा",
+    "खाते क्रमांक", "खाते क्र", "खाते नं", "बचत खाते क्रमांक", "खाता संख्या", "खाता क्रमांक",
+    "खातेदाराचे नाव", "खातेदार नाव", "ग्राहकाचे नाव", "खाताधारक का नाम", "खाताधारी का नाम",
+    "पासबुक", "बचत खाते पासबुक",
 }
 
 
@@ -790,54 +800,79 @@ def extract_salary_slip(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dic
     - Applies strict PII allowlist:
       ALLOWLIST = {employer_name, employee_name_masked, net_pay, pay_period}
       NO full account numbers, NO residential addresses, NO full DOB!
+    - Supports bilingual / Devanagari salary slips (state government bodies, Zilla Parishad,
+      municipal corporations, police, MSRTC) with Marathi and Hindi field labels
+      and Devanagari numerals.
     """
     all_lines = [line for page in doc_res.pages for line in page.lines]
-    text = doc_res.full_text
+    text = normalize_devanagari_numbers(doc_res.full_text) or ""
     fields: Dict[str, Any] = {}
     confidences: Dict[str, float] = {}
 
     # Employer Name
     emp_match = re.search(
-        r"(?:Company(?:\s*Name)?|Employer(?:\s*Name)?)[\s:]+([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{2,60}?(?:LIMITED|PRIVATE\s+LIMITED|PVT\.?\s*LTD\.?|LTD\.?|CORP|INC|DEMO)?)\b(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Employee|Name|Emp\s*ID|Month|Net|Basic|HRA)\b))",
+        r"(?:Company(?:\s*Name)?|Employer(?:\s*Name)?|कार्यालयाचे\s*नाव|संस्थेचे\s*नाव|विभागाचे\s*नाव|कंपनीचे\s*नाव|नियोक्त्याचे\s*नाव)[\s:：]+([A-Za-z0-9\u0900-\u097F][A-Za-z0-9\u0900-\u097F \t,\.\-&]{2,80}?(?:LIMITED|PRIVATE\s+LIMITED|PVT\.?\s*LTD\.?|LTD\.?|CORP|INC|DEMO|मर्यादित)?)(?=[ \t]*(?:\r?\n|$|(?:Employee|Name|Emp\s*ID|Month|Net|Basic|HRA|कर्मचाऱ्याचे|कर्मचारी|माहे|निव्वळ)[\s:：]))",
         text,
         re.IGNORECASE,
     )
     if emp_match:
         cand = clean_field_value(emp_match.group(1), field_name="employer_name", doc_type="salary_slip")
-        if not re.search(r"^(?:LIMITED|PRIVATE|PVT|LTD)\b", cand, re.I):
+        if not re.search(r"^(?:LIMITED|PRIVATE|PVT|LTD|मर्यादित)\b", cand, re.I):
             fields["employer_name"] = cand
+            confidences["employer_name"] = find_line_confidence(cand, all_lines)
 
     if not fields.get("employer_name"):
         # Check first prominent header line (e.g. "DEMO COMPANY PRIVATE LIMITED - SALARY SLIP" or "DEMO COMPANY PVT LTD")
         header_match = re.search(
-            r"^[ \t]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{2,60}(?:LIMITED|PRIVATE\s+LIMITED|PVT\.?\s*LTD\.?|LTD\.?|CORPORATION|SERVICES|ENTERPRISES|TECHNOLOGIES|COMPANY))\b",
+            r"^[ \t]*([A-Za-z0-9\u0900-\u097F][A-Za-z0-9\u0900-\u097F \t,\.\-&]{2,80}(?:LIMITED|PRIVATE\s+LIMITED|PVT\.?\s*LTD\.?|LTD\.?|CORPORATION|SERVICES|ENTERPRISES|TECHNOLOGIES|COMPANY|महाराष्ट्र\s*शासन|जिल्हा\s*परिषद|महानगरपालिका|नगरपरिषद|महामंडळ|मर्यादित))",
             text,
             re.MULTILINE | re.IGNORECASE,
         )
         if header_match:
-            fields["employer_name"] = clean_field_value(header_match.group(1), field_name="employer_name", doc_type="salary_slip")
+            cand = clean_field_value(header_match.group(1), field_name="employer_name", doc_type="salary_slip")
+            fields["employer_name"] = cand
+            confidences["employer_name"] = find_line_confidence(cand, all_lines)
+
+    if not fields.get("employer_name"):
+        gov_match = re.search(
+            r"^[ \t]*((?:महाराष्ट्र\s*शासन|जिल्हा\s*परिषद|महानगरपालिका|नगरपरिषद|राज्य\s*परिवहन\s*महामंडळ)[^\r\n]{0,60})",
+            text,
+            re.MULTILINE,
+        )
+        if gov_match:
+            cand = clean_field_value(gov_match.group(1), field_name="employer_name", doc_type="salary_slip")
+            fields["employer_name"] = cand
+            confidences["employer_name"] = find_line_confidence(cand, all_lines)
 
     # Employee Name (Raw and Masked)
     name_match = re.search(
-        r"(?:Employee(?:\s*Name)?|Name)[\s:]*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:ID|Emp\s*ID|Designation|Department|Net|Gross|Month|Pay\s*Period)\b))",
+        r"(?:Employee(?:\s*Name)?|कर्मचाऱ्याचे\s*नाव|कर्मचारी\s*नाव|कर्मचारी\s*का\s*नाम|अधिकाऱ्याचे\s*नाव|सेवकाचे\s*नाव|(?<!Employer\s)(?<!Company\s)(?<!कार्यालयाचे\s)(?<!संस्थेचे\s)\bName)[\s:：]*([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F \t.'-]{1,40}?)(?=[ \t]*(?:\r?\n|$|(?:ID|Emp\s*ID|Designation|Department|Net|Gross|Month|Pay\s*Period|पदनाम|पद|विभाग|वेतन|माहे|रक्कम|भविष्य\s*निर्वाह)[\s:：]))",
         text,
         re.IGNORECASE,
     )
     if name_match:
-        raw_name = clean_field_value(name_match.group(1))
+        raw_name = clean_field_value(name_match.group(1), field_name="employee_name", doc_type="salary_slip")
         fields["raw_employee_name"] = raw_name
         fields["employee_name"] = raw_name
         fields["employee_name_masked"] = mask_person_name(raw_name)
         confidences["employee_name_masked"] = find_line_confidence(raw_name, all_lines)
 
     # Net Pay
-    net_match = re.search(r"(?:Net\s*Salary|Net\s*Pay|Net\s*Amount)[\s:]+(?:Rs\.?|INR)?\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
+    net_match = re.search(
+        r"(?:Net\s*Salary|Net\s*Pay|Net\s*Amount|निव्वळ\s*वेतन|निव्वळ\s*देय\s*(?:रक्कम)?|निव्वळ\s*रक्कम|हाती\s*येणारे\s*वेतन|शुद्ध\s*वेतन|कुल\s*शुद्ध\s*देय)[\s:：]+(?:Rs\.?|INR|₹|रु\.?|रुपये)?\s*([\d,]+\.?\d*)",
+        text,
+        re.IGNORECASE,
+    )
     if net_match:
         fields["net_pay"] = net_match.group(1).replace(",", "")
         confidences["net_pay"] = find_line_confidence(net_match.group(1), all_lines)
 
     # Pay Period / Month
-    month_match = re.search(r"(?:Month|Pay\s*Period)[\s:]+([A-Za-z]+\s*\d{4}|\d{2}/\d{4})", text, re.IGNORECASE)
+    month_match = re.search(
+        r"(?:Month|Pay\s*Period|वेतन\s*महिना|माहे(?:\s*महिना)?|माहे|कालावधी)[\s:：]+([A-Za-z\u0900-\u097F]+\s*\d{4}|\d{1,2}[\/\-]\d{4})",
+        text,
+        re.IGNORECASE,
+    )
     if month_match:
         fields["pay_period"] = month_match.group(1).strip()
         confidences["pay_period"] = find_line_confidence(fields["pay_period"], all_lines)
@@ -856,50 +891,122 @@ def extract_utility_bill(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Di
     - Applies strict PII allowlist:
       ALLOWLIST = {utility_provider, consumer_number, bill_date, due_date, bill_amount}
       NO residential address, NO sensitive private identifiers!
+    - Supports bilingual / Devanagari bills (MSEDCL/Mahavitaran, state electricity boards,
+      municipal water/gas) with Marathi and Hindi field labels and Devanagari numerals.
     """
     all_lines = [line for page in doc_res.pages for line in page.lines]
-    text = doc_res.full_text
+    text = normalize_devanagari_numbers(doc_res.full_text) or ""
     fields: Dict[str, Any] = {}
     confidences: Dict[str, float] = {}
 
     # Utility Provider
     provider_match = re.search(
-        r"(?:Provider|Company|Board)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,50}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Consumer|Bill|Due|Date|Amount|CA\s*No|Connection)\b))",
+        r"(?:Provider|Company|Board|प्रदाता)[\s]*[:：][\s]*([A-Za-z0-9\u0900-\u097F][A-Za-z0-9\u0900-\u097F \t,\.\-&]{1,50}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Consumer|Bill|Due|Date|Amount|CA\s*No|Connection|ग्राहक|देयक|देय|रक्कम)\b))",
         text,
         re.IGNORECASE,
     )
     if provider_match:
         fields["utility_provider"] = clean_field_value(provider_match.group(1))
     else:
-        # Check standard utility keywords
-        if "ELECTRICITY" in text.upper():
+        text_upper = text.upper()
+        if any(k in text for k in ["महावितरण", "महािवतरण", "महाराष्ट्र राज्य विद्युत"]) or any(k in text_upper for k in ["MSEDCL", "MAHADISCOM", "MAHAVITARAN"]):
+            fields["utility_provider"] = "Mahavitaran (MSEDCL)"
+        elif "टाटा पॉवर" in text or "TATA POWER" in text_upper:
+            fields["utility_provider"] = "Tata Power"
+        elif "अदानी" in text or "ADANI ELECTRICITY" in text_upper:
+            fields["utility_provider"] = "Adani Electricity"
+        elif "बेस्ट" in text or "BEST UNDERTAKING" in text_upper:
+            fields["utility_provider"] = "BEST Undertaking"
+        elif "टॉरेंट पॉवर" in text or "TORRENT POWER" in text_upper:
+            fields["utility_provider"] = "Torrent Power"
+        elif any(k in text_upper for k in ["ELECTRICITY", "POWER"]) or any(k in text for k in ["विद्युत", "वीज"]):
             fields["utility_provider"] = "Electricity Distribution Board"
-        elif "WATER" in text.upper():
+        elif "WATER" in text_upper or any(k in text for k in ["पाणी", "जल"]):
             fields["utility_provider"] = "Water Supply Department"
-        elif "GAS" in text.upper():
+        elif "GAS" in text_upper or "गॅस" in text:
             fields["utility_provider"] = "Natural Gas Corporation"
 
     # Consumer Number
-    consumer_match = re.search(r"(?:Consumer\s*No\.?|CA\s*No\.?|Account\s*No\.?|Connection\s*ID)[\s:]*([A-Za-z0-9\-]{6,20})", text, re.IGNORECASE)
+    # Verified Marathi: ग्राहक क्रमांक, ग्राहक क्र., ग्राहक नंबर, साहकक्रमांक (OCR variant of ग्राहकक्रमांक)
+    # Verified Hindi: उपभोक्ता संख्या, उपभोक्ता क्रमांक, खाता संख्या
+    # English: Consumer No, CA No, Account No, Connection ID, K No
+    consumer_match = re.search(
+        r"(?:ग्राहक\s*(?:क्रमांक|क्र\.?|नंबर|सं\.?)|साहक\s*(?:क्रमांक|कमांक|कमक|कमिक)|उपभोक्ता\s*(?:संख्या|क्रमांक|क्र\.?)|खाता\s*(?:संख्या|क्रमांक)|Consumer\s*(?:No\.?|Number|ID)|CA\s*No\.?|Account\s*No\.?|Connection\s*ID|K\s*No\.?)[\s:：]*([A-Za-z0-9\-]{6,25})",
+        text,
+        re.IGNORECASE,
+    )
     if consumer_match:
-        fields["consumer_number"] = consumer_match.group(1)
+        c_val = normalize_devanagari_numbers(consumer_match.group(1).strip())
+        fields["consumer_number"] = c_val
         confidences["consumer_number"] = find_line_confidence(consumer_match.group(1), all_lines)
+    else:
+        # Check RTGS/NEFT payment virtual account on bills (e.g. Beneficiaryaccountno.:MSEDCL01177453132860)
+        neft_match = re.search(r"Beneficiary\s*account\s*no\.?[\s:：]*([A-Za-z0-9]{8,25})", text, re.IGNORECASE)
+        if neft_match:
+            fields["consumer_number"] = neft_match.group(1)
+            confidences["consumer_number"] = find_line_confidence(neft_match.group(1), all_lines)
 
     # Bill Date
-    bdate_match = re.search(r"(?:Bill\s*Date)[\s:]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", text, re.IGNORECASE)
+    # Verified Marathi: देयक दिनांक, देयक तारीख, देयक दि., बिल दिनांक, बिलाचा दिनांक
+    # Verified Hindi: बिल तिथि, बिल दिनांक, देयक तिथि
+    # English: Bill Date, Date of Bill, Billing Date, Invoice Date
+    bdate_match = re.search(
+        r"(?:Bill\s*Date|Date\s*of\s*Bill|Billing\s*Date|Invoice\s*Date|देयक\s*(?:दिनांक|तारीख|तिथि|दि\.?)|बिल\s*(?:दिनांक|तारीख|तिथि)|बिलाचा\s*दिनांक)[\s:：]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
+        text,
+        re.IGNORECASE,
+    )
     if bdate_match:
         fields["bill_date"] = bdate_match.group(1).replace("-", "/").replace(".", "/")
+        confidences["bill_date"] = find_line_confidence(bdate_match.group(1), all_lines)
 
     # Due Date
-    ddate_match = re.search(r"(?:Due\s*Date)[\s:]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", text, re.IGNORECASE)
+    # Verified Marathi: देय दिनांक, देय तारीख, अंतिम तारीख, अंतिम दिनांक, आतमतारीख (OCR variant of अंतिम तारीख)
+    # Verified Hindi: देय तिथि, अंतिम तिथि, भुगतान तिथि
+    # English: Due Date, Payment Due Date, Pay By Date, Last Date
+    ddate_match = re.search(
+        r"(?:Due\s*Date|Payment\s*Due\s*Date|Pay\s*By\s*Date|देय\s*(?:दिनांक|तारीख|तिथि)|अंतिम\s*(?:दिनांक|तारीख|तिथि)|आत[मम]\s*(?:तारीख|तारीस|दिनांक))[\s:：]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
+        text,
+        re.IGNORECASE,
+    )
     if ddate_match:
         fields["due_date"] = ddate_match.group(1).replace("-", "/").replace(".", "/")
+        confidences["due_date"] = find_line_confidence(ddate_match.group(1), all_lines)
+    else:
+        # Prompt payment date fallback (या तारखेपर्यंत भरल्यास)
+        prompt_date_match = re.search(
+            r"(?:या\s*तारखेपर्यंत\s*भरल्यास|यातारखेपय[ंंत]+[^\n\r]*भरल[याा]स)[\s:：]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
+            text,
+            re.IGNORECASE,
+        )
+        if prompt_date_match:
+            fields["due_date"] = prompt_date_match.group(1).replace("-", "/").replace(".", "/")
+            confidences["due_date"] = find_line_confidence(prompt_date_match.group(1), all_lines)
 
     # Bill Amount
-    amt_match = re.search(r"(?:Total\s*Amount|Amount\s*Due|Bill\s*Amount)[\s:]+(?:Rs\.?|INR)?\s*([\d,]+\.?\d*)", text, re.IGNORECASE)
+    # Verified Marathi: देयक रक्कम, एकूण रक्कम, एकूण देयक रक्कम, निव्वळ देयक रक्कम, देय रक्कम, भरणा रक्कम, बिल रक्कम
+    # Verified Hindi: कुल राशि, देय राशि, बिल राशि, कुल देय राशि
+    # English: Total Amount, Amount Due, Bill Amount, Net Amount, Total Due
+    amt_match = re.search(
+        r"(?:Total\s*Amount|Amount\s*Due|Bill\s*Amount|Net\s*Amount(?:\s*Payable)?|Total\s*Due|देयक\s*रक्कम|एकूण\s*रक्कम|एकूण\s*देयक|निव्वळ\s*(?:देयक\s*)?रक्कम|देय\s*रक्कम|भरणा\s*रक्कम|बिल\s*रक्कम|कुल\s*(?:देय\s*)?राशि)[\s:：]+(?:Rs\.?|INR|₹|रु\.?|रुपये)?\s*([\d,]+\.?\d*)",
+        text,
+        re.IGNORECASE,
+    )
     if amt_match:
-        fields["bill_amount"] = amt_match.group(1).replace(",", "")
+        raw_amt = normalize_devanagari_numbers(amt_match.group(1)).replace(",", "").rstrip(".")
+        fields["bill_amount"] = raw_amt
         confidences["bill_amount"] = find_line_confidence(amt_match.group(1), all_lines)
+    else:
+        # Payment coupon / prompt payment slip pattern:
+        # e.g. "यातारखेपयंत भरलास 28-10-2024 Rs.1200.00" or "आतमतारीख 07-11-2024 Rs. 1200.00"
+        slip_amt_match = re.search(
+            r"(?:यातारखेपय[ंंत]+[^\n\r]*भरल[याा]स|या\s*तारखेपर्यंत\s*भरल्यास|आत[मम]\s*(?:तारीख|तारीस)|अंतिम\s*(?:तारीख|दिनांक)|देय\s*दिनांक)[\s\S]{1,80}?(?:Rs\.?|INR|₹|रु\.?|रुपये)\s*([\d,]+\.?\d*)",
+            text,
+            re.IGNORECASE,
+        )
+        if slip_amt_match:
+            raw_amt = normalize_devanagari_numbers(slip_amt_match.group(1)).replace(",", "").rstrip(".")
+            fields["bill_amount"] = raw_amt
+            confidences["bill_amount"] = find_line_confidence(slip_amt_match.group(1), all_lines)
 
     cleaned_fields = {k: clean_field_value(v) for k, v in fields.items()}
     return cleaned_fields, confidences
@@ -1482,28 +1589,42 @@ def extract_form_16(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[st
 # ==============================================================================
 
 def extract_bank_passbook(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, float]]:
-    text = doc_res.full_text
     all_lines = [line for page in doc_res.pages for line in page.lines]
+    text = normalize_devanagari_numbers(doc_res.full_text) or ""
     fields: Dict[str, Any] = {}
     confidences: Dict[str, float] = {}
 
     # Bank Name
     bank_match = re.search(
-        r"(?:(?:^|\r?\n)\s*([A-Za-z \t]{3,35}?\bBANK(?:\s+OF\s+[A-Za-z \t]+)?)|Bank\s*Name[\s:]*([A-Za-z][A-Za-z \t,\.\-&]{2,40}?))(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Branch|IFSC|A/C|Account)\b))",
+        r"(?:(?:^|\r?\n)\s*([A-Za-z0-9\u0900-\u097F \t]{3,50}?(?:\bBANK(?:\s+OF\s+[A-Za-z \t]+)?|सहकारी\s*बँक|ग्रामीण\s*बँक|नागरी\s*सहकारी\s*बँक|विकास\s*बँक|को(?:-|ऑ)परेटीव्ह\s*बँक|बँक\s*मर्यादित|बैंक\s*लिमिटेड))|Bank\s*Name[\s:：]*([A-Za-z][A-Za-z \t,\.\-&]{2,40}?)|(?:बँकेचे\s*नाव|बैंक\s*का\s*नाम|बँक|बैंक)[\s:：]+([A-Za-z0-9\u0900-\u097F][A-Za-z0-9\u0900-\u097F \t,\.\-&]{2,60}?))(?=[ \t]*(?:\r?\n|$|(?:Branch|IFSC|A/C|Account|शाखा|आयएफएससी|खाते|खाता)))",
         text,
         re.IGNORECASE,
     )
     if bank_match:
-        cand = (bank_match.group(1) or bank_match.group(2) or "").strip()
+        cand = (bank_match.group(1) or bank_match.group(2) or bank_match.group(3) or "").strip()
         cand = cand.splitlines()[0].strip()
-        cand = re.sub(r"\s*(?:SAVINGS\s+BANK\s+PASS\s*BOOK|PASS\s*BOOK).*", "", cand, flags=re.I).strip()
+        cand = re.sub(r"\s*(?:SAVINGS\s+BANK\s+PASS\s*BOOK|PASS\s*BOOK|बचत\s*खाते\s*पासबुक|पासबुक).*", "", cand, flags=re.I).strip()
         if cand:
             fields["bank_name"] = clean_field_value(cand, "bank_name", "bank_passbook")
             confidences["bank_name"] = find_line_confidence(fields["bank_name"], all_lines)
 
+    if not fields.get("bank_name"):
+        # Check first prominent line with bank keywords
+        header_bank = re.search(
+            r"^[ \t]*([A-Za-z0-9\u0900-\u097F][A-Za-z0-9\u0900-\u097F \t,\.\-&]{2,60}?(?:बँक|सहकारी\s*बँक|ग्रामीण\s*बँक|BANK))(?=[ \t]*(?:\r?\n|$))",
+            text,
+            re.MULTILINE | re.IGNORECASE,
+        )
+        if header_bank:
+            cand = header_bank.group(1).strip()
+            cand = re.sub(r"\s*(?:SAVINGS\s+BANK\s+PASS\s*BOOK|PASS\s*BOOK|बचत\s*खाते\s*पासबुक|पासबुक).*", "", cand, flags=re.I).strip()
+            if cand:
+                fields["bank_name"] = clean_field_value(cand, "bank_name", "bank_passbook")
+                confidences["bank_name"] = find_line_confidence(fields["bank_name"], all_lines)
+
     # Branch
     branch_match = re.search(
-        r"(?:Branch\s*(?:Name)?|Branch\s*Code)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:IFSC|Account|A/C|MICR|CIF|Customer)\b))",
+        r"(?:Branch\s*(?:Name)?|Branch\s*Code|शाखेचे\s*नाव|शाखा\s*कोड|शाखा)[\s:：]*([A-Za-z0-9\u0900-\u097F][A-Za-z0-9\u0900-\u097F \t,\.\-&]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:IFSC|Account|A/C|MICR|CIF|Customer|आयएफएससी|खाते|खाता|ग्राहक|सीआयएफ)))",
         text,
         re.IGNORECASE,
     )
@@ -1512,13 +1633,17 @@ def extract_bank_passbook(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], D
         confidences["branch"] = find_line_confidence(fields["branch"], all_lines)
 
     # IFSC
-    ifsc_match = re.search(r"\b([A-Z]{4}0[A-Z0-9]{6})\b", text)
+    ifsc_match = re.search(r"\b([A-Z]{4}0[A-Z0-9]{6})\b", text, re.IGNORECASE)
     if ifsc_match:
         fields["ifsc"] = ifsc_match.group(1).upper()
-        confidences["ifsc"] = find_line_confidence(ifsc_match.group(1), all_lines)
+        confidences["ifsc"] = find_line_confidence(fields["ifsc"], all_lines)
 
     # Account Number
-    acc_match = re.search(r"(?:Account\s*(?:No|Number)|A/C\s*(?:No|Number)?)[\s:]*([0-9]{9,18})", text, re.IGNORECASE)
+    acc_match = re.search(
+        r"(?:Account\s*(?:No|Number)|A/C\s*(?:No|Number)?|बचत\s*खाते\s*(?:क्रमांक|क्र|नं)?|खाते\s*(?:क्रमांक|क्र\.?|नं\.?)|खाता\s*(?:संख्या|क्रमांक|क्र\.?|नं\.?))[\s:：]*([0-9]{9,18})",
+        text,
+        re.IGNORECASE,
+    )
     if acc_match:
         raw_acc = acc_match.group(1)
         fields["raw_account_number"] = raw_acc
@@ -1527,7 +1652,7 @@ def extract_bank_passbook(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], D
 
     # Account Holder Name
     holder_match = re.search(
-        r"(?:Account\s*Holder(?:\s*Name)?|Name\s*of\s*Account\s*Holder|Customer\s*Name|(?<!Branch\s)(?<!Bank\s)\bName)[\s:]*([A-Za-z][A-Za-z \t.'-]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Account|A/C|IFSC|CIF|Customer|Branch)\b))",
+        r"(?:Account\s*Holder(?:\s*Name)?|Name\s*of\s*Account\s*Holder|Customer\s*Name|खातेदाराचे\s*नाव|खातेदार\s*नाव|ग्राहकाचे\s*नाव|खाताधारक\s*का\s*नाम|खाताधारी\s*का\s*नाम|(?<!Branch\s)(?<!Bank\s)(?<!शाखेचे\s)(?<!बँकेचे\s)(?<!शाखा\s)(?<!बँक\s)\bName)[\s:：]*([A-Za-z\u0900-\u097F][A-Za-z\u0900-\u097F \t.'-]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:Account|A/C|IFSC|CIF|Customer|Branch|खाते|खाता|आयएफएससी|सीआयएफ|शाखा)))",
         text,
         re.IGNORECASE,
     )
@@ -1708,6 +1833,9 @@ CORE_FIELDS_PER_DOC_TYPE = {
     "property_tax_receipt": {"property_id", "tax_amount_paid"},
     "rent_agreement": {"monthly_rent", "lessor_name_masked"},
     "aadhaar": {"aadhaar_number", "name"},
+    "utility_bill": {"consumer_number", "bill_amount"},
+    "salary_slip": {"employer_name", "net_pay"},
+    "bank_passbook": {"account_number_masked", "bank_name"},
 }
 
 
