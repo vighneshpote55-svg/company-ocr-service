@@ -201,7 +201,22 @@ export class ApiService {
     if (!res.ok) {
       throw new Error(`Failed to load engine info (HTTP ${res.status})`);
     }
-    return res.json();
+    const data = await res.json();
+    const active = data.active_engine || data.engine || 'none';
+    const display = data.display_name || (
+      active === 'rapidocr' ? 'RapidOCR' :
+      active === 'paddleocr' ? 'PaddleOCR' :
+      active !== 'none' ? active : 'OCR'
+    );
+    return {
+      engine: active,
+      display_name: display,
+      version: data.version || data.rapidocr_version || data.paddleocr_version || '1.0',
+      device: data.device || 'CPU',
+      status: data.status || 'ready',
+      backend: data.backend || active,
+      ...data,
+    };
   }
 
   public async login(clientId: string, clientSecret: string): Promise<string> {

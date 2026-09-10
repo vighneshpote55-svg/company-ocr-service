@@ -114,16 +114,48 @@ Many regional Indian business and property documents are issued bilingual or ent
   - Non-overlapping lines from both passes are preserved and sorted top-to-bottom.
 
 #### 3. Honest Language Coverage & Manual Review Guardrail
-- If a document contains significant Devanagari text (>= 15 glyphs) but core fields cannot be extracted with high confidence, the service explicitly refuses to guess and outputs:
+The service employs an explicit guardrail to prevent silent hallucinations on unfamiliar regional layouts while avoiding unnecessary alert fatigue on well-parsed documents:
+
+- **What Specifically Triggers `language_review_required: true` and `partial_language_coverage: true` (True-Positive)**:
+  Both of the following conditions must be met:
+  1. **Devanagari Script Content Detected**: The document's extracted text (including headers, stamps, and body text) contains $\ge 10$ Devanagari unicode characters (`\u0900-\u097F`).
+  2. **Core Field Extraction Incomplete**: One or more mandatory core fields for the document type (defined in `CORE_FIELDS_PER_DOC_TYPE`) could not be extracted:
+     - **Udyam Registration**: `udyam_registration_number` AND `enterprise_name` (both mandatory)
+     - **Shop & Establishment**: `registration_number` AND `establishment_name` (both mandatory)
+     - **Property Tax Receipt**: `property_id` AND `tax_amount_paid` (both mandatory)
+     - **Rent Agreement**: `monthly_rent` AND `lessor_name_masked` (both mandatory)
+     - **Aadhaar Card**: `aadhaar_number` AND `name` (both mandatory)
+  When triggered, the service refuses to guess and outputs:
   ```json
   {
     "detected_languages": ["en", "devanagari"],
     "partial_language_coverage": true,
     "language_review_required": true,
-    "language_coverage_notes": "Document contains Devanagari script text (124 characters), but core field(s) could not be extracted: registration_number, establishment_name. Manual review recommended."
+    "language_coverage_notes": "Document contains Devanagari script text (124 characters), but core field(s) could not be extracted: enterprise_name, udyam_registration_number. Manual review recommended."
   }
   ```
-- This ensures human verification is flagged for unfamiliar regional layouts while automated extraction proceeds safely for recognized standard formats.
+
+- **When the Guardrail Stays `false` (True-Negative)**:
+  - **Devanagari Present + All Core Fields Extracted**:
+    If $\ge 10$ Devanagari characters are present (e.g. Government of India / MSME ministry banner on an Udyam certificate), but all required core fields are successfully parsed:
+    ```json
+    {
+      "detected_languages": ["en", "devanagari"],
+      "partial_language_coverage": false,
+      "language_review_required": false,
+      "language_coverage_notes": "Devanagari script text detected (32 characters); all core fields extracted successfully."
+    }
+    ```
+  - **Pure English Documents (< 10 Devanagari characters)**:
+    ```json
+    {
+      "detected_languages": ["en"],
+      "partial_language_coverage": false,
+      "language_review_required": false,
+      "language_coverage_notes": null
+    }
+    ```
+- This dual-condition design ensures human reviewers are alerted only when regional layouts actually impede automated processing, rather than on every document with a bilingual header emblem.
 
 ---
 

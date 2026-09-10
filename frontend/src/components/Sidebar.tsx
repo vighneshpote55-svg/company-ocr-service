@@ -18,6 +18,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onOpenSettings,
   engineInfo,
 }) => {
+  const engineDisplayName =
+    engineInfo?.display_name ||
+    (engineInfo?.active_engine === 'rapidocr'
+      ? 'RapidOCR'
+      : engineInfo?.active_engine === 'paddleocr'
+      ? 'PaddleOCR'
+      : engineInfo?.engine || 'RapidOCR');
+  const deviceName = engineInfo?.device?.toUpperCase() || 'CPU';
+
   return (
     <aside className="sidebar">
       <div className="sidebar-header">
@@ -27,7 +36,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <div>
           <div className="brand-title">DocuScan AI</div>
           <div className="brand-subtitle">
-            {engineInfo ? `${engineInfo.display_name} Engine` : 'OCR Engine'}
+            {engineInfo ? `${engineDisplayName} Engine` : 'OCR Engine'}
           </div>
         </div>
       </div>
@@ -68,7 +77,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <span>API Connection</span>
         </button>
         <div style={{ padding: '0.75rem 0.85rem 0', fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
-          {engineInfo ? `${engineInfo.display_name} • ${engineInfo.device?.toUpperCase() || 'CPU'}` : 'OCR Engine • Poppler'}
+          {engineInfo ? `${engineDisplayName} • ${deviceName}` : 'OCR Engine • Poppler'}
         </div>
       </div>
     </aside>

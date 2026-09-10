@@ -25,6 +25,7 @@ from ocr_engine import (
     OCRPageResult,
     get_devanagari_ocr_instance,
     get_languages_for_doc_type,
+    get_ocr_engine_info,
     merge_ocr_lines,
 )
 from extractors import (
@@ -292,6 +293,98 @@ def test_partial_language_coverage_flags_manual_review_when_fields_missing():
     assert "registration_number" in fields["language_coverage_notes"]
 
 
+def test_language_coverage_flags_review_when_extraction_incomplete():
+    """
+    True-positive test case:
+    When a document has significant Devanagari content (>= 10 characters),
+    but one or more core extractable fields fail to extract (missing, garbled, or
+    unrecognized layout), the guardrail must set:
+    - partial_language_coverage: True
+    - language_review_required: True
+    - language_coverage_notes: naming the missing core fields.
+    """
+    # 1. Udyam Registration with Devanagari content but missing registration number and enterprise name
+    incomplete_udyam_text = """
+    भारत सरकार
+    सूक्ष्म, लघु एवं मध्यम उद्यम मंत्रालय
+    उद्यम पंजीकरण मार्गदर्शन व सूचना
+    हे केवळ माहितीसाठी जारी केलेले परिपत्रक आहे.
+    सर्व उद्योजकांनी अधिकृत पोर्टलवर जाऊन नोंदणी करावी.
+    """
+    doc_res_udyam = _make_doc_res(incomplete_udyam_text)
+    fields_udyam, _ = extract_document_fields("udyam", doc_res_udyam)
+
+    assert "devanagari" in fields_udyam["detected_languages"]
+    assert fields_udyam["partial_language_coverage"] is True
+    assert fields_udyam["language_review_required"] is True
+    assert "Manual review recommended" in fields_udyam["language_coverage_notes"]
+    assert "enterprise_name" in fields_udyam["language_coverage_notes"]
+    assert "udyam_registration_number" in fields_udyam["language_coverage_notes"]
+
+    # 2. Udyam Registration with registration number present, but enterprise name missing
+    udyam_missing_name = """
+    भारत सरकार
+    सूक्ष्म, लघु एवं मध्यम उद्यम मंत्रालय
+    UDYAM REGISTRATION NUMBER: UDYAM-MH-12-0044556
+    उद्यमाचा प्रकार: सूक्ष्म
+    मुख्य कार्यकलाप: विनिर्माण
+    """
+    doc_res_name_missing = _make_doc_res(udyam_missing_name)
+    fields_missing_name, _ = extract_document_fields("udyam", doc_res_name_missing)
+
+    assert fields_missing_name.get("udyam_registration_number") == "UDYAM-MH-12-0044556"
+    assert "devanagari" in fields_missing_name["detected_languages"]
+    assert fields_missing_name["partial_language_coverage"] is True
+    assert fields_missing_name["language_review_required"] is True
+    assert "enterprise_name" in fields_missing_name["language_coverage_notes"]
+
+    # 3. Shop & Establishment document with Devanagari content but missing registration number
+    shop_incomplete_text = """
+    महाराष्ट्र शासन
+    कामगार आयुक्त कार्यालय
+    दुकान व आस्थापना अधिनियम अंतर्गत सूचना
+    आस्थापनेचे नाव: श्री गणेश स्टोअर्स
+    पत्ता: दादर, मुंबई
+    """
+    doc_res_shop = _make_doc_res(shop_incomplete_text)
+    fields_shop, _ = extract_document_fields("shop_establishment", doc_res_shop)
+
+    assert "devanagari" in fields_shop["detected_languages"]
+    assert fields_shop["partial_language_coverage"] is True
+    assert fields_shop["language_review_required"] is True
+    assert "registration_number" in fields_shop["language_coverage_notes"]
+
+
+def test_language_coverage_stays_clear_when_extraction_succeeds():
+    """
+    True-negative test case:
+    When a document has significant Devanagari content (>= 10 characters),
+    and all mandatory core fields are successfully extracted, the guardrail
+    must stay false:
+    - partial_language_coverage: False
+    - language_review_required: False
+    - language_coverage_notes: noting successful extraction.
+    """
+    successful_udyam_text = """
+    भारत सरकार
+    सूक्ष्म, लघु एवं मध्यम उद्यम मंत्रालय
+    UDYAM REGISTRATION CERTIFICATE
+    UDYAM REGISTRATION NUMBER: UDYAM-MH-26-0804117
+    NAME OF ENTERPRISE: ROYAL CAKE HOUSE
+    TYPE OF ENTERPRISE: Micro
+    MAJOR ACTIVITY: TRADING
+    """
+    doc_res = _make_doc_res(successful_udyam_text)
+    fields, _ = extract_document_fields("udyam", doc_res)
+
+    assert fields.get("udyam_registration_number") == "UDYAM-MH-26-0804117"
+    assert fields.get("enterprise_name") == "ROYAL CAKE HOUSE"
+    assert "devanagari" in fields["detected_languages"]
+    assert fields["partial_language_coverage"] is False
+    assert fields["language_review_required"] is False
+    assert "all core fields extracted successfully" in fields["language_coverage_notes"]
+
+
 def test_english_document_has_no_language_review_flags():
     """English documents must not flag partial_language_coverage or language_review_required."""
     pan_text = """
@@ -336,3 +429,138 @@ def test_devanagari_signatures_detect_document_type():
     # Rent Agreement Devanagari signature
     rent_text = "भाडेकरार परवाना देणारा मासिक भाडे डिपॉझिट"
     assert detect_document_type(rent_text) == "rent_agreement"
+
+
+# ==============================================================================
+# 7. Udyam Major Activity & Devanagari Header Regression Tests
+# ==============================================================================
+
+def test_udyam_major_activity_trading_vs_nic_manufacturing():
+    """
+    Regression test for Udyam certificate where declared Major Activity is TRADING,
+    while the NIC classification table's Activity column mentions Manufacturing.
+    The extractor must correctly return 'Trading', anchored to the MAJOR ACTIVITY label.
+    """
+    real_sample_text = """
+    भारत सरकार
+    सूक्ष्म, लघु एवं मध्यम उद्यम मंत्रालय
+    UDYAM REGISTRATION CERTIFICATE
+    UDYAM REGISTRATION NUMBER: UDYAM-MH-26-0804117
+    NAME OF ENTERPRISE: ROYAL CAKE HOUSE
+    TYPE OF ENTERPRISE: Micro
+    Classification Date: 14/11/2025
+    TRADING
+    MAJOR ACTIVITY
+    [For availing benefits of Priority Sector Lending(PSL) ONLY]
+    SOCIAL CATEGORY OF ENTREPRENEUR: GENERAL
+    NATIONAL INDUSTRY CLASSIFICATION CODE(S)
+    SNo. NIC 2 Digit NIC 4 Digit NIC 5 Digit Activity
+    1 10 - Manufacture of food products 1071 - Bakery 10712 - Cakes Manufacturing
+    DATE OF UDYAM REGISTRATION: 29/12/2024
+    """
+    doc_res = _make_doc_res(real_sample_text)
+    fields, _ = extract_udyam(doc_res)
+
+    assert fields.get("udyam_registration_number") == "UDYAM-MH-26-0804117"
+    assert fields.get("enterprise_name") == "ROYAL CAKE HOUSE"
+    assert fields.get("enterprise_type") == "Micro"
+    assert fields.get("major_activity") == "Trading"
+
+    # End-to-end verification with language coverage
+    e2e_fields, _ = extract_document_fields("udyam", doc_res)
+    assert e2e_fields["major_activity"] == "Trading"
+    assert "devanagari" in e2e_fields["detected_languages"]
+    assert e2e_fields["partial_language_coverage"] is False
+    assert e2e_fields["language_review_required"] is False
+
+
+def test_udyam_major_activity_manufacturing_legitimate():
+    """
+    Verify that when declared Major Activity is legitimately Manufacturing,
+    the field correctly reflects Manufacturing and does not confuse with other words.
+    """
+    mfg_text = """
+    UDYAM REGISTRATION CERTIFICATE
+    UDYAM REGISTRATION NUMBER: UDYAM-DL-05-0099881
+    NAME OF ENTERPRISE: PRECISION GEARS PVT LTD
+    TYPE OF ENTERPRISE: Small
+    MAJOR ACTIVITY: MANUFACTURING
+    NATIONAL INDUSTRY CLASSIFICATION CODE(S)
+    Activity: Services
+    """
+    doc_res = _make_doc_res(mfg_text)
+    fields, _ = extract_udyam(doc_res)
+
+    assert fields.get("major_activity") == "Manufacturing"
+    assert fields.get("enterprise_type") == "Small"
+
+
+def test_udyam_major_activity_hindi_devanagari_variants():
+    """
+    Verify Udyam major activity extraction from Hindi labels (व्यापार, विनिर्माण, सेवाएं).
+    """
+    # 1. Trading in Hindi
+    text_trade = """
+    उद्यम नोंदणी क्रमांक: UDYAM-MH-01-0045678
+    उद्यमाचे नाव: श्रीराम ट्रेडर्स
+    उद्यमाचा प्रकार: लघु
+    मुख्य कार्यकलाप: व्यापार
+    """
+    fields_trade, _ = extract_udyam(_make_doc_res(text_trade))
+    assert fields_trade.get("major_activity") == "Trading"
+    assert fields_trade.get("enterprise_type") == "Small"
+
+    # 2. Services in Hindi
+    text_svc = """
+    उद्यम पंजीकरण संख्या: UDYAM-UP-12-0033445
+    उद्यम का नाम: आकाश आईटी सॉल्यूशंस
+    उद्यम का प्रकार: सूक्ष्म
+    मुख्य कार्यकलाप: सेवाएं
+    """
+    fields_svc, _ = extract_udyam(_make_doc_res(text_svc))
+    assert fields_svc.get("major_activity") == "Services"
+    assert fields_svc.get("enterprise_type") == "Micro"
+
+
+def test_devanagari_header_with_english_body_detection():
+    """
+    Regression test mirroring hybrid Udyam documents with Devanagari header
+    ("भारत सरकार", "सूक्ष्म, लघु एवं मध्यम उद्यम मंत्रालय") and English body fields.
+    Confirms language detection identifies Devanagari content without false negative.
+    """
+    hybrid_text = """
+    भारत सरकार
+    सूक्ष्म, लघु एवं मध्यम उद्यम मंत्रालय
+    UDYAM REGISTRATION CERTIFICATE
+    UDYAM REGISTRATION NUMBER: UDYAM-MH-26-0804117
+    NAME OF ENTERPRISE: ROYAL CAKE HOUSE
+    TYPE OF ENTERPRISE: Micro
+    MAJOR ACTIVITY: TRADING
+    DATE OF UDYAM REGISTRATION: 29/12/2024
+    """
+    doc_res = _make_doc_res(hybrid_text)
+    fields, _ = extract_document_fields("udyam", doc_res)
+
+    assert fields["major_activity"] == "Trading"
+    assert fields["enterprise_name"] == "ROYAL CAKE HOUSE"
+    assert "devanagari" in fields["detected_languages"]
+    assert "en" in fields["detected_languages"]
+    assert fields["partial_language_coverage"] is False
+    assert fields["language_review_required"] is False
+    assert "Devanagari script text detected" in fields["language_coverage_notes"]
+
+
+def test_engine_info_contains_sidebar_display_fields():
+    """
+    Verify get_ocr_engine_info returns display_name, engine, and device
+    expected by the frontend sidebar and decision badge.
+    """
+    info = get_ocr_engine_info()
+    assert "display_name" in info
+    assert info["display_name"] in ("RapidOCR", "PaddleOCR", "None")
+    assert "device" in info
+    assert info["device"] == "CPU"
+    assert "engine" in info
+    assert "active_engine" in info
+    assert info["status"] in ("ready", "unavailable")
+

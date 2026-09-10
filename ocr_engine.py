@@ -170,8 +170,18 @@ def get_active_ocr_engine() -> Optional[str]:
 def get_ocr_engine_info() -> Dict[str, Any]:
     """Returns structured engine metadata for /health and /engine-info endpoints."""
     rapid_ver, onnx_ver, paddle_ver = _detect_installed_versions()
+    active = _ocr_backend or "none"
+    display = (
+        "RapidOCR" if active == "rapidocr" else ("PaddleOCR" if active == "paddleocr" else "None")
+    )
+    version = rapid_ver if active == "rapidocr" else (paddle_ver or "1.0")
     return {
-        "active_engine": _ocr_backend or "none",
+        "engine": active,
+        "active_engine": active,
+        "display_name": display,
+        "device": "CPU",
+        "backend": active,
+        "version": version,
         "configured_engine": os.getenv("OCR_ENGINE", "auto").lower().strip(),
         "status": "ready" if HAS_PADDLEOCR else "unavailable",
         "details": _ocr_engine_details,
@@ -695,9 +705,35 @@ class OCREngine:
         has_text_layer, full_text, pages_text = check_pdf_text_layer(pdf_path, min_char_threshold=50)
 
         if has_text_layer:
+            # Check if requested languages specify non-English (Devanagari) script that is missing
+            # from the digital text layer (e.g. raster image emblems/headers in official PDF certificates)
+            dev_in_text = len(re.findall(r"[\u0900-\u097F]", full_text))
+            needs_devanagari = False
+            if languages:
+                lang_set = {l.lower().strip() for l in languages}
+                if any(l in lang_set for l in ("hi", "mr", "devanagari")) and dev_in_text < 10:
+                    needs_devanagari = True
+
+            extra_lines: List[OCRLine] = []
+            first_rendered_img: Optional[Image.Image] = None
+            if needs_devanagari:
+                try:
+                    # Scan page 1 image for visual Devanagari headers/logos
+                    rendered_imgs = render_pdf_pages_to_images(pdf_path)
+                    if rendered_imgs:
+                        first_rendered_img = rendered_imgs[0]
+                        ocr_p1 = self.process_image(first_rendered_img, page_num=1, languages=languages)
+                        extra_lines = [l for l in ocr_p1.lines if re.search(r"[\u0900-\u097F]", l.text)]
+                except Exception as ex:
+                    logger.warning("Error running header OCR scan on digital PDF: %s", ex)
+
             page_results: List[OCRPageResult] = []
             for idx, p_text in enumerate(pages_text, start=1):
                 lines = parse_text_into_ocr_lines(p_text, default_conf=0.98)
+                page_img = first_rendered_img if idx == 1 else None
+                if idx == 1 and extra_lines:
+                    lines = extra_lines + lines
+                    p_text = "\n".join([l.text for l in extra_lines]) + "\n" + p_text
                 avg_conf = sum(l.confidence for l in lines) / len(lines) if lines else 0.98
                 page_results.append(
                     OCRPageResult(
@@ -705,9 +741,13 @@ class OCREngine:
                         full_text=p_text,
                         lines=lines,
                         average_confidence=round(avg_conf, 4),
+                        image=page_img,
                         engine_error=None,
                     )
                 )
+            if extra_lines:
+                full_text = "\n".join([l.text for l in extra_lines]) + "\n\n" + full_text
+
             overall_conf = (
                 sum(p.average_confidence for p in page_results) / len(page_results)
                 if page_results

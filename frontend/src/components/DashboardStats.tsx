@@ -28,7 +28,9 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
     ? Math.round((stats.completed / stats.total) * 100)
     : 100;
 
-  const ocrLabel = engineInfo ? `${engineInfo.display_name} Executed` : 'Neural OCR Executed';
+  const ocrLabel = engineInfo
+    ? `${engineInfo.display_name || (engineInfo.active_engine === 'rapidocr' ? 'RapidOCR' : engineInfo.active_engine || 'Neural OCR')} Executed`
+    : 'Neural OCR Executed';
 
   return (
     <div className="stats-grid">

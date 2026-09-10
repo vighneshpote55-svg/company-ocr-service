@@ -419,20 +419,94 @@ def extract_udyam(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str,
         confidences["enterprise_name"] = find_line_confidence(fields["enterprise_name"], all_lines)
 
     # Type of Enterprise (Micro / Small / Medium / सूक्ष्म / लघु / मध्यम)
-    type_match = re.search(r"\b(Micro|Small|Medium)\b|(सूक्ष्म|लघु|मध्यम)", text, re.IGNORECASE)
-    if type_match:
-        val = type_match.group(1) or type_match.group(2)
-        dev_map = {"सूक्ष्म": "Micro", "लघु": "Small", "मध्यम": "Medium"}
-        fields["enterprise_type"] = dev_map.get(val, val.capitalize())
-        confidences["enterprise_type"] = 0.98
+    type_words = r"(Micro|Small|Medium|सूक्ष्म|लघु|मध्यम)"
+    type_map = {
+        "सूक्ष्म": "Micro",
+        "लघु": "Small",
+        "मध्यम": "Medium",
+        "micro": "Micro",
+        "small": "Small",
+        "medium": "Medium",
+    }
+    # Anchor to Enterprise Type / Type of Enterprise label to prevent false match against Ministry header
+    type_line = re.search(
+        r"(?:Type\s*of\s*Enterprise|Enterprise\s*Type|उद्यमाचा\s*प्रकार|उद्यम\s*का\s*प्रकार)[\s:]*([^\r\n:]{1,30})",
+        text,
+        re.IGNORECASE,
+    )
+    if type_line:
+        m_cand = re.search(type_words, type_line.group(1), re.IGNORECASE)
+        if m_cand:
+            val = m_cand.group(1).lower()
+            fields["enterprise_type"] = type_map.get(val, val.capitalize())
+            confidences["enterprise_type"] = 0.98
 
-    # Major Activity (Services / Manufacturing / सेवा / उत्पादन / विनिर्माण)
-    activity_match = re.search(r"\b(Services|Manufacturing)\b|(सेवाएं|सेवा|उत्पादन|विनिर्माण)", text, re.IGNORECASE)
-    if activity_match:
-        val = activity_match.group(1) or activity_match.group(2)
-        act_map = {"सेवा": "Services", "सेवाएं": "Services", "उत्पादन": "Manufacturing", "विनिर्माण": "Manufacturing"}
-        fields["major_activity"] = act_map.get(val, val.capitalize())
-        confidences["major_activity"] = 0.98
+    if "enterprise_type" not in fields:
+        type_match_win = re.search(
+            r"(?:Type\s*of\s*Enterprise|Enterprise\s*Type|उद्यमाचा\s*प्रकार|उद्यम\s*का\s*प्रकार)[\s\S]{0,60}?(?:\b|(?<=[\s:]))" + type_words + r"(?=\b|[\s\r\n:]|$)",
+            text,
+            re.IGNORECASE,
+        )
+        if not type_match_win:
+            type_match_win = re.search(
+                r"(?:\b|(?<=[\s:]))" + type_words + r"(?=\b|[\s\r\n:]|$)[\s\S]{0,50}?(?:Type\s*of\s*Enterprise|Enterprise\s*Type|उद्यमाचा\s*प्रकार)",
+                text,
+                re.IGNORECASE,
+            )
+        if not type_match_win:
+            type_match_win = re.search(r"(?:\b|(?<=[\s:]))" + type_words + r"(?=\b|[\s\r\n:]|$)", text, re.IGNORECASE)
+        if type_match_win:
+            val = type_match_win.group(1).lower()
+            fields["enterprise_type"] = type_map.get(val, val.capitalize())
+            confidences["enterprise_type"] = 0.98
+
+    # Major Activity (Trading / Services / Manufacturing / व्यापार / ट्रेडिंग / सेवाएं / सेवा / उत्पादन / विनिर्माण)
+    # Anchor strictly to MAJOR ACTIVITY banner/label to avoid bleeding from NIC Classification table's "Activity" column
+    act_words = r"(Trading|Services|Manufacturing|व्यापार|ट्रेडिंग|सेवाएं|सेवा|उत्पादन|विनिर्माण)"
+    act_map = {
+        "trading": "Trading",
+        "services": "Services",
+        "manufacturing": "Manufacturing",
+        "व्यापार": "Trading",
+        "ट्रेडिंग": "Trading",
+        "सेवा": "Services",
+        "सेवाएं": "Services",
+        "उत्पादन": "Manufacturing",
+        "विनिर्माण": "Manufacturing",
+    }
+    # 1. Direct label line: MAJOR ACTIVITY: TRADING or मुख्य कार्यकलाप: व्यापार
+    act_line = re.search(
+        r"(?:MAJOR\s*ACTIVITY|मुख्य\s*(?:कार्यकलाप|गतिविधि|कामकाज))[\s:]*([^\r\n:]{1,40})",
+        text,
+        re.IGNORECASE,
+    )
+    if act_line:
+        m_cand = re.search(act_words, act_line.group(1), re.IGNORECASE)
+        if m_cand:
+            val = m_cand.group(1).lower()
+            fields["major_activity"] = act_map.get(val, val.capitalize())
+            confidences["major_activity"] = find_line_confidence(m_cand.group(1), all_lines) or 0.98
+
+    # 2. Window matching preceding or following (for multi-column table cells like Poppler outputs)
+    if "major_activity" not in fields:
+        act_match_pre = re.search(
+            r"(?:\b|(?<=[\s:]))" + act_words + r"(?=\b|[\s\r\n:]|$)[\s\S]{0,60}?(?:MAJOR\s*ACTIVITY|मुख्य\s*(?:कार्यकलाप|गतिविधि|कामकाज))",
+            text,
+            re.IGNORECASE,
+        )
+        act_match_post = re.search(
+            r"(?:MAJOR\s*ACTIVITY|मुख्य\s*(?:कार्यकलाप|गतिविधि|कामकाज))[\s\S]{0,100}?(?:\b|(?<=[\s:]))" + act_words + r"(?=\b|[\s\r\n:]|$)",
+            text,
+            re.IGNORECASE,
+        )
+        if act_match_pre:
+            val = act_match_pre.group(1).lower()
+            fields["major_activity"] = act_map.get(val, val.capitalize())
+            confidences["major_activity"] = find_line_confidence(act_match_pre.group(1), all_lines) or 0.98
+        elif act_match_post:
+            val = act_match_post.group(1).lower()
+            fields["major_activity"] = act_map.get(val, val.capitalize())
+            confidences["major_activity"] = find_line_confidence(act_match_post.group(1), all_lines) or 0.98
 
     cleaned_fields = {k: clean_field_value(v) for k, v in fields.items()}
     return cleaned_fields, confidences
@@ -1646,7 +1720,7 @@ def check_language_coverage(doc_type: str, text: str, fields: Dict[str, Any]) ->
     to avoid hallucinating unverified semantic structures.
     """
     devanagari_chars = len(re.findall(r"[\u0900-\u097F]", text))
-    has_devanagari = devanagari_chars >= 15
+    has_devanagari = devanagari_chars >= 10
 
     detected_languages = ["en"]
     if has_devanagari:

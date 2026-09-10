@@ -13,6 +13,7 @@ Company-Server OCR FastAPI Microservice:
 import asyncio
 import json
 import os
+import re
 import shutil
 import tempfile
 import time
@@ -869,14 +870,16 @@ async def upload_document_endpoint(
             # If resolved_type uses Devanagari passes and the initial pass was English-only,
             # and OCR was actually required, execute the bilingual pass now
             auto_langs = get_languages_for_doc_type(resolved_type)
-            if auto_langs and len(auto_langs) > 1 and doc_res.ocr_required:
-                try:
-                    if ext == ".pdf":
-                        doc_res = ocr_engine.process_pdf(temp_path, languages=auto_langs)
-                    else:
-                        doc_res = ocr_engine.process_file(temp_path, languages=auto_langs)
-                except Exception as ex:
-                    logger.warning("Secondary Devanagari pass in /api/upload failed: %s", ex)
+            if auto_langs and len(auto_langs) > 1:
+                dev_chars_now = len(re.findall(r"[\u0900-\u097F]", doc_res.full_text))
+                if doc_res.ocr_required or dev_chars_now < 10:
+                    try:
+                        if ext == ".pdf":
+                            doc_res = ocr_engine.process_pdf(temp_path, languages=auto_langs)
+                        else:
+                            doc_res = ocr_engine.process_file(temp_path, languages=auto_langs)
+                    except Exception as ex:
+                        logger.warning("Secondary Devanagari pass in /api/upload failed: %s", ex)
         else:
             resolved_type = requested_type
 
