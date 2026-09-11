@@ -256,7 +256,9 @@ DOC_TYPE_LANGUAGES: Dict[str, List[str]] = {
     "utility_bill": ["en", "hi", "mr"],
     "salary_slip": ["en", "hi", "mr"],
     "bank_passbook": ["en", "hi", "mr"],
+    "income_certificate": ["en", "hi", "mr"],
 }
+
 
 
 def get_languages_for_doc_type(doc_type: Optional[str]) -> List[str]:
@@ -462,7 +464,7 @@ def extract_text_from_pdf_pdftotext(pdf_path: str) -> List[str]:
     try:
         # Check number of pages or extract with form feed separator
         result = subprocess.run(
-            ["pdftotext", pdf_path, "-"],
+            ["pdftotext", "-layout", pdf_path, "-"],
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -665,6 +667,7 @@ class OCREngine:
                     lines = merge_ocr_lines(lines_en, lines_dev)
                 else:
                     lines = lines_en
+
 
                 total_conf = sum(l.confidence for l in lines)
                 avg_conf = (total_conf / len(lines)) if lines else 0.0

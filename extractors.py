@@ -145,7 +145,12 @@ RESIDUAL_LABEL_LINES = {
     "खाते क्रमांक", "खाते क्र", "खाते नं", "बचत खाते क्रमांक", "खाता संख्या", "खाता क्रमांक",
     "खातेदाराचे नाव", "खातेदार नाव", "ग्राहकाचे नाव", "खाताधारक का नाम", "खाताधारी का नाम",
     "पासबुक", "बचत खाते पासबुक",
+
+    # Income Certificate labels (English & Marathi)
+    "income certificate", "certificate number", "applicant name", "annual income", "financial year", "issuing authority",
+    "उत्पन्नाचे प्रमाणपत्र", "उत्पन्नाचा दाखला", "दाखला क्रमांक", "प्रमाणपत्र क्रमांक", "वार्षिक उत्पन्न", "अर्जदाराचे नाव",
 }
+
 
 
 import logging
@@ -728,64 +733,242 @@ def extract_shop_establishment(doc_res: OCRDocumentResult) -> Tuple[Dict[str, An
 def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, float]]:
     """
     Bank statement extractor:
-    - Merges transaction tables across ALL pages
+    - Merges transaction tables across ALL pages (including multi-line and multi-column formats)
     - Applies strict PII allowlist:
-      ALLOWLIST = {bank_name, account_number_masked, statement_period, closing_balance, transactions}
+      ALLOWLIST = {bank_name, account_number_masked, statement_period, opening_balance, closing_balance, transactions}
       NO full account numbers, NO residential addresses, NO full DOB!
+    - Reliable closing balance determination:
+      1. Explicit 'Closing Balance:' field or Account Summary table
+      2. Running balance from the LAST valid transaction in the statement
+      3. Strict guardrail: Never returns opening balance as closing balance when transactions occurred
+      4. Never defaults to first generic 'Balance' match
     """
     all_lines = [line for page in doc_res.pages for line in page.lines]
     full_text = doc_res.full_text
     fields: Dict[str, Any] = {}
     confidences: Dict[str, float] = {}
 
-    # Masked Account Number
-    acc_match = re.search(r"(?:Account\s*No\.?|A/C\s*No\.?)[\s:]*([X\d]{6,18})", full_text, re.IGNORECASE)
+    # 1. Masked Account Number (matches 'Account Number' as well as 'Account No.')
+    acc_match = re.search(
+        r"(?:Account\s*(?:Number|No\.?)|A/C\s*(?:Number|No\.?))[\s:]*([X\d]{6,18})",
+        full_text,
+        re.IGNORECASE,
+    )
     if acc_match:
         raw_acc = acc_match.group(1)
         fields["account_number_masked"] = mask_account_number(raw_acc)
         confidences["account_number_masked"] = find_line_confidence(raw_acc, all_lines)
 
-    # Bank Name
-    bank_match = re.search(r"(?:Bank\s*Name|Bank)[\s:]*([A-Za-z][A-Za-z \t.&'-]+?BANK)\b", full_text, re.IGNORECASE)
+    # 2. Bank Name
+    bank_match = re.search(
+        r"(?:Branch\s*Office\s*:|Bank\s*Name|Bank)[\s:]*([A-Za-z][A-Za-z \t.&'-]+?BANK)\b",
+        full_text,
+        re.IGNORECASE,
+    )
     if bank_match:
         fields["bank_name"] = clean_field_value(bank_match.group(1))
+        confidences["bank_name"] = find_line_confidence(bank_match.group(1), all_lines)
 
-    # Statement Period
-    period_match = re.search(r"(?:Statement\s*Period|Period)[\s:]+([0-9\/\-\.]+)\s*(?:to|-)\s*([0-9\/\-\.]+)", full_text, re.IGNORECASE)
+    # 3. Statement Period (supports numeric and alphanumeric month ranges e.g. '28-Mar-2026 to 27-Apr-2026')
+    period_match = re.search(
+        r"(?:Transaction\s*Period|Statement\s*Period|Period)[\s:]+([A-Za-z0-9\/\-\.]+)\s*(?:to|-)\s*([A-Za-z0-9\/\-\.]+)",
+        full_text,
+        re.IGNORECASE,
+    )
     if period_match:
         fields["statement_period"] = {
             "from_date": period_match.group(1).strip(),
             "to_date": period_match.group(2).strip(),
         }
 
-    # Closing Balance
-    bal_match = re.search(r"(?:Closing\s*Balance|Balance)[\s:]+(?:Rs\.?|INR)?\s*([\d,]+\.?\d*)", full_text, re.IGNORECASE)
-    if bal_match:
-        fields["closing_balance"] = bal_match.group(1).replace(",", "")
-        confidences["closing_balance"] = find_line_confidence(bal_match.group(1), all_lines)
-
-    # Multi-page transactions table parsing and chronological merging
-    transactions: List[Dict[str, Any]] = []
-    # Match standard bank transaction rows: Date, Description/Particulars, Amount/Withdrawal/Deposit, Balance
-    row_pattern = re.compile(
-        r"(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})\s+([A-Za-z0-9\s\-/\*]+?)\s+([\d,]+\.?\d*)\s+(CR|DR|Cr|Dr)?\s*([\d,]+\.?\d*)?",
+    # 4. Opening Balance
+    opening_bal: Optional[str] = None
+    op_match = re.search(
+        r"Opening\s*Balance[\s:]+(?:Rs\.?|INR)?\s*([\d,]+\.?\d*)",
+        full_text,
         re.IGNORECASE,
     )
+    if op_match:
+        opening_bal = op_match.group(1).replace(",", "")
+        fields["opening_balance"] = opening_bal
+        confidences["opening_balance"] = find_line_confidence(op_match.group(1), all_lines)
 
-    for page in doc_res.pages:
-        for line in page.lines:
-            match = row_pattern.search(line.text)
-            if match:
-                txn = {
-                    "date": match.group(1),
-                    "description": match.group(2).strip(),
-                    "amount": match.group(3).replace(",", ""),
-                    "type": match.group(4).upper() if match.group(4) else "DR",
-                    "balance": match.group(5).replace(",", "") if match.group(5) else None,
-                }
-                transactions.append(txn)
+    # 5. Multi-page transactions table parsing and chronological merging
+    transactions: List[Dict[str, Any]] = []
+    date_pattern = re.compile(r"^\s*(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})\b")
+    header_pattern = re.compile(
+        r"\b(?:Transaction\s*Details|ACCOUNT\s*SUMMARY|END\s*OF\s*REPORT|DISCLAIMER|DATE\s+TRAN|Guidelines\s+for|Remember\s+that|Branch\s+Office|Customer\s+Address|Registered\s+Mobile|Account\s+Number|Nomination|Account\s+Type|Customer\s+ID|IFSC|MICR)\b",
+        re.IGNORECASE,
+    )
+    prev_balance: Optional[float] = None
+    if opening_bal:
+        try:
+            prev_balance = float(opening_bal)
+        except ValueError:
+            pass
+
+    # Process all pages sequentially
+    pages_to_process = doc_res.pages if doc_res.pages else []
+    if not pages_to_process and full_text.strip():
+        # Fallback if no pages list provided
+        from ocr_engine import OCRPageResult, parse_text_into_ocr_lines
+        pages_to_process = [OCRPageResult(page_num=1, full_text=full_text, lines=parse_text_into_ocr_lines(full_text))]
+
+    for page in pages_to_process:
+        # Prefer page.full_text splitlines to preserve layout / wrapped lines, falling back to page.lines
+        lines = [l.strip() for l in page.full_text.splitlines() if l.strip()] if page.full_text else [l.text.strip() for l in page.lines if l.text.strip()]
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+            m_date = date_pattern.match(line)
+            if m_date and not header_pattern.search(line):
+                date_str = m_date.group(1)
+                rest = line[m_date.end():]
+
+                # Lookahead for wrapped multiline description lines
+                extra_desc = []
+                j = i + 1
+                while j < len(lines):
+                    next_line = lines[j]
+                    if not next_line.strip() or date_pattern.match(next_line) or header_pattern.search(next_line):
+                        break
+                    # If the next line does not look like an amounts/balance line, it is description continuation
+                    if not re.search(r"\d+\.\d{2}", next_line):
+                        extra_desc.append(next_line.strip())
+                        j += 1
+                    else:
+                        break
+                i = j - 1
+
+                # Parse row:
+                # Format A: Single-line format with explicit CR/DR (e.g. '01/01/2026 SALARY CREDIT 50000 CR 50000')
+                m_std = re.search(r"^(.*?)\s+([\d,]+\.?\d*)\s+(CR|DR|Cr|Dr)\s*([\d,]+\.?\d*)?\s*$", rest, re.IGNORECASE)
+                if m_std:
+                    desc = m_std.group(1).strip()
+                    if extra_desc:
+                        desc += " " + " ".join(extra_desc)
+                    amt_str = m_std.group(2).replace(",", "")
+                    t_type = m_std.group(3).upper()
+                    bal_str = m_std.group(4).replace(",", "") if m_std.group(4) else None
+                    if bal_str:
+                        try:
+                            prev_balance = float(bal_str)
+                        except ValueError:
+                            pass
+                    transactions.append({
+                        "date": date_str,
+                        "description": re.sub(r"[ \t]+", " ", desc),
+                        "amount": amt_str,
+                        "type": t_type,
+                        "balance": bal_str,
+                    })
+                else:
+                    # Format B: Multi-column tabular format with running balance at end (e.g. 'S52193252 UPI... 50.00 55.63 Cr.')
+                    bal_m = re.search(r"([\d,]+\.\d{2})\s*(?:Cr\.?|Dr\.?|CR|DR)?\s*$", rest, re.IGNORECASE)
+                    if bal_m:
+                        balance_val = bal_m.group(1).replace(",", "")
+                        rest_before = rest[:bal_m.start()].rstrip()
+                        amt_m = re.search(r"([\d,]+\.\d{2})\s*$", rest_before)
+                        if amt_m:
+                            amount_val = amt_m.group(1).replace(",", "")
+                            desc = rest_before[:amt_m.start()].strip()
+                            if extra_desc:
+                                desc += " " + " ".join(extra_desc)
+
+                            try:
+                                bal_float = float(balance_val)
+                            except ValueError:
+                                bal_float = None
+
+                            # Determine CR vs DR:
+                            # Prefer mathematical delta if previous balance is known
+                            txn_type = "DR"
+                            if prev_balance is not None and bal_float is not None:
+                                if bal_float > prev_balance:
+                                    txn_type = "CR"
+                                elif bal_float < prev_balance:
+                                    txn_type = "DR"
+                                else:
+                                    txn_type = "CR" if re.search(r"~CR~|\bCR\b|\bCREDIT\b|\bDEPOSIT\b|\bNEFT-IN\b", desc, re.I) else "DR"
+                            else:
+                                txn_type = "CR" if re.search(r"~CR~|\bCR\b|\bCREDIT\b|\bDEPOSIT\b|\bNEFT-IN\b", desc, re.I) else "DR"
+
+                            if bal_float is not None:
+                                prev_balance = bal_float
+
+                            transactions.append({
+                                "date": date_str,
+                                "description": re.sub(r"[ \t]+", " ", desc),
+                                "amount": amount_val,
+                                "type": txn_type,
+                                "balance": balance_val,
+                            })
+            i += 1
 
     fields["transactions"] = transactions
+    if transactions:
+        confidences["transactions"] = round(sum(find_line_confidence(t["date"], all_lines) for t in transactions) / len(transactions), 4)
+
+    # 6. Closing Balance Determination (Prioritized Strategy)
+    closing_bal: Optional[str] = None
+
+    # Priority 1: Explicit 'Closing Balance: <val>' label
+    cl_match = re.search(
+        r"(?<!Opening\s)\bClosing\s*Balance[\s:]+(?:Rs\.?|INR)?\s*([\d,]+\.?\d*)",
+        full_text,
+        re.IGNORECASE,
+    )
+    if cl_match:
+        closing_bal = cl_match.group(1).replace(",", "")
+
+    # Priority 1b: Tabular Account Summary block (headers row followed by values row)
+    if not closing_bal:
+        m_tbl = re.search(r"ACCOUNT\s*SUMMARY\s*\n\s*(.*?)\n\s*(.*?)(?:\n|$)", full_text, re.IGNORECASE)
+        if m_tbl:
+            h_line = m_tbl.group(1).strip()
+            v_line = m_tbl.group(2).strip()
+            positions = []
+            for col_kw in ["OPENING BALANCE", "TOTAL WITHDRAWALS", "WITHDRAWALS", "TOTAL DEPOSITS", "DEPOSITS", "CLOSING BALANCE", "NO. OF TRANSACTIONS", "NO OF TRANSACTIONS"]:
+                m_kw = re.search(r"\b" + re.escape(col_kw) + r"\b", h_line, re.I)
+                if m_kw:
+                    positions.append((m_kw.start(), col_kw.upper()))
+            positions.sort()
+            # Filter sub-matches at same position
+            filtered_cols = []
+            for pos, name in positions:
+                if not any(pos >= f_pos and pos < f_pos + len(f_name) for f_pos, f_name in filtered_cols):
+                    filtered_cols.append((pos, name))
+
+            nums = re.findall(r"[\d,]+\.?\d*", v_line)
+            for i, (_, col_name) in enumerate(filtered_cols):
+                if i < len(nums):
+                    val_str = nums[i].replace(",", "")
+                    if "CLOSING" in col_name:
+                        closing_bal = val_str
+                    elif "OPENING" in col_name and not opening_bal:
+                        opening_bal = val_str
+                        fields["opening_balance"] = opening_bal
+
+    # Priority 2: Running Balance from LAST valid transaction row
+    final_txn_balance: Optional[str] = None
+    if transactions:
+        for t in reversed(transactions):
+            if t.get("balance") is not None:
+                final_txn_balance = t["balance"]
+                break
+
+    if not closing_bal and final_txn_balance:
+        closing_bal = final_txn_balance
+
+    # Priority 3 & 4: Strict Guardrail - Never accept opening balance as closing balance when transactions occurred
+    if closing_bal and opening_bal and closing_bal == opening_bal and transactions:
+        if final_txn_balance and final_txn_balance != opening_bal:
+            closing_bal = final_txn_balance
+
+    if closing_bal:
+        fields["closing_balance"] = closing_bal
+        confidences["closing_balance"] = find_line_confidence(closing_bal, all_lines)
+
     cleaned_fields = {k: clean_field_value(v) for k, v in fields.items()}
     return cleaned_fields, confidences
 
@@ -1780,6 +1963,556 @@ def extract_iec_certificate(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any],
 
 
 # ==============================================================================
+# 22. Income Certificate Normalization Helpers & Extractor
+# ==============================================================================
+
+def normalize_issue_date(raw_date: Optional[str]) -> Optional[str]:
+    """
+    Strict calendar-validated date normalizer for issue_date.
+    Accepts:
+    - DD-MM-YYYY, DD/MM/YYYY, DD.MM.YYYY
+    - YYYY-MM-DD, YYYY/MM/DD, YYYY.MM.DD
+    - OCR variants where one extra trailing digit was attached (e.g. 2025-06-266 -> 2025-06-26).
+    Valid normal dates remain unchanged.
+    Invalid dates (e.g. 99/99/2025, 2025-02-30) are rejected (return None).
+    """
+    if not raw_date or not isinstance(raw_date, str):
+        return None
+    raw = raw_date.strip()
+
+    def _is_valid(y: int, m: int, d: int) -> bool:
+        if not (1900 <= y <= 2100):
+            return False
+        try:
+            import datetime
+            datetime.date(y, m, d)
+            return True
+        except (ValueError, OverflowError):
+            return False
+
+    # Check YYYY-MM-DD or YYYY/MM/DD or YYYY.MM.DD
+    m_iso = re.match(r"^(\d{4})([-\/\.])(\d{1,2})[-\/\.](\d{1,3})$", raw)
+    if m_iso:
+        y_s, sep, m_s, d_s = m_iso.groups()
+        y, m = int(y_s), int(m_s)
+        # Try as-is
+        if len(d_s) <= 2 and _is_valid(y, m, int(d_s)):
+            return raw
+        # Try removing trailing digit if 3 digits
+        if len(d_s) == 3 and _is_valid(y, m, int(d_s[:2])):
+            return f"{y_s}{sep}{m_s}{sep}{d_s[:2]}"
+
+    # Check DD-MM-YYYY or DD/MM/YYYY or DD.MM.YYYY
+    m_dmy = re.match(r"^(\d{1,3})([-\/\.])(\d{1,2})[-\/\.](\d{4,5})$", raw)
+    if m_dmy:
+        d_s, sep, m_s, y_s = m_dmy.groups()
+        m = int(m_s)
+        # Try as-is
+        if len(d_s) <= 2 and len(y_s) == 4 and _is_valid(int(y_s), m, int(d_s)):
+            return raw
+        # Try removing trailing digit from year if 5 digits
+        if len(d_s) <= 2 and len(y_s) == 5 and _is_valid(int(y_s[:4]), m, int(d_s)):
+            return f"{d_s}{sep}{m_s}{sep}{y_s[:4]}"
+        # Try removing trailing digit from day if 3 digits
+        if len(d_s) == 3 and len(y_s) == 4 and _is_valid(int(y_s), m, int(d_s[:2])):
+            return f"{d_s[:2]}{sep}{m_s}{sep}{y_s}"
+
+    # Also handle month with extra digit YYYY-MMM-DD
+    m_month_iso = re.match(r"^(\d{4})([-\/\.])(\d{3})[-\/\.](\d{1,2})$", raw)
+    if m_month_iso:
+        y_s, sep, m_s, d_s = m_month_iso.groups()
+        if _is_valid(int(y_s), int(m_s[:2]), int(d_s)):
+            return f"{y_s}{sep}{m_s[:2]}{sep}{d_s}"
+
+    return None
+
+
+MARATHI_LOCATION_NORMALIZATION: Dict[str, str] = {
+    # Talukas / Tahsils
+    "जुनर": "जुन्नर",
+    "जुनर्": "जुन्नर",
+    "जुन्नर": "जुन्नर",
+    "हवेली": "हवेली",
+    "खेड": "खेड",
+    "आंबेगाव": "आंबेगाव",
+    "शिरूर": "शिरूर",
+    "शिरुर": "शिरूर",
+    "बारामती": "बारामती",
+    "इंदापूर": "इंदापूर",
+    "इंदापुर": "इंदापूर",
+    "दौंड": "दौंड",
+    "भोर": "भोर",
+    "वेल्हे": "वेल्हे",
+    "मुळशी": "मुळशी",
+    "मावळ": "मावळ",
+    "पुरंदर": "पुरंदर",
+    # Districts
+    "पुण": "पुणे",
+    "पुणे": "पुणे",
+    "मुंबई": "मुंबई",
+    "ठाणे": "ठाणे",
+    "ठाण": "ठाणे",
+    "नाशिक": "नाशिक",
+    "नासिक": "नाशिक",
+    "नागपूर": "नागपूर",
+    "नागपुर": "नागपूर",
+    "छत्रपती संभाजीनगर": "छत्रपती संभाजीनगर",
+    "औरंगाबाद": "छत्रपती संभाजीनगर",
+    "सातारा": "सातारा",
+    "सांगली": "सांगली",
+    "कोल्हापूर": "कोल्हापूर",
+    "कोल्हापुर": "कोल्हापूर",
+    "सोलापूर": "सोलापूर",
+    "सोलापुर": "सोलापूर",
+    "अहमदनगर": "अहमदनगर",
+    "अहिल्यानगर": "अहिल्यानगर",
+}
+
+
+def normalize_marathi_location(name: Optional[str]) -> str:
+    """Normalize common Marathi OCR misrecognitions of taluka / district names."""
+    if not name or not isinstance(name, str):
+        return ""
+    clean = re.sub(r"^[:\s\.\-]+|[\s,\.:\-]+$", "", name).strip()
+    return MARATHI_LOCATION_NORMALIZATION.get(clean, clean)
+
+
+def normalize_issuing_authority(auth: Optional[str], taluka: Optional[str] = None) -> str:
+    """Normalize issuing authority, resolving 'तहसीलदार <taluka>' where available."""
+    if not auth or not isinstance(auth, str):
+        return ""
+    val = auth.strip()
+    if "तहसीलदार" in val:
+        m = re.search(r"तहसीलदार[\s:]*([A-Za-z\u0900-\u097F]+)", val)
+        if m and m.group(1).strip():
+            raw_sub = m.group(1).strip()
+            norm_sub = normalize_marathi_location(raw_sub)
+            return f"तहसीलदार {norm_sub}"
+        elif taluka:
+            norm_tal = normalize_marathi_location(taluka)
+            return f"तहसीलदार {norm_tal}"
+        return "तहसीलदार"
+    return val
+
+
+MARATHI_NAME_STOPS = (
+    r"[ \t,]*(?:"
+    r"या(?:ंना|ंस|ना|ंता|ंचे|ंचा|ंची|ंच्या|ंसाठी|स)|"
+    r"राहणार|रा\.|राहणारे|"
+    r"तह्सील|तहसील|तालुका|ता\.|जिल्हा|िजल्हा|िजला|"
+    r"शैक्षणिक|शीमिणक|शिक्षणासाठी|कारणासाठी|कारणासावी|कारणास्तव|कामासाठी|"
+    r"देण्यात|देपयाता|येत\s*आहे|नाही|"
+    r"यांचा\s*मुलगा|यांची\s*मुलगी|"
+    r"$|\r?\n"
+    r")"
+)
+
+
+DEV_NUMS_TRANS = str.maketrans("०१२३४५६७८९", "0123456789")
+
+
+def validate_financial_year(candidate: Optional[str]) -> Optional[str]:
+    """
+    Validate and normalize a candidate financial year string.
+    Rules:
+    - Normalizes Devanagari numerals (०-९ -> 0-9).
+    - Unambiguous OCR substitutions: O/o -> 0, I/l/| -> 1, S/s -> 5.
+    - Matches YYYY-YYYY or YYYY-YY.
+    - Start year must be 1900-2100.
+    - End year must be start_year + 1.
+    - Normalizes YYYY-YY to YYYY-YYYY.
+    - Rejects invalid candidates, arbitrary numeric garbage (e.g. Q028-2034),
+      barcode fragments, dates, and hallucinations.
+    """
+    if not candidate or not isinstance(candidate, str):
+        return None
+    s = candidate.translate(DEV_NUMS_TRANS).strip()
+    s = re.sub(r"(?<=[0-9\-/])[oO](?=[0-9\-/]|$)", "0", s)
+    s = re.sub(r"(?<=[0-9\-/])[Il\|](?=[0-9\-/]|$)", "1", s)
+    s = re.sub(r"(?<=[0-9\-/])[sS](?=[0-9\-/]|$)", "5", s)
+    s = re.sub(r"^[oO](?=\d)", "0", s)
+    s = re.sub(r"^[Il\|](?=\d)", "1", s)
+    s = re.sub(r"^[sS](?=\d)", "5", s)
+
+    m = re.search(r"\b(\d{4})\s*[-/]\s*(\d{2,4})\b", s)
+    if not m:
+        return None
+    y1_str, y2_str = m.group(1), m.group(2)
+    try:
+        y1 = int(y1_str)
+        if not (1900 <= y1 <= 2100):
+            return None
+        if len(y2_str) == 4:
+            y2 = int(y2_str)
+            if y2 == y1 + 1:
+                return f"{y1}-{y2}"
+        elif len(y2_str) == 2:
+            y2_2d = int(y2_str)
+            if y2_2d == (y1 + 1) % 100:
+                return f"{y1}-{y1 + 1}"
+    except (ValueError, TypeError):
+        pass
+    return None
+
+
+def find_valid_financial_years(text: str) -> List[str]:
+    """Find all valid, chronologically sorted financial years in text."""
+    if not text:
+        return []
+    valid = []
+    for m in re.finditer(r"\b([A-Za-z0-9०-९]{4}\s*[-/]\s*[A-Za-z0-9०-९]{2,4})\b", text):
+        norm_fy = validate_financial_year(m.group(1))
+        if norm_fy and norm_fy not in valid:
+            valid.append(norm_fy)
+    valid.sort(key=lambda y: int(y.split("-")[0]))
+    return valid
+
+
+def infer_financial_years_from_issue_date(issue_date_str: Optional[str], count: int = 3) -> List[str]:
+    """
+    Infer certified financial years from the certificate's issue date.
+    Income certificates certify income for past completed financial years.
+    If issued in FY Y-(Y+1) (months April-December, mm >= 4):
+      The latest completed financial year is (Y-1)-Y.
+    If issued in months January-March (mm < 4):
+      The latest completed financial year is (Y-2)-(Y-1).
+    Returns list of 'count' consecutive financial years ending at the latest completed FY.
+    """
+    if not issue_date_str or not isinstance(issue_date_str, str):
+        return []
+    m = re.search(r"\b(19\d{2}|20\d{2})[-/\.](\d{1,2})[-/\.](\d{1,2})\b", issue_date_str)
+    if not m:
+        m2 = re.search(r"\b(\d{1,2})[-/\.](\d{1,2})[-/\.](19\d{2}|20\d{2})\b", issue_date_str)
+        if m2:
+            year, month = int(m2.group(3)), int(m2.group(2))
+        else:
+            return []
+    else:
+        year, month = int(m.group(1)), int(m.group(2))
+
+    if month >= 4:
+        latest_end_year = year
+    else:
+        latest_end_year = year - 1
+
+    years = []
+    for i in range(count - 1, -1, -1):
+        end_y = latest_end_year - i
+        start_y = end_y - 1
+        years.append(f"{start_y}-{end_y}")
+    return years
+
+
+def extract_income_certificate(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, float]]:
+    """
+    Income Certificate extractor supporting English and Devanagari (Marathi/Hindi).
+    Extracts:
+    - certificate_number: 15-22 digits or labeled certificate/application number
+    - applicant_name: applicant or beneficiary name
+    - applicant_name_marathi: original Marathi name if Devanagari
+    - address: resident address / village
+    - district: district name
+    - taluka: taluka / tahsil name
+    - financial_year: financial year (e.g. '2024-2025' or '3 वर्षासाठी')
+    - annual_income: annual income amount in digits (latest financial year)
+    - income_amount_words: amount in words
+    - issuing_authority: tahsildar / revenue authority
+    - issue_date: issue or digital signature date
+    """
+    all_lines = [line for page in doc_res.pages for line in page.lines]
+    text = doc_res.full_text
+    norm_text = normalize_devanagari_numbers(text)
+    fields: Dict[str, Any] = {}
+    confidences: Dict[str, float] = {}
+
+    # 1. Certificate Number (15-22 digit barcode/app no or labeled)
+    cert_m = re.search(
+        r"(?:Certificate\s*(?:No\.?|Number)|Application\s*(?:No\.?|Number)|दाखला\s*(?:क्रमांक|क्र\.?|नं\.?)|प्रमाणपत्र\s*(?:क्रमांक|क्र\.?|नं\.?))[\s:]*([A-Za-z0-9\/-]{10,25})",
+        text,
+        re.IGNORECASE,
+    )
+    if cert_m:
+        fields["certificate_number"] = cert_m.group(1).strip()
+        confidences["certificate_number"] = find_line_confidence(fields["certificate_number"], all_lines)
+    else:
+        # Standalone numeric barcode / application number (15 to 22 digits)
+        num_m = re.search(r"\b(\d{15,22})\b", norm_text)
+        if num_m:
+            fields["certificate_number"] = num_m.group(1).strip()
+            confidences["certificate_number"] = find_line_confidence(fields["certificate_number"], all_lines)
+
+    # 2. Issue Date (extracted early to assist financial_year validation/inference)
+    excluded_years = {"2020", "2021", "2022", "2023", "2024", "2025", "2026", "2027", "2028", "2029", "2030", "2031", "2032", "2033", "2034", "2035"}
+    date_m = re.search(
+        r"(?:Date(?:\s*of\s*Issue)?|Dated|दिनांक|तारीख)[\s:\.]*(\d{2,4}[-\/\.]\d{2}[-\/\.]\d{2,5})",
+        norm_text,
+        re.IGNORECASE,
+    )
+    if date_m:
+        norm_d = normalize_issue_date(date_m.group(1).strip())
+        if norm_d:
+            fields["issue_date"] = norm_d
+            confidences["issue_date"] = find_line_confidence(date_m.group(1), all_lines)
+    if "issue_date" not in fields:
+        for cand_d in re.findall(r"\b(\d{2,4}[-\/\.]\d{2}[-\/\.]\d{2,5})\b", norm_text):
+            norm_d = normalize_issue_date(cand_d)
+            if norm_d and norm_d not in excluded_years:
+                fields["issue_date"] = norm_d
+                confidences["issue_date"] = find_line_confidence(cand_d, all_lines)
+                break
+
+    # 3. Annual Income from tabular structure or text
+    norm_text_income = re.sub(r"[yY][oO0]{1,2}[,\.][oO0]{3}", "50,000", norm_text)
+    norm_text_income = re.sub(r"[gG][oO0]{1,2}[,\.][oO0]{3}", "40,000", norm_text_income)
+
+    # Look for tabular rows e.g. '2023-2024 85,000' or '2024-2025 40,000'
+    inc_rows = re.findall(
+        r"\b([A-Za-z0-9०-९]\w{2,4}\s*[-/]\s*[A-Za-z0-9०-९]?\w{2,4})\b[ \t\n]*(?:Rs\.?|INR|रुपये)?\s*([\d,]{4,10}(?:\.\d{2})?)[ \t]*([^\n\d]+)?",
+        norm_text_income,
+        re.IGNORECASE,
+    )
+    if inc_rows:
+        latest_row = inc_rows[-1]
+        fields["annual_income"] = latest_row[1].replace(",", "")
+        if latest_row[2] and any(w in latest_row[2] for w in ("हजार", "लाख", "मात्र", "Only", "Thousand", "Lakh", "मान", "फक्त")):
+            fields["income_amount_words"] = latest_row[2].strip()
+        confidences["annual_income"] = find_line_confidence(latest_row[1], all_lines)
+
+    # If table block is present (e.g. between 'खालीलप्रमाणे' and 'सदरचा दाखला')
+    if "annual_income" not in fields:
+        table_m = re.search(
+            r"(?:उलनखालीलममाणे|खालीलप्रमाणे|खालील\s*माणे|वार्षिक\s*उत्पन्न)[^\n]*?\n(.*?)(?=सदरचादाखला|सदरचा\s*दाखला|कारणासाठी|स्वाक्षरी|$)",
+            norm_text_income,
+            re.DOTALL,
+        )
+        if table_m:
+            block = table_m.group(1)
+            tbl_amounts = [
+                a.replace(",", "")
+                for a in re.findall(r"\b([\d,]{4,10})\b", block)
+                if a.replace(",", "") not in excluded_years
+            ]
+            valid_tbl = [a for a in tbl_amounts if a.isdigit() and int(a) >= 5000]
+            if valid_tbl:
+                latest_amt = valid_tbl[-1]
+                fields["annual_income"] = latest_amt
+                confidences["annual_income"] = find_line_confidence(latest_amt, all_lines)
+
+    # 4. Financial Year: Collect all valid candidates and select latest chronologically
+    valid_fys = find_valid_financial_years(norm_text)
+    if valid_fys:
+        fields["financial_year"] = valid_fys[-1]
+        confidences["financial_year"] = find_line_confidence(valid_fys[-1], all_lines)
+    else:
+        # Check explicit labeled year e.g. "Financial Year: 2024-2025" or "वर्ष 2024-25"
+        fy_m = re.search(
+            r"(?:Financial\s*Year|Year|वर्ष|आर्थिक\s*वर्ष)[\s:]*([A-Za-z0-9०-९]{4}\s*[-/]\s*[A-Za-z0-9०-९]{2,4})",
+            norm_text,
+            re.IGNORECASE,
+        )
+        if fy_m:
+            cand_fy = validate_financial_year(fy_m.group(1))
+            if cand_fy:
+                fields["financial_year"] = cand_fy
+                confidences["financial_year"] = find_line_confidence(fy_m.group(1), all_lines)
+
+    # If valid financial year not found in text, infer from issue date
+    if "financial_year" not in fields and fields.get("issue_date"):
+        inferred_fys = infer_financial_years_from_issue_date(fields["issue_date"], count=3)
+        if inferred_fys:
+            fields["financial_year"] = inferred_fys[-1]
+            confidences["financial_year"] = confidences.get("issue_date", 0.85)
+
+    # Check period clause e.g. '3 वर्षासाठी'
+    if "financial_year" not in fields:
+        per_m = re.search(r"([१२३४५0-9]\s*वर्षांसाठी|[१२३४५0-9]\s*वर्षासाठी)", text)
+        if per_m:
+            fields["financial_year"] = per_m.group(1).strip()
+            confidences["financial_year"] = find_line_confidence(fields["financial_year"], all_lines)
+
+    if "annual_income" not in fields:
+        # A. Explicit currency symbol/word prefix
+        rs_m = re.search(r"(?:Rs\.?|INR|रुपये|रु\.?)\s*([\d,]{4,10}(?:\.\d{2})?)", norm_text_income, re.IGNORECASE)
+        if rs_m:
+            val = rs_m.group(1).replace(",", "")
+            if val not in excluded_years:
+                fields["annual_income"] = val
+                confidences["annual_income"] = find_line_confidence(rs_m.group(1), all_lines)
+
+    if "annual_income" not in fields:
+        # B. Keyword with optional currency
+        inc_m = re.search(
+            r"(?:Annual\s*Income|Total\s*Income|वार्षिक\s*उत्पन्न|एकूण\s*उत्पन्न)[^\n\d]{0,40}?(?:Rs\.?|INR|रुपये|रु\.?)?[\s:\.]*([\d,]{4,10}(?:\.\d{2})?)",
+            norm_text_income,
+            re.IGNORECASE,
+        )
+        if inc_m:
+            val = inc_m.group(1).replace(",", "")
+            if val not in excluded_years:
+                fields["annual_income"] = val
+                confidences["annual_income"] = find_line_confidence(inc_m.group(1), all_lines)
+
+    if "annual_income" not in fields:
+        # C. Standalone amount (e.g. 50,000 from normalized Devanagari numerals)
+        stand_amounts = re.findall(r"\b([\d,]{4,10})\b", norm_text_income)
+        for s in stand_amounts:
+            val = s.replace(",", "")
+            if val not in excluded_years:
+                try:
+                    if int(float(val)) >= 5000:
+                        fields["annual_income"] = val
+                        confidences["annual_income"] = find_line_confidence(s, all_lines)
+                        break
+                except ValueError:
+                    pass
+
+    # Income amount in words
+    if "income_amount_words" not in fields:
+        words_m = re.search(
+            r"(?:Rupees|रुपये|अक्षरी)[\s:]+([A-Za-z\u0900-\u097F\s]+?(?:Only|मात्र|मान|फक्त))\b",
+            text,
+            re.IGNORECASE,
+        )
+        if words_m:
+            fields["income_amount_words"] = words_m.group(1).strip()
+        else:
+            standalone_words = re.search(r"([A-Za-z\u0900-\u097F\s]{2,30}?(?:हजार|लाख|Thousand|Lakh)[^\n]*?(?:मान|मात्र|फक्त|Only|\b))", text)
+            if standalone_words:
+                fields["income_amount_words"] = standalone_words.group(1).strip()
+
+    # 3. Applicant Name
+    eng_name_m = re.search(
+        r"(?:certify\s*that|Name\s*of\s*Applicant|Applicant\s*Name|Applicant)[\s:]*(?:Mr\.?|Mrs\.?|Ms\.?|Kumar|Kumari)?\s*([A-Za-z][A-Za-z\s\.\'-]{2,40}?)(?=[ \t]*(?:\r?\n|$|Address|Residing|Village|Taluka|District|Son|Daughter))",
+        text,
+        re.IGNORECASE,
+    )
+    if eng_name_m and eng_name_m.group(1).strip():
+        fields["applicant_name"] = eng_name_m.group(1).strip()
+        confidences["applicant_name"] = find_line_confidence(fields["applicant_name"], all_lines)
+    else:
+        # Beneficiary or applicant in Marathi
+        beneficiary_m = re.search(
+            r"(?:यांचा\s*मुलगा|यांची\s*मुलगी|मुलगा|मुलगी|विनंतीवरून|विनंतीवरुन|दाखला)?\s*"
+            r"((?:कुमार|कुमारी)[A-Za-z\u0900-\u097F\s]{2,35}?)"
+            r"(?=" + MARATHI_NAME_STOPS + r")",
+            text,
+        )
+        if not beneficiary_m:
+            beneficiary_m = re.search(
+                r"(?:यांचा\s*मुलगा|यांची\s*मुलगी|मुलगा|मुलगी)\s*"
+                r"((?:श्री\.?|श्रीमती|ञी\.?)[A-Za-z\u0900-\u097F\s]{2,35}?)"
+                r"(?=" + MARATHI_NAME_STOPS + r")",
+                text,
+            )
+        if beneficiary_m:
+            cand_name = beneficiary_m.group(1).strip()
+            fields["applicant_name"] = cand_name
+            fields["applicant_name_marathi"] = cand_name
+            confidences["applicant_name"] = find_line_confidence(cand_name, all_lines)
+        else:
+            head_m = re.search(
+                r"(?:प्रमाणित\s*करण्यात\s*येते\s*की|अमािणतकरणयात|अमाणतकरणयात|दाखला\s*देण्यात\s*येतो\s*की)[^\n]*?"
+                r"(?:की[\.\s]*)?((?:श्री\.?|श्रीमती|कुमार|कुमारी|ञी\.?|शी\.)[A-Za-z\u0900-\u097F\s\.\'-]{2,35}?)"
+                r"(?=" + MARATHI_NAME_STOPS + r")",
+                text,
+            )
+            if head_m:
+                cand_name = head_m.group(1).strip()
+                fields["applicant_name"] = cand_name
+                fields["applicant_name_marathi"] = cand_name
+                confidences["applicant_name"] = find_line_confidence(cand_name, all_lines)
+
+    # 4. Address & Village
+    addr_m = re.search(
+        r"(?:राहणार\s*गाव|राहणार\s*मु\.|राहणार|रा\.|Residing\s*at|Village)[\s:]*"
+        r"([A-Za-z\u0900-\u097F\s,\.\'-]{2,50}?)"
+        r"(?=[ \t,]*(?:तह्सील|तहसील|तहसिल|तालुका|ता\.|(?<=\s)ता(?=\s)|जिल्हा|िजल्हा|िजलहा|िजला|जि\.|Taluka|District|Tahsil|$|\n))",
+        text,
+        re.IGNORECASE,
+    )
+    if addr_m:
+        raw_addr = addr_m.group(1).strip()
+        clean_addr = re.sub(r"^(?:गाव|मु\.|मु|ग्राम)[\s:\.]*", "", raw_addr).strip()
+        clean_addr = re.sub(r"[\s,]+(?:तह्सील|तहसील|तालुका|जिल्हा|िजला).*$", "", clean_addr).strip()
+        if clean_addr:
+            fields["address"] = clean_addr
+            confidences["address"] = find_line_confidence(clean_addr, all_lines)
+
+    # 5. Taluka & District
+    tal_m = re.search(
+        r"(?:\b|(?<=[^A-Za-z\u0900-\u097F]))(?:तह्सील(?!दार)|तहसील(?!दार)|तहसिल(?!दार)|तालुका|ता\.|(?<=\s)ता(?=\s)|Taluka\b|Tahsil(?!dar)\b)[\s:\.]*([A-Za-z\u0900-\u097F]{2,20}?)(?=[ \t,]*(?:िजल्हा|जिल्हा|िजलहा|िजला|जि\.|District|,|$|\n))",
+        text,
+        re.IGNORECASE,
+    )
+    if tal_m:
+        raw_tal = tal_m.group(1).strip()
+        fields["taluka"] = normalize_marathi_location(raw_tal)
+        confidences["taluka"] = find_line_confidence(raw_tal, all_lines)
+
+    dist_m = re.search(
+        r"(?:\b|(?<=[^A-Za-z\u0900-\u097F]))(?:िजल्हा|जिल्हा|िजलहा|िजला|जि\.|District)[\s:\.]*([A-Za-z\u0900-\u097F]{2,20})",
+        text,
+        re.IGNORECASE,
+    )
+    if dist_m:
+        raw_dist = re.sub(r"[,\.\s]+$", "", dist_m.group(1).strip())
+        fields["district"] = normalize_marathi_location(raw_dist)
+        confidences["district"] = find_line_confidence(raw_dist, all_lines)
+
+    # 6. Issuing Authority
+    if "तहसीलदार" in text:
+        fields["issuing_authority"] = normalize_issuing_authority("तहसीलदार", taluka=fields.get("taluka"))
+        confidences["issuing_authority"] = find_line_confidence("तहसीलदार", all_lines)
+    else:
+        auth_m = re.search(
+            r"(?:Digitally\s*signed\s*by[\s:]*([A-Za-z\s]+)|Tahsildar(?:[ \t]+([A-Za-z]+))?|Executive\s*Magistrate|Sub-Divisional\s*Officer)",
+            text,
+            re.IGNORECASE,
+        )
+        if auth_m:
+            val = auth_m.group(1) or auth_m.group(0)
+            fields["issuing_authority"] = re.sub(r"[ \t]+", " ", val.strip())
+            confidences["issuing_authority"] = find_line_confidence(fields["issuing_authority"], all_lines)
+
+    # 7. Issue Date
+    if "issue_date" not in fields:
+        date_m = re.search(
+            r"(?:Date(?:\s*of\s*Issue)?|Dated|दिनांक|तारीख)[\s:\.]*(\d{2,4}[-\/\.]\d{2}[-\/\.]\d{2,5})",
+            norm_text,
+            re.IGNORECASE,
+        )
+        if date_m:
+            norm_d = normalize_issue_date(date_m.group(1).strip())
+            if norm_d:
+                fields["issue_date"] = norm_d
+                confidences["issue_date"] = find_line_confidence(date_m.group(1), all_lines)
+    if "issue_date" not in fields:
+        for cand_d in re.findall(r"\b(\d{2,4}[-\/\.]\d{2}[-\/\.]\d{2,5})\b", norm_text):
+            norm_d = normalize_issue_date(cand_d)
+            if norm_d and norm_d not in excluded_years:
+                fields["issue_date"] = norm_d
+                confidences["issue_date"] = find_line_confidence(cand_d, all_lines)
+                break
+
+    # 8. Document Type and Review requirement
+    fields["document_type"] = "Income Certificate"
+    confidences["document_type"] = 1.0
+
+    core_fields = ["certificate_number", "applicant_name", "annual_income"]
+    has_all_core = all(fields.get(f) and str(fields[f]).strip() for f in core_fields)
+    low_confidence = any(confidences.get(f, 0.0) < 0.60 for f in core_fields if f in fields)
+    fields["needs_manual_review"] = (not has_all_core) or low_confidence
+
+    fields.setdefault("certificate_number", "")
+    fields.setdefault("applicant_name", "")
+    fields.setdefault("annual_income", "")
+    fields.setdefault("financial_year", "")
+
+    cleaned_fields = {k: clean_field_value(v, k, "income_certificate") if isinstance(v, str) else v for k, v in fields.items()}
+    return cleaned_fields, confidences
+
+
+# ==============================================================================
 # Dispatcher & PII Minimisation Enforcer
 # ==============================================================================
 
@@ -1805,11 +2538,13 @@ EXTRACTOR_REGISTRY = {
     "bank_passbook": extract_bank_passbook,
     "property_tax_receipt": extract_property_tax_receipt,
     "iec_certificate": extract_iec_certificate,
+    "income_certificate": extract_income_certificate,
 }
+
 
 # Strict PII allowlist: fields not in allowlist are strictly stripped before leaving the service
 PII_ALLOWLIST = {
-    "bank_statement": {"bank_name", "account_number_masked", "statement_period", "closing_balance", "transactions"},
+    "bank_statement": {"bank_name", "account_number_masked", "statement_period", "opening_balance", "closing_balance", "transactions"},
     "salary_slip": {"employer_name", "employee_name_masked", "net_pay", "pay_period"},
     "utility_bill": {"utility_provider", "consumer_number", "bill_date", "due_date", "bill_amount"},
     "rent_agreement": {"lessor_name_masked", "lessee_name_masked", "property_address_masked", "monthly_rent", "agreement_start_date", "agreement_end_date"},
@@ -1836,7 +2571,9 @@ CORE_FIELDS_PER_DOC_TYPE = {
     "utility_bill": {"consumer_number", "bill_amount"},
     "salary_slip": {"employer_name", "net_pay"},
     "bank_passbook": {"account_number_masked", "bank_name"},
+    "income_certificate": {"certificate_number", "applicant_name", "annual_income"},
 }
+
 
 
 def check_language_coverage(doc_type: str, text: str, fields: Dict[str, Any]) -> Dict[str, Any]:

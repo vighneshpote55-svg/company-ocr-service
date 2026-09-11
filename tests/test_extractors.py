@@ -23,13 +23,14 @@ def create_mock_doc(text: str, conf: float = 0.98) -> OCRDocumentResult:
     return OCRDocumentResult(pages=[page], full_text=text, average_confidence=conf)
 
 
-def test_registry_contains_all_21_types():
+def test_registry_contains_all_22_types():
     expected_types = {
         "pan", "aadhaar", "cancelled_cheque", "udyam", "fssai",
         "shop_establishment", "bank_statement", "salary_slip",
         "utility_bill", "passport", "voter_id", "driving_licence", "itr",
         "gst_certificate", "certificate_of_incorporation", "partnership_deed",
         "rent_agreement", "form_16", "bank_passbook", "property_tax_receipt", "iec_certificate",
+        "income_certificate",
     }
     assert set(EXTRACTOR_REGISTRY.keys()) == expected_types
 
@@ -1120,5 +1121,436 @@ def test_marathi_salary_slip_and_passbook_bleed_regression():
     assert "खाते क्रमांक" not in b_fields["account_holder_name_masked"]
 
 
+# ==============================================================================
+# Bank Statement Extraction, Multi-Page Merging & Closing Balance Tests
+# ==============================================================================
+
+def test_bank_statement_opening_balance_not_closing_balance():
+    """TEST 1: Opening balance (5.63) must not become closing balance when closing balance is 130.43."""
+    text = """
+    India Post Payments Bank
+    Branch Office : India Post Payments Bank
+    Account Number 034210312697
+    Transaction Details
+    DATE TRAN ID TRANSACTION PARTICULARS WITHDRWAL DEPOSIT BALANCE
+    Opening Balance : 5.63 Cr.
+    30-03-2026 S52193252 UPI~739184792865~CR~SANKET 50.00 55.63 Cr.
+    02-04-2026 S62620264 UPI~609294659181~DR~VIGHNESH 20.00 35.63 Cr.
+    Closing Balance: 35.63
+    """
+    fields, _ = extract_document_fields("bank_statement", create_mock_doc(text))
+    assert fields.get("opening_balance") == "5.63"
+    assert fields.get("closing_balance") == "35.63"
+    assert fields.get("closing_balance") != fields.get("opening_balance")
 
 
+def test_bank_statement_transactions_extracted_not_empty():
+    """TEST 2: Transactions list is populated with structured dicts when valid rows exist."""
+    text = """
+    HDFC BANK
+    Account No. 987654321012
+    01/01/2026 SALARY CREDIT 50000 CR 50000
+    05/01/2026 ATM WITHDRAWAL 2000 DR 48000
+    """
+    fields, _ = extract_document_fields("bank_statement", create_mock_doc(text))
+    txns = fields.get("transactions", [])
+    assert len(txns) == 2
+    assert txns[0]["date"] == "01/01/2026"
+    assert txns[0]["amount"] == "50000"
+    assert txns[0]["type"] == "CR"
+    assert txns[0]["balance"] == "50000"
+    assert txns[1]["date"] == "05/01/2026"
+    assert txns[1]["amount"] == "2000"
+    assert txns[1]["type"] == "DR"
+    assert txns[1]["balance"] == "48000"
+
+
+def test_bank_statement_multi_page_all_pages_processed():
+    """TEST 3: Multiple pages are processed and transactions are aggregated chronologically."""
+    p1 = OCRPageResult(
+        page_num=1,
+        full_text="""
+        India Post Payments Bank
+        Account Number 034210312697
+        Opening Balance : 100.00 Cr.
+        30-03-2026 S1001 UPI~DEPOSIT 50.00 150.00 Cr.
+        """,
+        lines=[],
+        average_confidence=0.98,
+    )
+    p2 = OCRPageResult(
+        page_num=2,
+        full_text="""
+        02-04-2026 S1002 UPI~WITHDRAW 30.00 120.00 Cr.
+        """,
+        lines=[],
+        average_confidence=0.98,
+    )
+    p3 = OCRPageResult(
+        page_num=3,
+        full_text="""
+        05-04-2026 S1003 UPI~WITHDRAW 20.00 100.00 Cr.
+        Closing Balance: 100.00
+        """,
+        lines=[],
+        average_confidence=0.98,
+    )
+    doc_res = OCRDocumentResult(
+        pages=[p1, p2, p3],
+        full_text=p1.full_text + "\n" + p2.full_text + "\n" + p3.full_text,
+        average_confidence=0.98,
+    )
+    fields, _ = extract_document_fields("bank_statement", doc_res)
+    txns = fields.get("transactions", [])
+    assert len(txns) == 3
+    assert txns[0]["date"] == "30-03-2026"
+    assert txns[1]["date"] == "02-04-2026"
+    assert txns[2]["date"] == "05-04-2026"
+    assert fields["closing_balance"] == "100.00"
+
+
+def test_bank_statement_repeated_headers_ignored():
+    """TEST 4: Repeated table headers on subsequent pages are ignored and generate no false rows."""
+    p1 = OCRPageResult(
+        page_num=1,
+        full_text="""
+        Transaction Details
+        DATE TRAN ID TRANSACTION PARTICULARS WITHDRWAL DEPOSIT BALANCE
+        30-03-2026 S1001 UPI~DEPOSIT 50.00 50.00 Cr.
+        """,
+        lines=[],
+        average_confidence=0.98,
+    )
+    p2 = OCRPageResult(
+        page_num=2,
+        full_text="""
+        Transaction Details
+        DATE TRAN ID TRANSACTION PARTICULARS WITHDRWAL DEPOSIT BALANCE
+        02-04-2026 S1002 UPI~DEPOSIT 20.00 70.00 Cr.
+        """,
+        lines=[],
+        average_confidence=0.98,
+    )
+    doc_res = OCRDocumentResult(
+        pages=[p1, p2],
+        full_text=p1.full_text + "\n" + p2.full_text,
+        average_confidence=0.98,
+    )
+    fields, _ = extract_document_fields("bank_statement", doc_res)
+    txns = fields.get("transactions", [])
+    assert len(txns) == 2
+    for t in txns:
+        assert "DATE" not in t["date"]
+        assert "TRAN ID" not in t["description"]
+
+
+def test_bank_statement_closing_balance_from_explicit_summary():
+    """TEST 5: Closing balance comes from explicit closing balance when available."""
+    text = """
+    HDFC BANK
+    Account No. 123456789012
+    01/01/2026 SALARY 50000 CR 50000
+    Closing Balance: Rs. 50,000.00
+    """
+    fields, _ = extract_document_fields("bank_statement", create_mock_doc(text))
+    assert fields.get("closing_balance") == "50000.00"
+
+
+def test_bank_statement_closing_balance_from_last_running_balance():
+    """TEST 6: When explicit closing balance is missing, closing balance comes from final transaction balance."""
+    text = """
+    HDFC BANK
+    Account No. 123456789012
+    Opening Balance: 1000.00
+    01/01/2026 SALARY CREDIT 50000 CR 51000.00
+    05/01/2026 UTILITY BILL 2500 DR 48500.00
+    """
+    fields, _ = extract_document_fields("bank_statement", create_mock_doc(text))
+    assert fields.get("opening_balance") == "1000.00"
+    # Final transaction balance is 48500.00
+    assert fields.get("closing_balance") == "48500.00"
+    assert fields.get("closing_balance") != "1000.00"
+
+
+def test_bank_statement_no_false_transactions_from_footers_or_disclaimers():
+    """TEST 7: No false transaction rows are generated from headers/footers/page numbers/guidelines."""
+    text = """
+    ACCOUNT SUMMARY
+    OPENING BALANCE TOTAL WITHDRAWALS TOTAL DEPOSITS CLOSING BALANCE No. of Transactions
+    5.63 8,781.2 8,906 130.43 100
+    ******************* END OF REPORT *******************
+    DISCLAIMER : Please review information provided in the statement
+    Call Us at 155299 / 033-22029000 Email Us at contact@ippbonline.in
+    Guidelines for safe and secure Mobile Banking
+    • Download India Post Payment Bank's Mobile Banking App
+    • Never share the MPIN of your IPPB mobile app with anyone
+    • Never share the OTP for the transaction with anyone
+    Page 5 of 5
+    """
+    fields, _ = extract_document_fields("bank_statement", create_mock_doc(text))
+    txns = fields.get("transactions", [])
+    assert len(txns) == 0
+    assert fields.get("closing_balance") == "130.43"
+    assert fields.get("opening_balance") == "5.63"
+
+
+def test_bank_statement_real_ippb_pdf_extraction():
+    """Real Document Test: Parse the real 5-page IPPB statement PDF end-to-end."""
+    candidate_paths = [
+        "/home/vighnesh/PaddleOCR/uploads/original/160cdc65-7205-4147-8230-9682eef02478_AccountStatement_Report_6049286565_27042026_17_28 1.pdf",
+        "/home/vighnesh/company-ocr-service/uploads/original/160cdc65-7205-4147-8230-9682eef02478_AccountStatement_Report_6049286565_27042026_17_28 1.pdf",
+    ]
+    pdf_path = next((p for p in candidate_paths if os.path.exists(p)), None)
+    if not pdf_path:
+        pytest.skip("Real IPPB PDF sample not found on disk")
+
+    from ocr_engine import OCREngine
+    engine = OCREngine()
+    doc_res = engine.process_file(pdf_path)
+
+    assert doc_res.text_source == "pdf_text_layer"
+    assert doc_res.ocr_required is False
+    assert len(doc_res.pages) == 5
+
+    fields, _ = extract_document_fields("bank_statement", doc_res)
+
+    # 1. Assert Bank Name & Account Number Masked
+    assert fields.get("bank_name") == "India Post Payments Bank"
+    assert fields.get("account_number_masked") == "XXXXXXXX2697"
+
+    # 2. Assert Statement Period
+    assert fields.get("statement_period") == {"from_date": "28-Mar-2026", "to_date": "27-Apr-2026"}
+
+    # 3. Assert Balances
+    assert fields.get("opening_balance") == "5.63"
+    assert fields.get("closing_balance") == "130.43"
+    assert fields.get("closing_balance") != fields.get("opening_balance")
+
+    # 4. Assert Transactions (all 100 rows parsed from all 5 pages)
+    txns = fields.get("transactions", [])
+    assert len(txns) == 100
+    assert txns[0]["date"] == "30-03-2026"
+    assert txns[0]["amount"] == "50.00"
+    assert txns[0]["type"] == "CR"
+    assert txns[0]["balance"] == "55.63"
+
+    assert txns[-1]["date"] == "27-04-2026"
+    assert txns[-1]["amount"] == "1.00"
+    assert txns[-1]["type"] == "CR"
+    assert txns[-1]["balance"] == "130.43"
+
+
+def test_income_certificate_barcode_number_extraction():
+    """Verify various barcode and certificate number formats for income certificates."""
+    text1 = """
+    महाराष्ट्र शासन
+    तहसीलदार कार्यालय जुन्नर
+    उत्पन्नाचे प्रमाणपत्र
+    12512506265009960905
+    वार्षिक उत्पन्न रुपये ५०,०००
+    """
+    fields1, _ = extract_document_fields("income_certificate", create_mock_doc(text1))
+    assert fields1.get("certificate_number") == "12512506265009960905"
+
+    text2 = """
+    GOVERNMENT OF MAHARASHTRA
+    INCOME CERTIFICATE
+    Certificate Number: MH-INC-2025-987654
+    Annual Income: Rs. 1,20,000/-
+    """
+    fields2, _ = extract_document_fields("income_certificate", create_mock_doc(text2))
+    assert fields2.get("certificate_number") == "MH-INC-2025-987654"
+
+
+def test_income_certificate_needs_manual_review_on_missing_fields():
+    """Verify that when income certificate is partially corrupted or unreadable, review flags are raised."""
+    text = """
+    महाराष्ट्र शासन
+    उत्पन्नाचे प्रमाणपत्र
+    प्रत सांभाळून ठेवावी.
+    """
+    fields, _ = extract_document_fields("income_certificate", create_mock_doc(text))
+    assert fields.get("needs_manual_review") is True
+    assert fields.get("certificate_number") == ""
+    assert fields.get("annual_income") == ""
+
+
+
+
+
+
+
+
+def test_income_certificate_date_normalization():
+    """Verify strict calendar-validated date normalization for income certificates."""
+    from extractors import normalize_issue_date
+    # 1. 2025-06-266 -> 2025-06-26
+    assert normalize_issue_date("2025-06-266") == "2025-06-26"
+    assert normalize_issue_date("26/06/20255") == "26/06/2025"
+
+    # 2. valid normal dates remain unchanged
+    assert normalize_issue_date("2025-06-26") == "2025-06-26"
+    assert normalize_issue_date("26/06/2025") == "26/06/2025"
+    assert normalize_issue_date("15-08-2024") == "15-08-2024"
+
+    # 3. invalid dates are rejected
+    assert normalize_issue_date("99/99/2025") is None
+    assert normalize_issue_date("2025-02-30") is None
+    assert normalize_issue_date("2025-06-31") is None
+    assert normalize_issue_date("invalid-date") is None
+    assert normalize_issue_date("") is None
+
+
+def test_income_certificate_marathi_location_and_authority_normalization():
+    """Verify Marathi location and authority normalization for OCR variants."""
+    from extractors import normalize_marathi_location, normalize_issuing_authority
+
+    # 4. जुनर / जुनर-like OCR output -> जुन्नर
+    assert normalize_marathi_location("जुनर") == "जुन्नर"
+    assert normalize_marathi_location("जुनर्") == "जुन्नर"
+    assert normalize_marathi_location("जुन्नर") == "जुन्नर"
+
+    # 5. पुण -> पुणे
+    assert normalize_marathi_location("पुण") == "पुणे"
+    assert normalize_marathi_location("पुणे") == "पुणे"
+
+    # 6. तहसीलदार जुनर -> तहसीलदार जुन्नर
+    assert normalize_issuing_authority("तहसीलदार जुनर") == "तहसीलदार जुन्नर"
+    assert normalize_issuing_authority("तहसीलदार", taluka="जुनर") == "तहसीलदार जुन्नर"
+    assert normalize_issuing_authority("तहसीलदार जुन्नर") == "तहसीलदार जुन्नर"
+
+
+def test_income_certificate_applicant_name_beneficiary_clause():
+    """Verify 7: applicant name extraction from Marathi beneficiary clause cleanly isolated."""
+    sample_text = """
+    महाराष्ट्र शासन
+    ३ वर्षासाठी उत्पन्नाचे प्रमाणपत्र
+    दाखला क्रमांक: 12512506265009960905
+    प्रमाणित करण्यात येते की श्री. संदीप सावळाराम पोटे राहणार गाव पिंपरी पेंढार
+    वार्षिक उत्पन्न रुपये ५०,०००
+    सदरचा दाखला श्री. संदिप सावळेराम पोटे यांचा मुलगा कुमार विघ्नेश संदीप पोटे यांना शैक्षणिक कारणासाठी या कामासाठीच देण्यात येत आहे
+    दिनांक: 2025-06-266
+    तहसीलदार जुनर
+    """
+    fields, _ = extract_document_fields("income_certificate", create_mock_doc(sample_text))
+    assert fields.get("applicant_name") == "कुमार विघ्नेश संदीप पोटे"
+    assert "शैक्षणिक" not in fields.get("applicant_name", "")
+    assert "यांना" not in fields.get("applicant_name", "")
+
+
+def test_income_certificate_noisy_address_does_not_contaminate():
+    """Verify 8: noisy address does not contaminate taluka/district."""
+    sample_text = """
+    महाराष्ट्र शासन
+    उत्पन्नाचे प्रमाणपत्र
+    दाखला क्रमांक: 12512506265009960905
+    अमाणतकरणयातियेतेकीशी.सिदपासावलैरामपोटेराहणारगाविपपरीपेंगार तह्सीलजुनर,िजलापुण
+    वार्षिक उत्पन्न रुपये ५०,०००
+    दिनांक: 2025-06-266
+    तहसीलदार जुनर
+    """
+    fields, _ = extract_document_fields("income_certificate", create_mock_doc(sample_text))
+    assert "तह्सील" not in fields.get("address", "")
+    assert "जुनर" not in fields.get("address", "")
+    assert fields.get("taluka") == "जुन्नर"
+    assert fields.get("district") == "पुणे"
+    assert fields.get("issue_date") == "2025-06-26"
+    assert fields.get("issuing_authority") == "तहसीलदार जुन्नर"
+
+
+def test_income_certificate_missing_applicant_name_triggers_review():
+    """Verify 9: missing applicant name triggers manual review."""
+    sample_text = """
+    महाराष्ट्र शासन
+    उत्पन्नाचे प्रमाणपत्र
+    दाखला क्रमांक: 12512506265009960905
+    वार्षिक उत्पन्न रुपये ५०,०००
+    तहसीलदार कार्यालय जुन्नर
+    दिनांक: 26/06/2025
+    """
+    fields, _ = extract_document_fields("income_certificate", create_mock_doc(sample_text))
+    assert fields.get("applicant_name") == ""
+    assert fields.get("needs_manual_review") is True
+
+
+def test_income_certificate_financial_year_clean_english():
+    """8a: Clean English 2024-2025 -> 2024-2025."""
+    from extractors import validate_financial_year
+    assert validate_financial_year("2024-2025") == "2024-2025"
+    assert validate_financial_year("2024-25") == "2024-2025"
+
+    text = """
+    GOVERNMENT OF MAHARASHTRA
+    INCOME CERTIFICATE
+    Certificate No: 12512506265009960905
+    Financial Year: 2024-2025
+    Annual Income: Rs. 40,000
+    Date of Issue: 26/06/2025
+    """
+    fields, _ = extract_document_fields("income_certificate", create_mock_doc(text))
+    assert fields.get("financial_year") == "2024-2025"
+
+
+def test_income_certificate_financial_year_marathi():
+    """8b: Marathi २०२४-२०२५ -> 2024-2025."""
+    from extractors import validate_financial_year
+    assert validate_financial_year("२०२४-२०२५") == "2024-2025"
+    assert validate_financial_year("२०२४-२५") == "2024-2025"
+
+    text = """
+    महाराष्ट्र शासन
+    उत्पन्नाचे प्रमाणपत्र
+    दाखला क्रमांक: 12512506265009960905
+    आर्थिक वर्ष: २०२४-२०२५
+    वार्षिक उत्पन्न: ४०,०००
+    दिनांक: 2025-06-26
+    """
+    fields, _ = extract_document_fields("income_certificate", create_mock_doc(text))
+    assert fields.get("financial_year") == "2024-2025"
+
+
+def test_income_certificate_financial_year_multiple_rows():
+    """
+    8c: Multiple rows:
+    2022-2023 80000
+    2023-2024 85000
+    2024-2025 40000
+    => financial_year = 2024-2025
+    => annual_income = 40000
+    """
+    text = """
+    महाराष्ट्र शासन
+    तहसीलदार कार्यालय जुन्नर
+    उत्पन्नाचे प्रमाणपत्र
+    दाखला क्रमांक: 12512506265009960905
+    प्रमाणित करण्यात येते की श्री. संदीप सावळाराम पोटे
+    वार्षिक उत्पन्न खालीलप्रमाणे आहे:
+    2022-2023 80000
+    2023-2024 85000
+    2024-2025 40000
+    सदरचा दाखला शैक्षणिक कारणासाठी देण्यात येत आहे
+    दिनांक: 2025-06-26
+    तहसीलदार जुन्नर
+    """
+    fields, _ = extract_document_fields("income_certificate", create_mock_doc(text))
+    assert fields.get("financial_year") == "2024-2025"
+    assert fields.get("annual_income") == "40000"
+
+
+def test_income_certificate_invalid_ocr_candidate():
+    """8d: Invalid OCR candidate Q028-2034 must NOT become financial_year."""
+    from extractors import validate_financial_year
+    assert validate_financial_year("Q028-2034") is None
+    assert validate_financial_year("20r?-ro2?") is None
+    assert validate_financial_year("2024-2026") is None
+
+    text = """
+    महाराष्ट्र शासन
+    उत्पन्नाचे प्रमाणपत्र
+    दाखला क्रमांक: 12512506265009960905
+    प्रमाणित करण्यात येते की श्री. संदीप सावळाराम पोटे
+    वार्षिक उत्पन्न खालीलप्रमाणे आहे:
+    Q028-2034 40000
+    """
+    fields, _ = extract_document_fields("income_certificate", create_mock_doc(text))
+    assert fields.get("financial_year") != "Q028-2034"

@@ -409,7 +409,14 @@ DOC_SIGNATURES = {
         r"GOVERNMENT OF INDIA.*MINISTRY OF COMMERCE|MINISTRY OF COMMERCE.*DIRECTORATE GENERAL",
         r"IEC CERTIFICATE|IEC ISSUANCE",
     ],
+    "income_certificate": [
+        r"INCOME CERTIFICATE|CERTIFICATE OF INCOME|उत्पन्नाचा\s*दाखला|उत्पन्नाचे\s*प्रमाणपत्र|उलपञाचे\s*पमाणपऋ|उतनाचा\s*दाखला|वार्षिक\s*उत्पन्नाचा\s*दाखला|उत्पन्न\s*दाखला|उत्पन्न\s*प्रमाणपत्र",
+        r"TAHSILDAR|REVENUE DEPARTMENT|तहसीलदार|तहसील\s*कार्यालय|उपविभागीय\s*अधिकारी|प्रांत\s*अधिकारी|नायब\s*तहसीलदार",
+        r"ANNUAL INCOME|TOTAL INCOME.*CERTIFIED|मिळालेले\s*वार्षिक\s*उत्पन्न|वार्षिक\s*उत्पन्न|एकूण\s*वार्षिक\s*उत्पन्न|उत्पन्न\s*खालीलप्रमाणे|जलनखालीलपमाणे",
+        r"THIS IS TO CERTIFY THAT|CERTIFIED THAT|प्रमाणित\s*करण्यात\s*येते\s*की|अमाणतकरणयात|अमािणतकरण|सदरचा\s*दाखला",
+    ],
 }
+
 
 
 def detect_document_type(ocr_text: str, min_score: int = 2, min_margin: int = 1) -> Optional[str]:
