@@ -1517,6 +1517,130 @@ def test_bank_statement_real_ippb_pdf_extraction():
     assert txns[-1]["balance"] == "130.43"
 
 
+def test_bank_statement_axis_grid_block_multi_page_extraction():
+    """Multi-page test with Axis Bank / Finacle grid-block layout across multiple pages."""
+    p1 = OCRPageResult(
+        page_num=1,
+        full_text="""
+Statement of Axis Bank Account No : 925020052380170 for the period ( From : 30/07/2025 To : 30/07/2026 )
+
+ Opening Balance: INR 0.00
+
+S.NO    Transaction    Value Date     Particulars                           Amount(INR)      Debit/Credit        Balance(INR)                 Cheque            Branch Name(SOL)
+        Date           (dd/mm/yyyy)                                                                                                           Number
+        (dd/mm/yyyy)
+
+                                                                               5,00,000.00                  CR                  5,00,000.00            100003                  AJMERA
+1       21/11/2025     21/11/2025     CLG/100003/071125/Kalpavruks/                                                                                               COMPLEX,PIMPRI,PUNE
+                                                                                                                                                                             [MH (2568)
+
+                                                                                      1.00                  DR                  4,99,999.00                                    AJMERA
+                                      NEFT/DH/AXODH32706269231/3EXTEN
+2       23/11/2025     23/11/2025                                                                                                                                 COMPLEX,PIMPRI,PUNE
+                                      T/HDFC BANK//////                                                                                                                      [MH (1435)
+""",
+        lines=[],
+        average_confidence=0.98,
+    )
+    p2 = OCRPageResult(
+        page_num=2,
+        full_text="""
+                                                                                      3.95                  DR                  4,99,995.05                                    AJMERA
+                                      IMPS/P2A/532777664229/3EXTENT/X00
+3       23/11/2025     23/11/2025                                                                                                                                 COMPLEX,PIMPRI,PUNE
+                                      1042/SharadSahakariBankLt                                                                                                              [MH (1435)
+
+                                                                                1,00,005.90                  DR                  3,99,989.15                                    AJMERA
+                                      IMPS/P2A/532880626898/3EXTENT/X00
+4       24/11/2025     24/11/2025                                                                                                                                 COMPLEX,PIMPRI,PUNE
+                                      1042/SharadSahakariBankLt                                                                                                              [MH (1435)
+""",
+        lines=[],
+        average_confidence=0.98,
+    )
+    doc_res = OCRDocumentResult(
+        pages=[p1, p2],
+        full_text=p1.full_text + "\n" + p2.full_text,
+        average_confidence=0.98,
+    )
+    fields, _ = extract_document_fields("bank_statement", doc_res)
+    assert fields.get("bank_name") == "Axis Bank"
+    assert fields.get("account_number_masked") == "XXXXXXXXXXX0170"
+    assert fields.get("statement_period") == {"from_date": "30/07/2025", "to_date": "30/07/2026"}
+    assert fields.get("opening_balance") == "0.00"
+    assert fields.get("closing_balance") == "399989.15"
+    assert fields.get("closing_balance") != fields.get("opening_balance")
+
+    txns = fields.get("transactions", [])
+    assert len(txns) == 4
+    assert txns[0]["date"] == "21/11/2025"
+    assert txns[0]["amount"] == "500000.00"
+    assert txns[0]["type"] == "CR"
+    assert txns[0]["balance"] == "500000.00"
+    assert txns[0]["description"] == "CLG/100003/071125/Kalpavruks/"
+
+    assert txns[1]["date"] == "23/11/2025"
+    assert txns[1]["amount"] == "1.00"
+    assert txns[1]["type"] == "DR"
+    assert txns[1]["balance"] == "499999.00"
+
+    assert txns[2]["date"] == "23/11/2025"
+    assert txns[2]["amount"] == "3.95"
+    assert txns[2]["type"] == "DR"
+
+    assert txns[3]["date"] == "24/11/2025"
+    assert txns[3]["amount"] == "100005.90"
+    assert txns[3]["type"] == "DR"
+    assert txns[3]["balance"] == "399989.15"
+
+
+def test_bank_statement_real_axis_pdf_extraction():
+    """Real Document Test: Parse the real 24-page Axis Bank statement PDF end-to-end."""
+    candidate_paths = [
+        "/home/vighnesh/PaddleOCR/uploads/original/c92f031e-3076-49ed-b36e-7bb61008cf79_Account_Statement_Report_30-07-2026_1246hrs.PDF",
+        "/home/vighnesh/company-ocr-service/uploads/original/c92f031e-3076-49ed-b36e-7bb61008cf79_Account_Statement_Report_30-07-2026_1246hrs.PDF",
+        "/home/vighnesh/Downloads/Account_Statement_Report_30-07-2026_1246hrs.PDF",
+    ]
+    pdf_path = next((p for p in candidate_paths if os.path.exists(p)), None)
+    if not pdf_path:
+        pytest.skip("Real Axis Bank PDF sample not found on disk")
+
+    from ocr_engine import OCREngine
+    engine = OCREngine()
+    doc_res = engine.process_file(pdf_path)
+
+    assert doc_res.text_source == "pdf_text_layer"
+    assert doc_res.ocr_required is False
+    assert len(doc_res.pages) == 24
+
+    fields, _ = extract_document_fields("bank_statement", doc_res)
+
+    # 1. Assert Bank Name & Account Number Masked
+    assert fields.get("bank_name") == "Axis Bank"
+    assert fields.get("account_number_masked") == "XXXXXXXXXXX0170"
+
+    # 2. Assert Statement Period
+    assert fields.get("statement_period") == {"from_date": "30/07/2025", "to_date": "30/07/2026"}
+
+    # 3. Assert Balances
+    assert fields.get("opening_balance") == "0.00"
+    assert fields.get("closing_balance") == "100180.15"
+    assert fields.get("closing_balance") != fields.get("opening_balance")
+
+    # 4. Assert Transactions (all 638 rows parsed across all pages)
+    txns = fields.get("transactions", [])
+    assert len(txns) == 638
+    assert txns[0]["date"] == "21/11/2025"
+    assert txns[0]["amount"] == "500000.00"
+    assert txns[0]["type"] == "CR"
+    assert txns[0]["balance"] == "500000.00"
+
+    assert txns[-1]["date"] == "30/07/2026"
+    assert txns[-1]["amount"] == "500011.80"
+    assert txns[-1]["type"] == "DR"
+    assert txns[-1]["balance"] == "100180.15"
+
+
 def test_income_certificate_barcode_number_extraction():
     """Verify various barcode and certificate number formats for income certificates."""
     text1 = """

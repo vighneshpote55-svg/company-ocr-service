@@ -763,17 +763,20 @@ def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
 
     # 2. Bank Name
     bank_match = re.search(
-        r"(?:Branch\s*Office\s*:|Bank\s*Name|Bank)[\s:]*([A-Za-z][A-Za-z \t.&'-]+?BANK)\b",
+        r"(?:Statement\s+(?:of\s+)?|Account\s+Statement\s+(?:of\s+)?|Branch\s*Office\s*:|Bank\s*Name|Bank)[\s:]*([A-Za-z][A-Za-z \t.&'-]+?\b(?:BANK(?:\s+OF\s+[A-Za-z]+)?|PAYMENTS\s+BANK)|BANK\s+OF\s+[A-Za-z]+)\b|^[\s:]*([A-Za-z][A-Za-z \t.&'-]+?\b(?:BANK(?:\s+OF\s+[A-Za-z]+)?|PAYMENTS\s+BANK)|BANK\s+OF\s+[A-Za-z]+)\b",
         full_text,
-        re.IGNORECASE,
+        re.IGNORECASE | re.MULTILINE,
     )
     if bank_match:
-        fields["bank_name"] = clean_field_value(bank_match.group(1))
-        confidences["bank_name"] = find_line_confidence(bank_match.group(1), all_lines)
+        cand_bank = (bank_match.group(1) or bank_match.group(2) or "").strip()
+        cand_bank = re.sub(r"^(?:Statement\s+(?:of\s+)?|Account\s+Statement\s+(?:of\s+)?|Branch\s*Office\s*:?)\s*", "", cand_bank, flags=re.IGNORECASE).strip()
+        if cand_bank:
+            fields["bank_name"] = clean_field_value(cand_bank)
+            confidences["bank_name"] = find_line_confidence(cand_bank, all_lines)
 
-    # 3. Statement Period (supports numeric and alphanumeric month ranges e.g. '28-Mar-2026 to 27-Apr-2026')
+    # 3. Statement Period (supports numeric and alphanumeric month ranges e.g. '28-Mar-2026 to 27-Apr-2026' or '( From : 30/07/2025 To : 30/07/2026 )')
     period_match = re.search(
-        r"(?:Transaction\s*Period|Statement\s*Period|Period)[\s:]+([A-Za-z0-9\/\-\.]+)\s*(?:to|-)\s*([A-Za-z0-9\/\-\.]+)",
+        r"(?:Transaction\s*Period|Statement\s*Period|Period)[\s:]*(?:\(\s*)?(?:From\s*[:]\s*)?([A-Za-z0-9\/\-\.]+)\s*(?:to|-|To\s*[:])\s*([A-Za-z0-9\/\-\.]+)",
         full_text,
         re.IGNORECASE,
     )
@@ -797,7 +800,6 @@ def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
 
     # 5. Multi-page transactions table parsing and chronological merging
     transactions: List[Dict[str, Any]] = []
-    date_pattern = re.compile(r"^\s*(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})\b")
     header_pattern = re.compile(
         r"\b(?:Transaction\s*Details|ACCOUNT\s*SUMMARY|END\s*OF\s*REPORT|DISCLAIMER|DATE\s+TRAN|Guidelines\s+for|Remember\s+that|Branch\s+Office|Customer\s+Address|Registered\s+Mobile|Account\s+Number|Nomination|Account\s+Type|Customer\s+ID|IFSC|MICR)\b",
         re.IGNORECASE,
@@ -814,17 +816,65 @@ def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
     if not pages_to_process and full_text.strip():
         # Fallback if no pages list provided
         from ocr_engine import OCRPageResult, parse_text_into_ocr_lines
-        pages_to_process = [OCRPageResult(page_num=1, full_text=full_text, lines=parse_text_into_ocr_lines(full_text))]
+        pages_to_process = [OCRPageResult(page_num=1, full_text=full_text, lines=parse_text_into_ocr_lines(full_text), average_confidence=1.0)]
 
     for page in pages_to_process:
-        # Prefer page.full_text splitlines to preserve layout / wrapped lines, falling back to page.lines
+        # Strategy 1: Multi-line / Grid Finacle Block Parsing (e.g. Axis Bank, PNB, Canara Bank)
+        # Transactions are grouped in blocks separated by double newlines, with S.No, Date, Particulars, and Amounts interleaved.
+        raw_blocks = re.split(r"\n\s*\n+", page.full_text.strip()) if page.full_text else []
+        page_block_txns = []
+        for blk in raw_blocks:
+            if header_pattern.search(blk) and not re.search(r"^\s*\d+\s+\d{2}[/\-\.]", blk, re.M):
+                continue
+            m_date = re.search(r"(?:^|\n)\s*(?:(\d{1,6})\s+)?(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})\b", blk)
+            m_fin = re.search(r"([\d,]+\.\d{2})\s+(CR|DR|Cr|Dr)\s+([\d,]+\.\d{2})", blk)
+            if m_date and m_fin:
+                date_str = m_date.group(2)
+                amt_str = m_fin.group(1).replace(",", "")
+                t_type = m_fin.group(2).upper()
+                bal_str = m_fin.group(3).replace(",", "")
+
+                desc_parts = []
+                for b_line in blk.splitlines():
+                    if re.search(r"Branch Name|Debit/Credit|Balance\(INR\)|Transaction\s+Date", b_line, re.I):
+                        continue
+                    l_fin = re.search(r"([\d,]+\.\d{2})\s+(?:CR|DR|Cr|Dr)\s+([\d,]+\.\d{2})", b_line)
+                    if l_fin:
+                        prefix = b_line[:l_fin.start()].strip()
+                        if prefix:
+                            desc_parts.append(prefix)
+                    else:
+                        part_slice = b_line[35:110].strip() if len(b_line) > 35 else b_line.strip()
+                        if part_slice and not re.match(r"^(?:\d{1,6}\s+)?\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4}", part_slice):
+                            desc_parts.append(part_slice)
+                desc = " ".join(desc_parts)
+                desc = re.sub(r"\s+", " ", desc).strip()
+                if bal_str:
+                    try:
+                        prev_balance = float(bal_str)
+                    except ValueError:
+                        pass
+                page_block_txns.append({
+                    "date": date_str,
+                    "description": desc,
+                    "amount": amt_str,
+                    "type": t_type,
+                    "balance": bal_str,
+                })
+
+        if page_block_txns:
+            transactions.extend(page_block_txns)
+            continue
+
+        # Strategy 2: Line-by-Line Parsing (e.g. India Post Payments Bank, HDFC, SBI standard format)
         lines = [l.strip() for l in page.full_text.splitlines() if l.strip()] if page.full_text else [l.text.strip() for l in page.lines if l.text.strip()]
+        date_pattern = re.compile(r"^\s*(?:(\d{1,6})\s+)?(\d{2}[/\-\.]\d{2}[/\-\.]\d{2,4})\b")
         i = 0
         while i < len(lines):
             line = lines[i]
             m_date = date_pattern.match(line)
             if m_date and not header_pattern.search(line):
-                date_str = m_date.group(1)
+                date_str = m_date.group(2)
                 rest = line[m_date.end():]
 
                 # Lookahead for wrapped multiline description lines
