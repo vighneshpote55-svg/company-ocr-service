@@ -1855,3 +1855,96 @@ def test_income_certificate_invalid_ocr_candidate():
     """
     fields, _ = extract_document_fields("income_certificate", create_mock_doc(text))
     assert fields.get("financial_year") != "Q028-2034"
+
+
+def test_fssai_real_registration_certificate_extraction():
+    """Real Document Test: FSSAI registration certificate with FBO label, C/O trade name and Issued On/Fee Paid Upto validity."""
+    text = """
+    Registration Certificate
+    Government of Maharashtra
+    Food And Drug Administration
+    Food Safety and Standards Authority of India
+    Registration Certificate under FSS Act, 2006
+    / Registration Number: 21526038002367
+
+    1. Name and permanent address of Food RUSHIKESH SHIVAJI CHIKHALE C/O
+       Business Operator (FBO) KATRAJ DAIRY AND CAKE SHOP
+       SR NO.275/2, SHOP NO.6, CLASSIC PRIDE BUILDING
+    2. Address of location where food business is to be conducted / premises SR NO.275/2
+    4. Kind of Business Retailer
+    5. Photo Identity Card Aadhaar
+
+    Place / Pune Rural
+    Issued On / 08-06-2026 (New Registration)
+    Fee Paid Upto: / भुगतान फीस ितिथ की वैधता: 07-06-2031 (For details, refer Annexure)
+    """
+    fields, _ = extract_document_fields("fssai", create_mock_doc(text))
+    assert fields.get("fssai_licence_number") == "21526038002367"
+    assert fields.get("business_name") == "KATRAJ DAIRY AND CAKE SHOP"
+    assert fields.get("kind_of_business") == "Retailer"
+    assert fields.get("valid_from") == "08-06-2026"
+    assert fields.get("valid_till") == "07-06-2031"
+
+
+def test_gst_certificate_real_legal_name_underscore_and_validity_date():
+    """Real Document Test: GST Certificate with underscore in legal_name (3_EXTENT) and Period of Validity From date."""
+    text = """
+    Government of India
+    Form GST REG-06
+    Registration Certificate
+    Registration Number : 27AADFZ9861F1ZN
+    1. Legal Name 3_EXTENT
+    2. Trade Name, if any
+    3. Additional trade names, if any
+    4. Constitution of Business Partnership
+    7. Period of Validity From 04/07/2025 To Not Applicable
+    Date of issue of Certificate 04/07/2025
+    """
+    fields, _ = extract_document_fields("gst_certificate", create_mock_doc(text))
+    assert fields.get("gstin") == "27AADFZ9861F1ZN"
+    assert fields.get("legal_name") == "3_EXTENT"
+    assert fields.get("trade_name") is None
+    assert fields.get("constitution_of_business") == "Partnership"
+    assert fields.get("registration_date") == "04/07/2025"
+
+
+def test_shop_establishment_maharashtra_form_f_and_form_g():
+    """Real Document Test: Maharashtra Shop & Establishment Form F and Form G extractions."""
+    # Form F (Application for intimation)
+    form_f_text = """
+    महारा दुकाने व आ थापना (नोकर चे व सेवाशत चे व नयमन) नयम, २०१८
+    Form – ‘F’
+    APPLICATION FOR INTIMATION
+    Application ID 112889582203
+    Registration Certificate / Intimation 2231000317186866
+    Receipt No. न दणी मांक / पावती मांक
+    Name of the establishment / आ थापनेचे ROYAL CAKE HOUSE
+    नाव रॉयल केक हाऊस
+    Name of the Employer / मालकाचे नाव RUSHIKESH SHIVAJI CHIKHALE ऋ षकेश शवाजी चखले
+    Category Of Establishment Type / आ थापनेचे उपवगवार CAKE SHOP
+    """
+    fields_f, _ = extract_document_fields("shop_establishment", create_mock_doc(form_f_text))
+    assert fields_f.get("state") == "MH"
+    assert fields_f.get("state_name") == "Maharashtra"
+    assert fields_f.get("registration_number") == "2231000317186866"
+    assert fields_f.get("establishment_name") == "ROYAL CAKE HOUSE"
+    assert fields_f.get("employer_name") == "RUSHIKESH SHIVAJI CHIKHALE"
+    assert fields_f.get("nature_of_business") == "CAKE SHOP"
+
+    # Form G (Receipt of intimation)
+    form_g_text = """
+    महारा दु क ाने व आ थापना (नोकरीचे व से व ाशत चे िविनयमन) िनयम, २ ० १ ८
+    नमु न ा "ग"
+    सू च ना िद याबाबत पावती
+    1. पावती मांक : 2231000317186866
+    2. अज चा आयडी मांक : 112889582203
+    3. आ थापनेचे नाव : रॉयल केक हाऊस
+    5. अ) मालकाचे नाव : ऋिषकेश िशवाजी िचखले
+    """
+    fields_g, _ = extract_document_fields("shop_establishment", create_mock_doc(form_g_text))
+    assert fields_g.get("state") == "MH"
+    assert fields_g.get("state_name") == "Maharashtra"
+    assert fields_g.get("registration_number") == "2231000317186866"
+    assert fields_g.get("establishment_name") == "रॉयल केक हाऊस"
+    assert fields_g.get("employer_name") == "ऋिषकेश िशवाजी िचखले"
+

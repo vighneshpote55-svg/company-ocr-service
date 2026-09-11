@@ -290,8 +290,9 @@ def extract_aadhaar(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[st
     confidences: Dict[str, float] = {}
 
     # Check for Aadhaar number pattern: 4 digits + 4 digits + 4 digits, or masked XXXX XXXX 1234
-    uid_match = re.search(r"\b(\d{4}\s\d{4}\s\d{4}|\d{12})\b", text)
-    masked_match = re.search(r"\b([X\d]{4}\s[X\d]{4}\s\d{4})\b", text, re.IGNORECASE)
+    norm_text = normalize_devanagari_numbers(text) or text
+    uid_match = re.search(r"\b(\d{4}\s\d{4}\s\d{4}|\d{12})\b", norm_text)
+    masked_match = re.search(r"\b([X\d]{4}\s[X\d]{4}\s\d{4})\b", norm_text, re.IGNORECASE)
 
     raw_uid = None
     if uid_match:
@@ -304,7 +305,7 @@ def extract_aadhaar(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[st
         confidences["aadhaar_number"] = conf
         confidences["aadhaar_number_masked"] = conf
     elif masked_match:
-        masked_val = masked_match.group(1).upper()
+        masked_val = normalize_devanagari_numbers(masked_match.group(1).upper())
         fields["aadhaar_number"] = masked_val
         fields["aadhaar_number_masked"] = masked_val
         conf = find_line_confidence(r"[X\d]{4}\s[X\d]{4}\s\d{4}", all_lines)
@@ -547,7 +548,7 @@ def extract_fssai(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str,
 
     # Business Name
     biz_match = re.search(
-        r"(?:Business\s*Name|Name of Food Business Operator)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:FSSAI|Licence|License|Kind of Business|Valid|Period)\b))",
+        r"(?:Business\s*Name|Business\s*Operator\s*(?:\(FBO\))?|Name of Food Business Operator)[\s:]+([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:FSSAI|Licence|License|Kind of Business|Valid|Period|Address|SR\s*NO)\b))",
         text,
         re.IGNORECASE,
     )
@@ -565,10 +566,10 @@ def extract_fssai(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str,
         fields["kind_of_business"] = clean_field_value(kind_match.group(1))
 
     # Validity
-    valid_from = re.search(r"(?:Valid From)[\s:]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", text, re.IGNORECASE)
+    valid_from = re.search(r"(?:Valid\s*From|Issued\s*On)[\s:/]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", text, re.IGNORECASE)
     if valid_from:
         fields["valid_from"] = valid_from.group(1)
-    valid_till = re.search(r"(?:Valid Till)[\s:]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", text, re.IGNORECASE)
+    valid_till = re.search(r"(?:Valid\s*Till|Fee\s*Paid\s*Upto)[\s:/]+.*?(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})", text, re.IGNORECASE)
     if valid_till:
         fields["valid_till"] = valid_till.group(1)
 
@@ -598,9 +599,13 @@ SHOP_ESTABLISHMENT_STATE_REGISTRY: Dict[str, Dict[str, Any]] = {
             r"पुणे\s*महानगरपालिका",
             r"आपले\s*सरकार",
             r"दुकान\s*(?:आणि|व)\s*आस्थापना",
+            r"महारा\s+(?:दु\s*क\s*ाने|दुकान|दुकाने)\s*(?:आणि|व)\s*आ\s*थ?स्थापना",
+            r"नमु\s*न\s*ा\s*[\"'\u201c\u201d]?[फगFG][\"'\u201c\u201d]?",
+            r"Form\s*[-–]\s*[\"'\u2018\u2019]?[फगFG][\"'\u2018\u2019]?",
         ],
         "reg_no_patterns": [
             r"(?:नोंदणी\s*(?:क्रमांक|क्र\.?)|Registration\s*Number|Reg\s*No\.?|Certificate\s*No\.?)[\s:]*([A-Za-z0-9\-\/]{5,30})",
+            r"(?:पावती\s*(?:क्रमांक|क्र\.?|मांक)|Registration\s*Certificate\s*/\s*Intimation)[\s:]*([A-Za-z0-9\-\/]{5,30})",
             r"\b(SHOP-[A-Z0-9\-]+)\b",
             r"\b(MH[0-9A-Z\-\/]{6,25})\b",
         ],
@@ -693,27 +698,33 @@ def extract_shop_establishment(doc_res: OCRDocumentResult) -> Tuple[Dict[str, An
 
     # Establishment Name
     est_match = re.search(
-        r"(?:आस्थापनेचे\s*नाव|दुकानाचे\s*नाव|Name\s*of\s*Establishment|(?<!&\s)(?<!and\s)(?<!of\s)\bEstablishment\b)[\s:]+([^\r\n:]{2,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Employer|नोंदणी|मालक|Nature\s*of\s*Business|व्यवसाय|Address|पत्ता)\b))",
+        r"(?:Name\s*of\s*(?:the\s*)?establishment|आ\s*थापनेचे\s*नाव|आस्थापनेचे\s*नाव|दुकानाचे\s*नाव|(?<!&\s)(?<!and\s)(?<!of\s)\bEstablishment\b)[\s:/]+([^\r\n:]{2,70}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Employer|नोंदणी|मालक|Nature\s*of\s*Business|व्यवसाय|Address|पत्ता|Previous)\b))",
         text,
         re.IGNORECASE,
     )
     if est_match:
-        fields["establishment_name"] = clean_field_value(est_match.group(1), field_name="establishment_name", doc_type="shop_establishment")
+        est_val = est_match.group(1).strip()
+        est_val = re.sub(r"^[\s/]*(?:आ\s*(?:थापनेचे|स्थापनेचे)(?:\s*नाव)?|नाव)[\s:]*", "", est_val).strip()
+        est_val = re.split(r"(?<=[a-zA-Z])\s+(?=[\u0900-\u097F])", est_val)[0].strip()
+        fields["establishment_name"] = clean_field_value(est_val, field_name="establishment_name", doc_type="shop_establishment")
         confidences["establishment_name"] = find_line_confidence(fields["establishment_name"], all_lines)
 
     # Employer Name
     emp_match = re.search(
-        r"(?:मालकाचे\s*नाव|Employer|Name of Employer)[\s:]*([^\r\n:]{2,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Establishment|नोंदणी|आस्थापना|Nature of Business|व्यवसाय)\b))",
+        r"(?:Name\s*of\s*(?:the\s*)?Employer(?:[\s/]*(?:मालकाचे\s*नाव)?)?|मालकाचे\s*नाव|Employer)[\s:]*([^\r\n:]{2,50}?)(?=[ \t]{2,}|\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Establishment|नोंदणी|आस्थापना|Nature\s*of\s*Business|व्यवसाय|Residential|Address|पत्ता)\b)",
         text,
         re.IGNORECASE,
     )
     if emp_match:
-        fields["employer_name"] = clean_field_value(emp_match.group(1), field_name="employer_name", doc_type="shop_establishment")
+        emp_val = emp_match.group(1).strip()
+        emp_val = re.sub(r"^[\s/]*(?:मालकाचे(?:\s*नाव)?|नाव)[\s:]*", "", emp_val).strip()
+        emp_val = re.split(r"(?<=[a-zA-Z])\s+(?=[\u0900-\u097F])", emp_val)[0].strip()
+        fields["employer_name"] = clean_field_value(emp_val, field_name="employer_name", doc_type="shop_establishment")
         confidences["employer_name"] = find_line_confidence(fields["employer_name"], all_lines)
 
     # Nature of Business
     nature_match = re.search(
-        r"(?:व्यवसायाचे\s*स्वरूप|Nature of Business)[\s:]*([^\r\n:]{2,50}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Employer|Date|तारीख|दिनांक)\b))",
+        r"(?:व्यवसायाचे\s*स्वरूप|Nature\s*of\s*Business|Category\s*Of\s*Establishment\s*Type(?:[\s/]*(?:आ\s*थापनेचे\s*उपवगवार)?)?)[\s:/]+([^\r\n:]{2,50}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z\u0900-\u097F]))(?:Registration|Reg|Employer|Date|तारीख|दिनांक|Type\s*of)\b))",
         text,
         re.IGNORECASE,
     )
@@ -1620,7 +1631,7 @@ def extract_gst_certificate(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any],
 
     # Legal Name
     legal_match = re.search(
-        r"(?:Legal\s*Name(?:[\s/]*(?:of\s+Taxpayer)?)?)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,70}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Trade\s*Name|GSTIN|Constitution|Date|Address|Period)\b))",
+        r"(?:Legal\s*Name(?:[\s/]*(?:of\s+Taxpayer)?)?)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&_]{1,70}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Trade\s*Name|GSTIN|Constitution|Date|Address|Period)\b))",
         text,
         re.IGNORECASE,
     )
@@ -1669,7 +1680,7 @@ def extract_gst_certificate(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any],
 
     # Registration Date
     reg_date = re.search(
-        r"(?:Date\s*of\s*(?:liability|Registration|Validity))[\s:]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
+        r"(?:Date\s*of\s*(?:liability|Registration|Validity|issue\s*of\s*Certificate)|From)[\s:]+(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})",
         text,
         re.IGNORECASE,
     )

@@ -327,10 +327,10 @@ DOC_SIGNATURES = {
         r"KIND OF BUSINESS",
     ],
     "shop_establishment": [
-        r"SHOP & ESTABLISHMENT|SHOPS & ESTABLISHMENTS|दुकान\s*(?:आणि|व|एवं)\s*(?:आस्थापना|स्थापना)",
-        r"SHOPS AND COMMERCIAL|आस्थापना\s*नोंदणी|स्थापना\s*पंजीकरण",
-        r"ESTABLISHMENT REGISTRATION|महाराष्ट्र\s*शासन|कामगार\s*आयुक्त",
-        r"NATURE OF BUSINESS|व्यवसायाचे\s*स्वरूप",
+        r"SHOP & ESTABLISHMENT|SHOPS & ESTABLISHMENTS|SHOPS AND ESTABLISHMENTS|दुकान\s*(?:आणि|व|एवं)\s*(?:आस्थापना|स्थापना)|दु\s*क\s*ाने\s*(?:आणि|व)\s*आ\s*(?:थापना|स्थापना)",
+        r"SHOPS AND COMMERCIAL|आस्थापना\s*नोंदणी|स्थापना\s*पंजीकरण|नमु\s*न\s*ा\s*[\"'\u201c\u201d]?[फगFG][\"'\u201c\u201d]?|Form\s*[-–]\s*[\"'\u2018\u2019]?[फगFG][\"'\u2018\u2019]?",
+        r"ESTABLISHMENT REGISTRATION|महाराष्ट्र\s*शासन|कामगार\s*आयुक्त|Registration\s*Certificate\s*/\s*Intimation|पावती\s*(?:क्रमांक|मांक)",
+        r"NATURE OF BUSINESS|व्यवसायाचे\s*स्वरूप|Category\s*Of\s*Establishment",
     ],
     "bank_statement": [
         r"ACCOUNT STATEMENT",

@@ -737,7 +737,7 @@ class OCREngine:
                     if rendered_imgs:
                         first_rendered_img = rendered_imgs[0]
                         ocr_p1 = self.process_image(first_rendered_img, page_num=1, languages=languages)
-                        extra_lines = [l for l in ocr_p1.lines if re.search(r"[\u0900-\u097F]", l.text)]
+                        extra_lines = [l for l in ocr_p1.lines if re.search(r"[\u0905-\u0939]{2,}", l.text)]
                 except Exception as ex:
                     logger.warning("Error running header OCR scan on digital PDF: %s", ex)
 
