@@ -452,6 +452,89 @@ Field\n\nDemo Value\n\nName\n\nDEMO CUSTOMER\n\nPermanent Account Number\n\nABCD
     assert itr_fields["taxes_paid"] == "0"
 
 
+def test_itr_name_multi_section_anchoring():
+    """
+    Regression test for ITR multi-section documents:
+    1. Assessee name on cover/ITR-V page must not be overridden by later 'Name of Deductor'.
+    2. Names with leading digits/underscores (e.g. '3_EXTENT') must be captured properly.
+    3. 'Name of Employer', 'Name of Deductor', etc. must never be extracted as assessee name.
+    4. Genuinely ambiguous cases without an assessee name must return None (honest standard).
+    """
+    # 1. Multi-section ITR SET: cover page followed by TDS schedule containing "Name of Deductor"
+    multi_section_text = """
+    INDIAN INCOME TAX RETURN ACKNOWLEDGEMENT
+    ITR-5
+    Assessment Year: 2025-26
+    PAN: AADFZ9861F
+    Name: 3_EXTENT
+    Address: Shop No 312, Pune
+    Acknowledgement Number: 752131981061225
+    Total Income: Rs. 24,850
+    Taxes Paid: Rs. 9,060
+
+    --- SCHEDULE TDS (FORM 26AS) ---
+    Details of Tax Deducted at Source
+    Sr. No.     Name of Deductor        TAN of Deductor      Total Tax Deducted
+    1           ABC TECH SOLUTIONS      PNE012345            1000
+    2           XYZ CONSULTING          MUM098765            2000
+    """
+    fields, _ = extract_document_fields("itr", create_mock_doc(multi_section_text))
+    assert fields.get("name") == "3_EXTENT"
+    assert "Deductor" not in fields.get("name", "")
+    assert fields.get("pan_number") == "AADFZ9861F"
+    assert fields.get("acknowledgement_number") == "752131981061225"
+    assert fields.get("total_income") == "24850"
+    assert fields.get("taxes_paid") == "9060"
+
+    # 2. Multi-section ITR with salary schedule containing "Name of Employer"
+    salary_itr_text = """
+    INDIAN INCOME TAX RETURN ACKNOWLEDGEMENT
+    ITR-1 SAHAJ
+    Assessment Year: 2025-26
+    PAN: ABCDE1234F
+    Name: PRIYA NAIR
+    Acknowledgement Number: 123456789012345
+    Total Income: Rs. 15,00,000
+    Taxes Paid: Rs. 2,00,000
+
+    --- SCHEDULE SALARY ---
+    Details of Income from Salary
+    Name of Employer: GLOBAL SYSTEMS PVT LTD
+    PAN of Employer: EMPLP1234K
+    """
+    s_fields, _ = extract_document_fields("itr", create_mock_doc(salary_itr_text))
+    assert s_fields.get("name") == "PRIYA NAIR"
+    assert "Employer" not in s_fields.get("name", "")
+
+    # 3. CA title-block cover format
+    ca_cover_text = """
+    Income Tax Return
+    Financial Year 2024-25
+    Assessment Year 2025-26
+    Of
+    3_EXTENT
+    Pan :- AADFZ9861F
+    Address :- Shop No.312 Pune
+    """
+    c_fields, _ = extract_document_fields("itr", create_mock_doc(ca_cover_text))
+    assert c_fields.get("name") == "3_EXTENT"
+    assert c_fields.get("pan_number") == "AADFZ9861F"
+    assert c_fields.get("assessment_year") == "2025-26"
+
+    # 4. Ambiguous third-party only text (no assessee name, only deductor/employer labels)
+    ambiguous_text = """
+    Assessment Year: 2025-26
+    PAN: ABCDE1234F
+    Details of Tax Deducted at Source
+    Name of Deductor: XYZ CORP
+    TAN of Deductor: DEL012345
+    """
+    amb_fields, _ = extract_document_fields("itr", create_mock_doc(ambiguous_text))
+    assert amb_fields.get("name") is None
+    assert amb_fields.get("pan_number") == "ABCDE1234F"
+
+
+
 # ==============================================================================
 # Part A1: MICR Line Reading & Cross-Checking Tests
 # ==============================================================================
@@ -836,6 +919,100 @@ def test_gst_certificate_extractor_and_bleed():
     assert b_fields["legal_name"] == "ROYAL CATERERS PRIVATE LIMITED"
     assert b_fields["trade_name"] == "ROYAL SWEETS"
     assert "Trade Name" not in b_fields["legal_name"]
+
+
+def test_gst_certificate_trade_name_validation():
+    # 1. Blank trade name (with following additional trade names and constitution)
+    blank_text = """
+    Registration Number: 27AABCU9603R1ZN
+    Legal Name: ACME ENTERPRISES PRIVATE LIMITED
+    2. Trade Name, if any
+    3. Additional trade names, if any
+    4. Constitution of Business: Partnership Firm
+    Date of Registration: 01/07/2025
+    """
+    fields_blank, _ = extract_document_fields("gst_certificate", create_mock_doc(blank_text))
+    assert fields_blank.get("trade_name") is None
+    assert fields_blank["gstin"] == "27AABCU9603R1ZN"
+    assert fields_blank["constitution_of_business"] == "Partnership Firm"
+
+    # 2. "s, if" false extraction (reproducing GST REG-06 Item 2 blank and Item 3 break)
+    s_if_text = """
+    Registration Number: 27AADFZ9861F1ZN
+    1.   Legal Name                        EXTENT TECH
+    2.   Trade Name, if any                                                                          x
+    3.   Additional trade names, if
+         any                               Ta
+    4.   Constitution of Business          Partnership
+    """
+    fields_s_if, _ = extract_document_fields("gst_certificate", create_mock_doc(s_if_text))
+    assert fields_s_if.get("trade_name") is None
+    assert fields_s_if["gstin"] == "27AADFZ9861F1ZN"
+    assert fields_s_if["constitution_of_business"] == "Partnership"
+
+    # 3. "if any" false extraction
+    if_any_text = """
+    Registration Number: 27AABCU9603R1ZN
+    Trade Name, if any: if any
+    Constitution of Business: Private Limited Company
+    """
+    fields_if_any, _ = extract_document_fields("gst_certificate", create_mock_doc(if_any_text))
+    assert fields_if_any.get("trade_name") is None
+    assert fields_if_any["constitution_of_business"] == "Private Limited Company"
+
+    # 4. "Trade Name, if any" false extraction (label mirrored into value)
+    label_text = """
+    Registration Number: 27AABCU9603R1ZN
+    Trade Name, if any: Trade Name, if any
+    Constitution of Business: Sole Proprietorship
+    """
+    fields_label, _ = extract_document_fields("gst_certificate", create_mock_doc(label_text))
+    assert fields_label.get("trade_name") is None
+    assert fields_label["constitution_of_business"] == "Sole Proprietorship"
+
+    # 5. A genuine trade name such as "ABC Enterprises"
+    genuine_text = """
+    Registration Number: 27AABCU9603R1ZN
+    Legal Name: ACME CORP
+    Trade Name, if any: ABC Enterprises
+    Constitution of Business: Partnership Firm
+    Date of Registration: 10/10/2024
+    """
+    fields_genuine, _ = extract_document_fields("gst_certificate", create_mock_doc(genuine_text))
+    assert fields_genuine["trade_name"] == "ABC Enterprises"
+    assert fields_genuine["gstin"] == "27AABCU9603R1ZN"
+    assert fields_genuine["constitution_of_business"] == "Partnership Firm"
+
+    # 6. Short legitimate trade names (e.g. "OM", "SK")
+    short_om_text = """
+    Registration Number: 27AABCU9603R1ZN
+    Trade Name, if any: OM
+    Constitution of Business: Proprietorship
+    """
+    fields_om, _ = extract_document_fields("gst_certificate", create_mock_doc(short_om_text))
+    assert fields_om["trade_name"] == "OM"
+
+    short_sk_text = """
+    Registration Number: 27AABCU9603R1ZN
+    Trade Name: SK
+    Constitution of Business: Proprietorship
+    """
+    fields_sk, _ = extract_document_fields("gst_certificate", create_mock_doc(short_sk_text))
+    assert fields_sk["trade_name"] == "SK"
+
+    # 7. Multi-line valid trade name
+    multiline_text = """
+    Registration Number: 27AABCU9603R1ZN
+    2. Trade Name, if any
+    ABC Enterprises
+    3. Additional trade names, if any
+    4. Constitution of Business: Private Limited Company
+    """
+    fields_ml, _ = extract_document_fields("gst_certificate", create_mock_doc(multiline_text))
+    assert fields_ml["trade_name"] == "ABC Enterprises"
+    assert fields_ml["gstin"] == "27AABCU9603R1ZN"
+    assert fields_ml["constitution_of_business"] == "Private Limited Company"
+
 
 
 def test_certificate_of_incorporation_extractor_and_bleed():

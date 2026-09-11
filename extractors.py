@@ -122,6 +122,8 @@ RESIDUAL_LABEL_LINES = {
     "consumer number", "bill date", "due date", "bill amount", "total amount",
     "current year business loss", "book profit", "net tax payable",
     "gstin", "trade name", "legal name", "constitution of business", "date of registration",
+    "additional trade names", "additional trade name", "trade names", "trade name if any", "trade name, if any", "if any",
+    "name of deductor", "tan of deductor", "name of employer", "name of buyer", "name of collector", "name of deductee", "name of seller",
     "corporate identity number", "cin", "registrar of companies", "company name",
     "partnership deed", "firm name", "partner", "partner name", "profit sharing ratio",
     "lessor", "lessee", "landlord", "tenant", "monthly rent", "security deposit", "lease period",
@@ -1365,6 +1367,38 @@ def extract_driving_licence(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any],
 # 13. ITR (Income Tax Return) Extractor
 # ==============================================================================
 
+INVALID_ITR_NAME_LABELS = {
+    "of deductor", "of employer", "of collector", "of buyer", "of seller",
+    "of deductee", "of bank", "of premises", "of assessee", "of taxpayer",
+    "deductor", "employer", "collector", "buyer", "seller", "deductee",
+    "assessee", "taxpayer", "bank", "address", "status", "pan", "pan number",
+    "acknowledgement", "acknowledgement number", "form", "form number",
+    "total income", "taxes paid", "assessment year", "financial year",
+}
+
+
+def is_valid_itr_name(val: Optional[str]) -> bool:
+    """Validate extracted ITR assessee name against third-party field labels and fragments."""
+    if not val or not isinstance(val, str):
+        return False
+    clean = re.sub(r"^\d+[\.\)]\s*", "", val.strip()).strip(" :,-")
+    if len(clean) < 2:
+        return False
+    norm = re.sub(r"[\s\W_]+", " ", clean).strip().lower()
+    if not norm:
+        return False
+    if norm in INVALID_ITR_NAME_LABELS:
+        return False
+    if norm.startswith("of "):
+        return False
+    if any(norm.startswith(hdr) for hdr in [
+        "name of", "tan of", "pan of", "total amount", "sr no", "date of",
+        "form no", "assessment year", "financial year", "details of", "part "
+    ]):
+        return False
+    return True
+
+
 def extract_itr(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, float]]:
     all_lines = [line for page in doc_res.pages for line in page.lines]
     text = doc_res.full_text
@@ -1388,14 +1422,83 @@ def extract_itr(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, f
         fields["pan_number"] = pan_match.group(1)
         confidences["pan_number"] = find_line_confidence(pan_match.group(1), all_lines)
 
-    # Name
-    name_match = re.search(
-        r"(?:Name)[\s:]*([A-Za-z][A-Za-z \t.'-]{1,40}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:PAN|Address|Status|Form|Acknowledgement|Ack|Date|Father)\b))",
-        text,
-        re.IGNORECASE,
-    )
-    if name_match:
-        fields["name"] = clean_field_value(name_match.group(1))
+    # Name (Assessee Name)
+    name_val: Optional[str] = None
+
+    # Determine cover/acknowledgement page text slices if multi-page
+    search_slices: List[str] = []
+    if doc_res.pages:
+        for p in doc_res.pages[:3]:
+            if any(k in p.full_text.lower() for k in ["acknowledgement", "itr-v", "income tax return", "pan", "assessee"]):
+                search_slices.append(p.full_text)
+    if not search_slices:
+        search_slices.append(text)
+
+    for stext in search_slices:
+        # Strategy 1: Explicit "Name of Assessee" or "Assessee Name"
+        m_assessee = re.search(
+            r"(?:Name\s*of\s*Assessee|Assessee\s*Name)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t.,'\-&_]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:PAN|Address|Status|Ward|Assessment|Financial|D\.O\.I|DOI|Return|Date)\b))",
+            stext,
+            re.IGNORECASE,
+        )
+        if m_assessee:
+            cand = clean_field_value(m_assessee.group(1))
+            if is_valid_itr_name(cand):
+                name_val = cand
+                break
+
+        # Strategy 2: CA cover title block: "Income Tax Return ... Of \n <Assessee> \n Pan"
+        m_cover_of = re.search(
+            r"(?:Assessment\s*Year[^\n]*\n\s*Of|\bReturn\b[^\n]*\n[^\n]*\bOf)[\s:\r\n]+([A-Za-z0-9][A-Za-z0-9 \t.,'\-&_]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:PAN|Address|Prepared)\b))",
+            stext,
+            re.IGNORECASE,
+        )
+        if m_cover_of:
+            cand = clean_field_value(m_cover_of.group(1))
+            if is_valid_itr_name(cand):
+                name_val = cand
+                break
+
+        # Strategy 3: Standard ITR-V "Name" label (negative lookahead strictly blocks "Name of Deductor/Employer/...")
+        m_name = re.search(
+            r"\bName\b(?!\s*of\s*(?:Deductor|Employer|Bank|Buyer|Collector|Seller|Deductee|Premises|Branch))[\s:]*([A-Za-z0-9][A-Za-z0-9 \t.,'\-&_]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:PAN|Address|Status|Form|Acknowledgement|Ack|Date|Father|Total|Taxes|Current)\b))",
+            stext,
+            re.IGNORECASE,
+        )
+        if m_name:
+            cand = clean_field_value(m_name.group(1))
+            if is_valid_itr_name(cand):
+                name_val = cand
+                break
+
+        # Strategy 4: Multiline "Name \n <Assessee> \n Address"
+        lines = [l.strip() for l in stext.splitlines() if l.strip()]
+        for idx, line in enumerate(lines):
+            if re.match(r"^Name\s*[:\-]?$", line, re.IGNORECASE):
+                if idx + 1 < len(lines):
+                    next_l = lines[idx + 1].strip()
+                    if not re.search(r"^(?:PAN|Address|Status|Form|Acknowledgement|Ack|Date|Father|Total|Taxes)\b", next_l, re.IGNORECASE):
+                        cand = clean_field_value(next_l)
+                        if is_valid_itr_name(cand):
+                            name_val = cand
+                            break
+        if name_val:
+            break
+
+    # Fallback to full text if slices did not yield a valid name
+    if not name_val:
+        m_name = re.search(
+            r"\bName\b(?!\s*of\s*(?:Deductor|Employer|Bank|Buyer|Collector|Seller|Deductee|Premises|Branch))[\s:]*([A-Za-z0-9][A-Za-z0-9 \t.,'\-&_]{1,60}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:PAN|Address|Status|Form|Acknowledgement|Ack|Date|Father|Total|Taxes|Current)\b))",
+            text,
+            re.IGNORECASE,
+        )
+        if m_name:
+            cand = clean_field_value(m_name.group(1))
+            if is_valid_itr_name(cand):
+                name_val = cand
+
+    if name_val:
+        fields["name"] = name_val
         confidences["name"] = find_line_confidence(fields["name"], all_lines)
 
     # Total Income
@@ -1425,6 +1528,34 @@ def extract_itr(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, f
 # 14. GST Certificate Extractor
 # ==============================================================================
 
+GST_TRADE_NAME_LABEL_WORDS = {"trade", "name", "names", "if", "any", "additional", "s"}
+GST_BLANK_OR_NA_VALUES = {"na", "n a", "not applicable", "nil", "none", "null", "blank", "x", "xx", "xxx", "-"}
+GST_NEXT_SECTION_HEADERS = ("constitution", "legal name", "gstin", "date of", "registration", "type of", "address", "period")
+
+
+def is_valid_gst_trade_name(val: Optional[str]) -> bool:
+    """Validate extracted GST trade name against field label fragments, blanks, and OCR artifacts."""
+    if not val or not isinstance(val, str):
+        return False
+    # Strip leading item numbering like "2." or "2)"
+    clean = re.sub(r"^\d+[\.\)]\s*", "", val.strip()).strip(" :,-")
+    if len(clean) < 2:
+        return False
+    norm = re.sub(r"[\s\W_]+", " ", clean).strip().lower()
+    if not norm:
+        return False
+    if norm in GST_BLANK_OR_NA_VALUES:
+        return False
+    words = norm.split()
+    # Reject if all constituent words belong to GST label words (e.g. "s, if", "if any", "Trade Name, if any")
+    if all(w in GST_TRADE_NAME_LABEL_WORDS for w in words):
+        return False
+    # Reject if it starts with another GST certificate section header
+    if any(norm.startswith(hdr) for hdr in GST_NEXT_SECTION_HEADERS):
+        return False
+    return True
+
+
 def extract_gst_certificate(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, float]]:
     text = doc_res.full_text
     all_lines = [line for page in doc_res.pages for line in page.lines]
@@ -1448,14 +1579,43 @@ def extract_gst_certificate(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any],
         confidences["legal_name"] = find_line_confidence(fields["legal_name"], all_lines)
 
     # Trade Name
+    trade_name_val: Optional[str] = None
+    # 1. Inline regex match (strictly excluding "Additional trade names" with negative lookbehind)
     trade_match = re.search(
-        r"(?:Trade\s*Name(?:,\s*if\s*any)?)[\s:]*([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,70}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Constitution|Legal\s*Name|GSTIN|Date|Address|Period)\b))",
+        r"(?<!Additional\s)(?<!Additional\s\s)\bTrade\s*Name(?:\s*,\s*if\s*any)?[\s:]+([A-Za-z0-9][A-Za-z0-9 \t,\.\-&]{1,70}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Constitution|Legal\s*Name|GSTIN|Date|Address|Period|Additional)\b))",
         text,
         re.IGNORECASE,
     )
     if trade_match:
-        fields["trade_name"] = clean_field_value(trade_match.group(1), "trade_name", "gst_certificate")
+        cand = clean_field_value(trade_match.group(1), "trade_name", "gst_certificate")
+        if is_valid_gst_trade_name(cand):
+            trade_name_val = cand
+
+    # 2. Multiline fallback if inline regex did not capture a valid trade name
+    if not trade_name_val:
+        lines = [l.strip() for l in text.splitlines() if l.strip()]
+        for idx, line in enumerate(lines):
+            if re.search(r"(?<!Additional\s)(?<!Additional\s\s)\bTrade\s*Name\b", line, re.IGNORECASE):
+                inline = re.sub(r"^.*?\bTrade\s*Name(?:\s*,\s*if\s*any)?\s*[:\-]?\s*", "", line, flags=re.IGNORECASE).strip()
+                inline = re.split(r"(?:\b|(?<=[a-z0-9A-Z]))(?:Constitution|Legal\s*Name|GSTIN|Date|Address|Period|Additional)\b", inline, flags=re.IGNORECASE)[0].strip()
+                inline = clean_field_value(inline, "trade_name", "gst_certificate")
+                if is_valid_gst_trade_name(inline):
+                    trade_name_val = inline
+                    break
+                # Check next line if present
+                if idx + 1 < len(lines):
+                    next_l = lines[idx + 1].strip()
+                    if not re.search(r"^(?:\d+[\.\)]\s*)?(?:Additional|Constitution|Legal\s*Name|GSTIN|Date|Address|Period)\b", next_l, re.IGNORECASE):
+                        cand_next = clean_field_value(next_l, "trade_name", "gst_certificate")
+                        if is_valid_gst_trade_name(cand_next):
+                            trade_name_val = cand_next
+                break
+
+    if trade_name_val:
+        fields["trade_name"] = trade_name_val
         confidences["trade_name"] = find_line_confidence(fields["trade_name"], all_lines)
+    else:
+        fields["trade_name"] = None
 
     # Registration Date
     reg_date = re.search(
