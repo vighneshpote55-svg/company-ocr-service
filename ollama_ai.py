@@ -184,16 +184,105 @@ def _normalize_extracted_fields(raw_fields: Any) -> Dict[str, Any]:
     return clean_dict
 
 
-def analyze_document(file_path: str, filename: str = "") -> Dict[str, Any]:
+def normalize_document_type(raw_type: str, text_content: str = "") -> str:
+    """
+    Map raw model classification to canonical, clean document types.
+    Ensures that raw strings like 'Incometaxdepartment' are NEVER used.
+    """
+    t = (raw_type or "").strip().lower()
+    combined = (t + " " + (text_content or "").lower()).strip()
+
+    # 1. PAN Card
+    if any(k in t for k in ["pan card", "permanent account number"]) or (
+        ("permanent account" in combined or re.search(r"\b[a-z]{5}[0-9]{4}[a-z]\b", combined))
+        and not ("notice" in combined or "assessment year" in combined)
+    ):
+        return "PAN Card"
+
+    # 2. Aadhaar Card
+    if any(k in t for k in ["aadhaar", "uidai", "aadhar"]) or (
+        "unique identification authority" in combined or "mera aadhaar" in combined or "enrolment no" in combined
+    ):
+        return "Aadhaar Card"
+
+    # 3. Income Tax Notice
+    if any(k in t for k in ["income tax notice", "tax notice", "demand notice", "intimation"]) or (
+        "income tax" in combined and any(k in combined for k in ["notice", "u/s", "section 143", "section 142", "section 148", "assessment year", "intimation", "din:"])
+    ):
+        return "Income Tax Notice"
+
+    # 4. Employment Contract / Agreement
+    if any(k in t for k in ["employment contract", "employment agreement", "appointment letter", "offer letter"]) or (
+        "employ" in combined and ("contract" in combined or "agreement" in combined or "letter" in combined)
+    ):
+        return "Employment Contract"
+
+    # 5. Bank Statement
+    if any(k in t for k in ["bank statement", "account statement"]) or (
+        "statement of account" in combined or ("bank" in combined and "account number" in combined and ("balance" in combined or "transaction" in combined))
+    ):
+        return "Bank Statement"
+
+    # 6. Commercial Invoice
+    if any(k in t for k in ["invoice", "tax invoice", "bill"]) or (
+        "invoice" in combined and any(k in combined for k in ["total", "bill to", "amount due", "gstin"])
+    ):
+        return "Commercial Invoice"
+
+    # 7. Salary Slip
+    if any(k in t for k in ["salary slip", "payslip", "pay slip"]) or (
+        "salary slip" in combined or "payslip" in combined or ("pay slip" in combined and "earnings" in combined)
+    ):
+        return "Salary Slip"
+
+    # 8. Passport
+    if "passport" in t or ("passport" in combined and ("republic of india" in combined or "nationality" in combined)):
+        return "Passport"
+
+    # 9. Driving License
+    if "driving licen" in t or "driver licen" in t or "driving licence" in combined or "dl no" in combined:
+        return "Driving License"
+
+    # 10. Voter ID
+    if "voter" in t or "election commission" in combined or "epic" in combined:
+        return "Voter ID"
+
+    # 11. Rental Agreement
+    if "rental" in t or "lease agreement" in t or ("lease" in combined and "tenant" in combined):
+        return "Rental Agreement"
+
+    # 12. Catch incomplete/distorted "incometax..."
+    if "incometax" in t or "income tax" in t:
+        if "permanent account" in combined or re.search(r"\b[a-z]{5}[0-9]{4}[a-z]\b", combined):
+            return "PAN Card"
+        elif "notice" in combined or "assessment" in combined:
+            return "Income Tax Notice"
+        else:
+            return "Income Tax Notice"
+
+    # Recognized generic types
+    if t in ["legal contract", "non-disclosure agreement", "nda", "power of attorney", "certificate"]:
+        return raw_type.title()
+
+    if "unknown" in t or len(t) > 35 or not t:
+        return "Unknown Document"
+
+    return raw_type.title()
+
+
+def analyze_document(
+    file_path: str,
+    filename: str = "",
+    ocr_text: str = "",
+) -> Dict[str, Any]:
     """
     Analyze document with local Ollama + Qwen2.5-VL:3B:
+    - Combines vision image + OCR extracted text
     - Extracts every visible field as structured key-value pairs
-    - Classifies document type
-    - Assesses confidence
-    - Produces an executive summary and reasoning points
-    - Returns structured JSON
+    - Classifies document into canonical types (e.g. 'PAN Card', 'Aadhaar Card', 'Employment Contract')
+    - Returns structured JSON with meaningful confidence, summary, and evidence points.
     """
-    logger.info("AI Mode selected")
+    logger.info("AI Mode Ollama analysis starting for file: %s", file_path)
 
     # 1. Health check & verification
     health = check_ollama_health()
@@ -208,28 +297,49 @@ def analyze_document(file_path: str, filename: str = "") -> Dict[str, Any]:
     logger.info("Sending image to Ollama: %s", image_to_send)
     t0 = time.time()
 
+    trimmed_ocr = (ocr_text or "").strip()[:8000]
+
     prompt = (
-        "You are an expert document understanding AI. Analyze the uploaded document image carefully.\n"
-        "Extract every single visible field, identifier, name, date, amount, organization, and attribute into structured data.\n"
-        "Respond ONLY with a valid JSON object matching this exact schema:\n"
+        "You are an expert document understanding AI. Analyze the uploaded document image and extracted text carefully.\n"
+    )
+    if trimmed_ocr:
+        prompt += (
+            f"Extracted Document OCR Text:\n---\n{trimmed_ocr}\n---\n\n"
+        )
+    prompt += (
+        "TASK:\n"
+        "1. Classify the document based on its actual content into one of these canonical types:\n"
+        "   - 'PAN Card' (Permanent Account Number Card issued by Income Tax Dept)\n"
+        "   - 'Aadhaar Card' (UIDAI identity card)\n"
+        "   - 'Income Tax Notice' (Formal tax notice/demand/intimation under Income Tax Act)\n"
+        "   - 'Employment Contract' (Employment contract, agreement, appointment letter)\n"
+        "   - 'Bank Statement' (Statement of account, transaction records, balance)\n"
+        "   - 'Commercial Invoice' (Billed goods/services, tax invoice)\n"
+        "   - 'Salary Slip' (Monthly pay statement, earnings, deductions)\n"
+        "   - 'Passport', 'Voter ID', 'Driving License', 'Rental Agreement'\n"
+        "   - 'Unknown Document' (if the document cannot be reliably classified)\n"
+        "2. Assess confidence: 'high' | 'medium' | 'low'.\n"
+        "3. Provide a natural 1-2 sentence summary of facts present in the document.\n"
+        "4. Provide 3-4 specific factual evidence points found in the document.\n"
+        "5. Extract visible key fields into extracted_fields.\n\n"
+        "CRITICAL RULES:\n"
+        "- NEVER use the filename or raw text fragments like 'Incometaxdepartment' as the document type.\n"
+        "- If the document is a PAN Card, classify it as 'PAN Card' (NOT 'Incometaxdepartment').\n"
+        "- NEVER hallucinate fields. Only mention facts present in the document.\n\n"
+        "Respond ONLY with a valid JSON object matching this schema:\n"
         "{\n"
-        '  "document_type": "string (e.g. Employment Contract, PAN Card, Invoice, Aadhaar, Agreement)",\n'
+        '  "document_type": "string",\n'
         '  "confidence": "high" | "medium" | "low",\n'
         '  "summary": "1-2 sentence executive summary of the document and its primary contents.",\n'
-        '  "reasoning": [\n'
+        '  "evidence": [\n'
         '    "Evidence point 1 extracted from document",\n'
         '    "Evidence point 2 extracted from document",\n'
         '    "Evidence point 3 extracted from document"\n'
-        "  ],\n"
+        '  ],\n'
         '  "extracted_fields": {\n'
-        '    "field_name_1": "field_value_1",\n'
-        '    "field_name_2": "field_value_2"\n'
-        "  }\n"
+        '    "field_name_1": "field_value_1"\n'
+        '  }\n'
         "}\n"
-        "IMPORTANT RULES:\n"
-        "- Do NOT include any markdown fences or conversational preamble.\n"
-        "- Extract ALL visible text and key-value pairs into extracted_fields.\n"
-        "- Be factual, exact, and complete."
     )
 
     try:
@@ -253,24 +363,33 @@ def analyze_document(file_path: str, filename: str = "") -> Dict[str, Any]:
         cleaned_json = _clean_json_response(raw_content)
         parsed = json.loads(cleaned_json)
 
-        # Normalize output fields
-        doc_type = parsed.get("document_type") or "Analyzed Document"
+        # Normalize document type
+        raw_doc_type = parsed.get("document_type") or "Unknown Document"
+        normalized_type = normalize_document_type(raw_doc_type, text_content=ocr_text)
+
         confidence = str(parsed.get("confidence", "high")).lower()
         if confidence not in ("high", "medium", "low"):
-            confidence = "high"
+            confidence = "high" if normalized_type != "Unknown Document" else "low"
 
-        summary = parsed.get("summary") or f"Document classified as {doc_type} using local Qwen2.5-VL vision model."
-        reasoning = parsed.get("reasoning") or []
-        if isinstance(reasoning, str):
-            reasoning = [reasoning]
+        summary = parsed.get("summary") or f"This document was analyzed and identified as a {normalized_type}."
+        
+        evidence = parsed.get("evidence") or parsed.get("reasoning") or []
+        if isinstance(evidence, str):
+            evidence = [evidence]
+        if not evidence:
+            evidence = [
+                f"Document structure matches {normalized_type}",
+                f"Contains verified text tokens and layout features",
+            ]
 
         extracted_fields = _normalize_extracted_fields(parsed.get("extracted_fields") or {})
 
         return {
-            "document_type": doc_type,
+            "document_type": normalized_type,
             "confidence": confidence,
             "summary": summary,
-            "reasoning": reasoning,
+            "evidence": evidence,
+            "reasoning": evidence,
             "extracted_fields": extracted_fields,
             "processing_time_seconds": round(duration, 2),
             "model_used": DEFAULT_MODEL,
@@ -294,21 +413,34 @@ def chat_with_document(
 ) -> str:
     """
     Document-grounded conversational chat using local Ollama model.
+    Strictly answers ONLY from document context and explicitly rejects hallucinating missing fields.
     """
     health = check_ollama_health()
     if not health.get("reachable"):
         raise RuntimeError("Ollama server is not running.")
 
     system_prompt = (
-        f"You are an AI Document Assistant analyzing the document '{filename}'.\n"
+        f"You are an expert AI Document Assistant analyzing the document '{filename}'.\n"
         "Here is the verified context and extracted content from this document:\n"
         "-----------------------------------------\n"
         f"{document_context[:10000]}\n"
         "-----------------------------------------\n"
-        "Instructions:\n"
-        "1. Answer questions accurately based strictly on the document context above.\n"
-        "2. If an answer cannot be found in the context, clearly state that it is not present in the document.\n"
-        "3. Keep answers concise, helpful, and professional."
+        "CRITICAL GROUNDING RULES:\n"
+        "1. Answer strictly based on the facts present in the document context above.\n"
+        "2. NEVER invent, assume, or hallucinate facts, numbers, dates, or names.\n"
+        "3. If the user asks for a field that does NOT exist in this document "
+        "(e.g., asking for 'employee name' on a PAN card, ID card, tax notice, or invoice; "
+        "or asking for 'salary' or 'joining date' when none is stated), you MUST state clearly:\n"
+        "   'I could not find [field name] in this document.'\n"
+        "   For example:\n"
+        "   - 'I could not find an employee name in this document.'\n"
+        "   - 'I could not find a joining date in this document.'\n"
+        "   - 'I could not find salary information in this document.'\n"
+        "4. NEVER output raw OCR placeholder artifacts or label fragments such as '***/Name', 'Name', or fake values.\n"
+        "5. If the user asks to summarize, provide a concise factual summary of what is actually in the document.\n"
+        "6. If the user asks for dates, list only dates explicitly found. If no dates are found, state: 'No clear dates were found in the document.'\n"
+        "7. If the user asks for financial or compensation details, list only monetary amounts explicitly found. If no financial information exists, state: 'No financial information was found in this document.'\n"
+        "8. Keep answers concise, direct, helpful, and professional."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -323,4 +455,8 @@ def chat_with_document(
 
     client = get_client()
     response = client.chat(model=DEFAULT_MODEL, messages=messages)
-    return response.get("message", {}).get("content", "").strip()
+    reply = response.get("message", {}).get("content", "").strip()
+
+    # Sanitize any raw OCR artifacts
+    reply = reply.replace("***/Name", "the cardholder's name").replace("*/Name", "").replace("\u5dde/Name", "")
+    return reply

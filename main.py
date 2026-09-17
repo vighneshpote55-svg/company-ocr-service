@@ -858,7 +858,15 @@ async def upload_document_endpoint(
                     content={"error": health.get("error", "Model 'qwen2.5vl:3b' is missing. Please run: ollama pull qwen2.5vl:3b")},
                 )
 
-            ai_res = ollama_ai.analyze_document(temp_path, filename=filename)
+            # Extract text first: check PDF text layer first, fallback to OCR
+            if ext == ".pdf":
+                doc_res = ocr_engine.process_pdf(temp_path)
+            else:
+                doc_res = ocr_engine.process_file(temp_path)
+
+            extracted_text = doc_res.full_text or ""
+
+            ai_res = ollama_ai.analyze_document(temp_path, filename=filename, ocr_text=extracted_text)
             if "error" in ai_res:
                 err_code = (
                     status.HTTP_503_SERVICE_UNAVAILABLE
@@ -868,19 +876,20 @@ async def upload_document_endpoint(
                 return JSONResponse(status_code=err_code, content=ai_res)
 
             thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
+            evidence_list = ai_res.get("evidence") or ai_res.get("reasoning", [])
 
             result_payload = {
                 "doc_type": "ai_analyzed",
-                "document_type": ai_res.get("document_type", "Analyzed Document"),
-                "ocr_required": False,
+                "document_type": ai_res.get("document_type", "Unknown Document"),
+                "ocr_required": getattr(doc_res, "ocr_required", False),
                 "text_source": "ollama_qwen2.5vl",
                 "status": "completed",
-                "confidence": 0.95 if ai_res.get("confidence") == "high" else (0.80 if ai_res.get("confidence") == "medium" else 0.60),
-                "pages": 1,
+                "confidence": 0.95 if ai_res.get("confidence") == "high" else (0.80 if ai_res.get("confidence") == "medium" else 0.50),
+                "pages": len(doc_res.pages) if doc_res.pages else 1,
                 "reason": None,
                 "extracted_fields": ai_res.get("extracted_fields", {}),
                 "field_confidences": {},
-                "extracted_text": json.dumps(ai_res.get("extracted_fields", {}), indent=2),
+                "extracted_text": extracted_text,
                 "ai_analysis": ai_res,
             }
 
@@ -894,17 +903,18 @@ async def upload_document_endpoint(
             return {
                 "document_id": saved_record["id"],
                 "filename": saved_record["filename"],
-                "document_type": ai_res.get("document_type", "Analyzed Document"),
+                "document_type": ai_res.get("document_type", "Unknown Document"),
                 "confidence": ai_res.get("confidence", "high"),
                 "summary": ai_res.get("summary", ""),
-                "reasoning": ai_res.get("reasoning", []),
+                "evidence": evidence_list,
+                "reasoning": evidence_list,
                 "extracted_fields": ai_res.get("extracted_fields", {}),
                 "file_url": saved_record["file_url"],
                 "preview_url": saved_record.get("preview_url"),
                 "file_size": saved_record["file_size"],
                 "pages": saved_record["pages"],
                 "text_source": "ollama_qwen2.5vl",
-                "extracted_text": json.dumps(ai_res.get("extracted_fields", {}), indent=2),
+                "extracted_text": extracted_text,
                 "processing_time_seconds": ai_res.get("processing_time_seconds"),
                 "model_used": ai_res.get("model_used", "qwen2.5vl:3b"),
                 "is_local_ai": True,
@@ -1381,15 +1391,15 @@ async def process_ai_analyze_endpoint(
         ocr_required = getattr(doc_res, "ocr_required", True)
         text_source = getattr(doc_res, "text_source", "none")
 
-        if not doc_res.full_text or not doc_res.full_text.strip():
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail="No readable text detected in uploaded document. Please upload a legible document.",
-            )
+        extracted_text = doc_res.full_text or ""
 
-        # Call AI analysis service
+        # Call AI analysis service with both OCR text and image path
         try:
-            ai_res = await ai_service.analyze_document(doc_res.full_text, filename=filename)
+            ai_res = await ai_service.analyze_document(
+                document_text=extracted_text,
+                file_path=temp_path,
+                filename=filename,
+            )
         except RuntimeError as ai_err:
             raise HTTPException(
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -1403,24 +1413,20 @@ async def process_ai_analyze_endpoint(
             )
 
         thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
+        evidence_list = ai_res.get("evidence") or ai_res.get("reasoning", [])
 
         result_payload = {
             "doc_type": "ai_analyzed",
-            "document_type": ai_res.get("document_type", "Analyzed Document"),
+            "document_type": ai_res.get("document_type", "Unknown Document"),
             "ocr_required": ocr_required,
             "text_source": text_source,
             "status": "completed",
-            "confidence": 0.95 if ai_res.get("confidence") == "high" else (0.80 if ai_res.get("confidence") == "medium" else 0.60),
+            "confidence": 0.95 if ai_res.get("confidence") == "high" else (0.80 if ai_res.get("confidence") == "medium" else 0.50),
             "pages": len(doc_res.pages) if doc_res.pages else 1,
             "reason": None,
-            "extracted_fields": {
-                "detected_document_type": ai_res.get("document_type"),
-                "confidence": ai_res.get("confidence"),
-                "summary": ai_res.get("summary"),
-                "reasoning": ai_res.get("reasoning", []),
-            },
+            "extracted_fields": ai_res.get("extracted_fields", {}),
             "field_confidences": {},
-            "extracted_text": doc_res.full_text,
+            "extracted_text": extracted_text,
             "ai_analysis": ai_res,
         }
 
@@ -1434,16 +1440,18 @@ async def process_ai_analyze_endpoint(
         return {
             "document_id": saved_record["id"],
             "filename": saved_record["filename"],
-            "document_type": ai_res["document_type"],
-            "confidence": ai_res["confidence"],
-            "summary": ai_res["summary"],
-            "reasoning": ai_res["reasoning"],
+            "document_type": ai_res.get("document_type", "Unknown Document"),
+            "confidence": ai_res.get("confidence", "high"),
+            "summary": ai_res.get("summary", ""),
+            "evidence": evidence_list,
+            "reasoning": evidence_list,
+            "extracted_fields": ai_res.get("extracted_fields", {}),
             "file_url": saved_record["file_url"],
             "preview_url": saved_record.get("preview_url"),
             "file_size": saved_record["file_size"],
             "pages": saved_record["pages"],
             "text_source": text_source,
-            "extracted_text": doc_res.full_text,
+            "extracted_text": extracted_text,
         }
 
     finally:

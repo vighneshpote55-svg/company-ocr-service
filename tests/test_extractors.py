@@ -630,6 +630,8 @@ def test_micr_pipeline_end_to_end_on_real_demo_cheque_file():
 
     cheque_pdf = os.path.join(DEMO_DIR, "Demo_Cancelled_Cheque.pdf")
     imgs = render_pdf_pages_to_images(cheque_pdf)
+    if not imgs:
+        pytest.skip("pdftoppm / Poppler not available to render PDF to image")
     assert len(imgs) >= 1
     page_img = imgs[0]
 

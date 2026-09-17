@@ -20,6 +20,7 @@ from PIL import Image, ImageDraw
 
 from main import app
 import document_store
+import ai_service
 
 
 @pytest.fixture(autouse=True)
@@ -260,3 +261,139 @@ def test_ai_chat_invalid_document_id_returns_404(client):
     )
     assert res.status_code == 404
     assert "not found" in res.json()["detail"].lower()
+
+
+@pytest.mark.asyncio
+async def test_ai_mode_pan_card_classification_and_chat_grounding():
+    """
+    Test real PAN card text:
+    - Must classify as 'PAN Card' (NOT 'Incometaxdepartment')
+    - Confidence must be 'high'
+    - Asking 'What is the employee name?' MUST return 'I could not find an employee name in this document.'
+    - Asking 'What is the PAN number?' returns 'IVQPP1031M'
+    - Must never return '***/Name'
+    """
+    pan_text = (
+        "INCOMETAXDEPARTMENT\n"
+        "GOVT.OFINDIA\n"
+        "Permanent Account Number Card\n"
+        "IVQPP1031M\n"
+        "नाम/Name\n"
+        "VIGHNESHSANDIPPOTE\n"
+        "Father'sName\n"
+        "POTESANDIP\n"
+        "Date of Birth\n"
+        "22/06/2007"
+    )
+
+    analysis = await ai_service.analyze_document(pan_text, filename="WhatsApp Image 2026-09-10 at 16.53.24.jpeg")
+    assert analysis["document_type"] == "PAN Card"
+    assert analysis["confidence"] == "high"
+    assert "Incometaxdepartment" not in analysis["document_type"]
+    assert "Permanent Account Number" in analysis["summary"] or "PAN" in analysis["summary"]
+    assert len(analysis["evidence"]) >= 2
+
+    # Chat Grounding Tests:
+    # 1. Employee name MUST NOT hallucinate
+    reply_emp = await ai_service.chat_with_document(
+        pan_text,
+        filename="WhatsApp Image 2026-09-10 at 16.53.24.jpeg",
+        message="What is the employee name?",
+    )
+    assert "could not find an employee name" in reply_emp.lower()
+    assert "***/Name" not in reply_emp
+    assert "*/Name" not in reply_emp
+
+    # 2. Joining date MUST NOT hallucinate
+    reply_join = await ai_service.chat_with_document(
+        pan_text,
+        filename="WhatsApp Image 2026-09-10 at 16.53.24.jpeg",
+        message="What is the joining date?",
+    )
+    assert "could not find a joining date" in reply_join.lower()
+
+    # 3. Salary MUST NOT hallucinate
+    reply_sal = await ai_service.chat_with_document(
+        pan_text,
+        filename="WhatsApp Image 2026-09-10 at 16.53.24.jpeg",
+        message="What is the salary?",
+    )
+    assert "could not find salary information" in reply_sal.lower()
+
+    # 4. PAN Number should be accurately answered
+    reply_pan = await ai_service.chat_with_document(
+        pan_text,
+        filename="WhatsApp Image 2026-09-10 at 16.53.24.jpeg",
+        message="What is the PAN number?",
+    )
+    assert "IVQPP1031M" in reply_pan
+
+    # 5. Cardholder name query
+    reply_name = await ai_service.chat_with_document(
+        pan_text,
+        filename="WhatsApp Image 2026-09-10 at 16.53.24.jpeg",
+        message="What is the name of the individual?",
+    )
+    assert "VIGHNESHSANDIPPOTE" in reply_name
+    assert "***/Name" not in reply_name
+
+
+@pytest.mark.asyncio
+async def test_ai_mode_document_classifications():
+    """Verify Aadhaar, Income Tax Notice, Bank Statement, Contract, and Unknown."""
+    # Aadhaar Card
+    aadhaar_text = "UNIQUE IDENTIFICATION AUTHORITY OF INDIA\nGOVERNMENT OF INDIA\nName: Rahul Sharma\nDOB: 01/01/1990\nMale\n1234 5678 9012"
+    res_aadhaar = await ai_service.analyze_document(aadhaar_text)
+    assert res_aadhaar["document_type"] == "Aadhaar Card"
+    assert res_aadhaar["confidence"] == "high"
+
+    # Income Tax Notice (not a PAN card)
+    it_notice_text = (
+        "INCOME TAX DEPARTMENT\n"
+        "GOVERNMENT OF INDIA\n"
+        "Notice under section 143(2) of the Income-tax Act, 1961\n"
+        "Assessment Year: 2026-27\n"
+        "DIN: ITBA/AST/S/143(2)/2026-27/1054238910(1)\n"
+        "To: ABC Enterprises Ltd"
+    )
+    res_notice = await ai_service.analyze_document(it_notice_text)
+    assert res_notice["document_type"] == "Income Tax Notice"
+    assert res_notice["confidence"] == "high"
+
+    # Bank Statement
+    bank_text = (
+        "STATE BANK OF INDIA\n"
+        "Statement of Account for Period 01/08/2026 to 31/08/2026\n"
+        "Account Number: 123456789012\n"
+        "IFSC: SBIN0001234\n"
+        "Opening Balance: 45,000.00\n"
+        "Closing Balance: 52,000.00"
+    )
+    res_bank = await ai_service.analyze_document(bank_text)
+    assert res_bank["document_type"] == "Bank Statement"
+    assert res_bank["confidence"] == "high"
+
+    # Employment Contract
+    contract_text = (
+        "ACME CORP - EMPLOYMENT AGREEMENT\n"
+        "Between Acme Corp and John Doe\n"
+        "Position: Lead Architect\n"
+        "Joining Date: 15 October 2026\n"
+        "Salary: $150,000 per annum"
+    )
+    res_contract = await ai_service.analyze_document(contract_text)
+    assert res_contract["document_type"] == "Employment Contract"
+    assert res_contract["confidence"] == "high"
+
+    # Unknown Document
+    unknown_text = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. Integer nec odio. Praesent libero."
+    res_unknown = await ai_service.analyze_document(unknown_text)
+    assert res_unknown["document_type"] == "Unknown Document"
+    assert res_unknown["confidence"] == "low"
+
+    # OCR failure / low text
+    res_low = await ai_service.analyze_document("Abc")
+    assert res_low["document_type"] == "Unknown Document"
+    assert res_low["confidence"] == "low"
+    assert "upload a clearer image" in res_low["summary"].lower()
+
