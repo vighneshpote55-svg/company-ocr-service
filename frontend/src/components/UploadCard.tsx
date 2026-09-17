@@ -1,5 +1,5 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, Sparkles, ChevronDown, ChevronUp } from 'lucide-react';
+import { UploadCloud, Sparkles, ChevronDown, ChevronUp, AlertCircle, ArrowRight, ShieldCheck } from 'lucide-react';
 import type { SupportedType, DocumentItem, UploadProgress } from '../types';
 import { api } from '../services/api';
 import { ProcessingTimeline } from './ProcessingTimeline';
@@ -8,18 +8,21 @@ interface UploadCardProps {
   supportedTypes: SupportedType[];
   onUploadSuccess: (doc: DocumentItem) => void;
   onError: (msg: string) => void;
+  onSwitchToAiMode?: () => void;
 }
 
 export const UploadCard: React.FC<UploadCardProps> = ({
   supportedTypes,
   onUploadSuccess,
   onError,
+  onSwitchToAiMode,
 }) => {
   const [dragActive, setDragActive] = useState(false);
   const [selectedType, setSelectedType] = useState<string>('auto');
   const [expectedData, setExpectedData] = useState<string>('');
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [unsupportedError, setUnsupportedError] = useState<string | null>(null);
   const [progress, setProgress] = useState<UploadProgress>({
     step: 'idle',
     percent: 0,
@@ -69,29 +72,39 @@ export const UploadCard: React.FC<UploadCardProps> = ({
       return;
     }
 
+    setUnsupportedError(null);
     setIsProcessing(true);
     setProgress({ step: 'uploading', percent: 20, message: 'Uploading document payload...' });
 
     try {
-      // Step simulation for rich UX
       setTimeout(() => {
         setProgress({ step: 'analyzing', percent: 45, message: 'Checking embedded text layer (pdftotext)...' });
       }, 300);
 
       setTimeout(() => {
-        setProgress({ step: 'extracting', percent: 70, message: 'Classifying document & running extraction...' });
+        setProgress({ step: 'extracting', percent: 70, message: 'Classifying document against supported types...' });
       }, 700);
 
       setTimeout(() => {
         setProgress({ step: 'verifying', percent: 90, message: 'Validating checksums & masking PII...' });
       }, 1000);
 
-      const doc = await api.uploadDocument(file, selectedType, expectedData || undefined);
+      const doc = await api.uploadOfflineDocument(file, selectedType, expectedData || undefined);
+
+      if (doc.supported === false) {
+        setIsProcessing(false);
+        const rejectionMsg =
+          doc.message ||
+          'This document type is not supported in Offline Mode. Please use AI Mode for unknown documents.';
+        setUnsupportedError(rejectionMsg);
+        onError(rejectionMsg);
+        return;
+      }
 
       setProgress({ step: 'done', percent: 100, message: 'Document analysis complete!' });
       setTimeout(() => {
         setIsProcessing(false);
-        onUploadSuccess(doc);
+        onUploadSuccess(doc as unknown as DocumentItem);
       }, 400);
     } catch (err: any) {
       setIsProcessing(false);
@@ -104,16 +117,52 @@ export const UploadCard: React.FC<UploadCardProps> = ({
     }
   };
 
+  const nonAutoSupportedTypes = supportedTypes.filter((t) => t.id !== 'auto');
+
   return (
     <div className="upload-card">
       <div className="upload-header">
         <div>
-          <h2 className="upload-title">Ingest & Verify Document</h2>
+          <div className="offline-mode-badge-pill">
+            <ShieldCheck size={16} />
+            <span>Offline Mode • Local PaddleOCR Engine</span>
+          </div>
+          <h2 className="upload-title" style={{ marginTop: '0.6rem' }}>
+            Ingest & Verify Predefined Document
+          </h2>
           <p className="upload-subtitle">
-            Upload any Indian ID, financial document, or certificate for automated classification, text layer detection, and checksum verification.
+            Strictly processes supported document types using the local OCR pipeline without external AI APIs. If your document is not on the supported list, use <strong>AI Mode</strong>.
           </p>
         </div>
       </div>
+
+      {/* Unsupported Document Rejection Notice */}
+      {unsupportedError && (
+        <div className="offline-unsupported-banner">
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
+            <AlertCircle size={22} color="var(--accent-amber)" style={{ flexShrink: 0 }} />
+            <div>
+              <div style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--text-main)' }}>
+                Document Not Supported in Offline Mode
+              </div>
+              <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+                {unsupportedError}
+              </div>
+            </div>
+          </div>
+          {onSwitchToAiMode && (
+            <button
+              className="btn btn-primary"
+              onClick={onSwitchToAiMode}
+              style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem', whiteSpace: 'nowrap' }}
+            >
+              <Sparkles size={14} />
+              <span>Switch to AI Mode</span>
+              <ArrowRight size={14} />
+            </button>
+          )}
+        </div>
+      )}
 
       <input
         ref={fileInputRef}
@@ -151,21 +200,22 @@ export const UploadCard: React.FC<UploadCardProps> = ({
 
           <div className="upload-controls-grid">
             <div className="form-group">
-              <label className="form-label">Document Classification</label>
+              <label className="form-label">Predefined Document Type</label>
               <select
                 className="form-select"
                 value={selectedType}
-                onChange={(e) => setSelectedType(e.target.value)}
+                onChange={(e) => {
+                  setSelectedType(e.target.value);
+                  setUnsupportedError(null);
+                }}
                 disabled={isProcessing}
               >
-                <option value="auto">⚡ Auto-Detect Type (AI Classifier)</option>
-                {supportedTypes
-                  .filter((t) => t.id !== 'auto')
-                  .map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.name} ({t.category})
-                    </option>
-                  ))}
+                <option value="auto">⚡ Auto-Detect Type (Local Signature Matcher)</option>
+                {nonAutoSupportedTypes.map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name} ({t.category})
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -180,6 +230,25 @@ export const UploadCard: React.FC<UploadCardProps> = ({
                 <span>{showAdvanced ? 'Hide Advanced Options' : 'Cross-Check Verification (Optional)'}</span>
                 {showAdvanced ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
               </button>
+            </div>
+          </div>
+
+          {/* Supported Document Catalog Preview */}
+          <div className="supported-catalog-box">
+            <div className="supported-catalog-header">
+              <span>Supported Document Types ({nonAutoSupportedTypes.length}):</span>
+            </div>
+            <div className="supported-tags-cloud">
+              {nonAutoSupportedTypes.map((t) => (
+                <span
+                  key={t.id}
+                  className={`supported-tag ${selectedType === t.id ? 'active' : ''}`}
+                  onClick={() => setSelectedType(t.id)}
+                  title={`Select ${t.name}`}
+                >
+                  {t.name}
+                </span>
+              ))}
             </div>
           </div>
 

@@ -1,4 +1,14 @@
-import type { DocumentItem, DashboardStats, SupportedType, AuthConfig, EngineInfo, AuthStatusResponse } from '../types';
+import type {
+  DocumentItem,
+  DashboardStats,
+  SupportedType,
+  AuthConfig,
+  EngineInfo,
+  AuthStatusResponse,
+  AiAnalysisResult,
+  AiStatusResponse,
+  OfflineUploadResult,
+} from '../types';
 
 const STORAGE_KEY_BASE_URL = 'ocr_app_base_url';
 const SESSION_KEY_TOKEN = 'ocr_session_jwt_token';
@@ -368,6 +378,164 @@ export class ApiService {
 
       xhr.send(formData);
     });
+  }
+
+  public async getAiStatus(): Promise<AiStatusResponse> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/mode/ai/status'), {
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) throw new Error('Failed to fetch AI configuration status');
+    return res.json();
+  }
+
+  public async uploadOfflineDocument(
+    file: File,
+    docType?: string,
+    expectedData?: string,
+    onProgress?: (percent: number) => void
+  ): Promise<OfflineUploadResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (docType && docType !== 'auto') {
+      formData.append('doc_type', docType);
+    }
+    if (expectedData) {
+      formData.append('expected_data', expectedData);
+    }
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', this.getUrl('/api/mode/offline'));
+
+      if (this.authEnabled) {
+        if (this.token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+        } else if (this.apiKey) {
+          xhr.setRequestHeader('X-API-Key', this.apiKey);
+        }
+      }
+
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable && onProgress) {
+          const pct = Math.round((evt.loaded / evt.total) * 60);
+          onProgress(pct);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 401) {
+          this.notifyUnauthorized();
+          reject(new Error('Session expired or unauthorized. Please sign in again.'));
+          return;
+        }
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            if (onProgress) onProgress(100);
+            const data = JSON.parse(xhr.responseText);
+            resolve(data);
+          } catch (e) {
+            reject(new Error('Invalid JSON returned by server'));
+          }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err.detail || `Upload failed: ${xhr.statusText}`));
+          } catch {
+            reject(new Error(`Upload failed with status ${xhr.status}`));
+          }
+        }
+      };
+
+      xhr.onerror = () => {
+        reject(new Error('Network error during upload'));
+      };
+
+      xhr.send(formData);
+    });
+  }
+
+  public async analyzeAiDocument(
+    file: File,
+    onProgress?: (percent: number) => void
+  ): Promise<AiAnalysisResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    return new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', this.getUrl('/api/mode/ai/analyze'));
+
+      if (this.authEnabled) {
+        if (this.token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+        } else if (this.apiKey) {
+          xhr.setRequestHeader('X-API-Key', this.apiKey);
+        }
+      }
+
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable && onProgress) {
+          const pct = Math.round((evt.loaded / evt.total) * 50);
+          onProgress(pct);
+        }
+      };
+
+      xhr.onload = () => {
+        if (xhr.status === 401) {
+          this.notifyUnauthorized();
+          reject(new Error('Session expired or unauthorized. Please sign in again.'));
+          return;
+        }
+
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            if (onProgress) onProgress(100);
+            const data = JSON.parse(xhr.responseText);
+            resolve(data);
+          } catch (e) {
+            reject(new Error('Invalid JSON returned by server'));
+          }
+        } else {
+          try {
+            const err = JSON.parse(xhr.responseText);
+            reject(new Error(err.detail || `AI Analysis failed: ${xhr.statusText}`));
+          } catch {
+            reject(new Error(`AI Analysis failed with status ${xhr.status}`));
+          }
+        }
+      };
+
+      xhr.onerror = () => {
+        reject(new Error('Network error during AI analysis upload'));
+      };
+
+      xhr.send(formData);
+    });
+  }
+
+  public async chatAiDocument(
+    documentId: string,
+    message: string,
+    history?: Array<{ role: string; content: string }>
+  ): Promise<string> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/mode/ai/chat'), {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({
+        document_id: documentId,
+        message,
+        history,
+      }),
+    });
+
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'AI Chat request failed' }));
+      throw new Error(err.detail || `AI Chat failed with status ${res.status}`);
+    }
+
+    const data = await res.json();
+    return data.response;
   }
 
   public getFileUrl(docId: string, download = false): string {

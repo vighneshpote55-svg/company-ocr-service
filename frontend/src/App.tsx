@@ -7,19 +7,15 @@ import {
   Share2,
 } from 'lucide-react';
 
-import type { DocumentItem, SupportedType, DashboardStats as StatsType, EngineInfo } from './types';
+import type { DocumentItem, SupportedType, DashboardStats as StatsType, EngineInfo, AppMode } from './types';
 import { api } from './services/api';
-import { Header } from './components/Header';
-import { Sidebar } from './components/Sidebar';
+import { DashboardLayout } from './components/DashboardLayout';
 import type { NavTab } from './components/Sidebar';
-import { DashboardStats } from './components/DashboardStats';
-import { UploadCard } from './components/UploadCard';
 import { OcrDecisionBadge } from './components/OcrDecisionBadge';
 import { DocumentPreview } from './components/DocumentPreview';
 import { ExtractedFields } from './components/ExtractedFields';
 import { ExtractedTextViewer } from './components/ExtractedTextViewer';
 import { JsonResultViewer } from './components/JsonResultViewer';
-import { DocumentsTable } from './components/DocumentsTable';
 import { SettingsModal } from './components/SettingsModal';
 import { LoginView } from './components/LoginView';
 import { Toast } from './components/Toast';
@@ -28,6 +24,7 @@ import type { ToastMessage } from './components/Toast';
 type InspectTab = 'fields' | 'text' | 'json';
 
 export const App: React.FC = () => {
+  const [appMode, setAppMode] = useState<AppMode>('offline');
   const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
   const [inspectTab, setInspectTab] = useState<InspectTab>('fields');
   const [selectedDoc, setSelectedDoc] = useState<DocumentItem | null>(null);
@@ -157,22 +154,6 @@ export const App: React.FC = () => {
     }
   };
 
-  const getPageTitle = () => {
-    if (selectedDoc) {
-      return `Document Inspection: ${selectedDoc.filename}`;
-    }
-    switch (currentTab) {
-      case 'dashboard':
-        return 'Document OCR Dashboard';
-      case 'upload':
-        return 'Upload & Ingest Document';
-      case 'repository':
-        return 'Document Vault Repository';
-      default:
-        return 'DocuScan AI';
-    }
-  };
-
   // Only gate the dashboard if the backend actually reports auth is enabled AND user has no valid token
   if (authEnabled && !isAuthenticated) {
     return (
@@ -188,214 +169,152 @@ export const App: React.FC = () => {
     );
   }
 
+  // Document Inspection Component View
+  const renderInspectionContent = () => {
+    if (!selectedDoc) return null;
+
+    return (
+      <div>
+        <div
+          style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '1.25rem',
+          }}
+        >
+          <button
+            className="btn btn-secondary"
+            onClick={() => setSelectedDoc(null)}
+            style={{ padding: '0.45rem 0.85rem' }}
+          >
+            <ArrowLeft size={16} />
+            <span>Back to {currentTab === 'upload' ? 'Upload' : 'Repository'}</span>
+          </button>
+
+          <div style={{ display: 'flex', gap: '0.5rem' }}>
+            <button
+              className="btn btn-secondary"
+              onClick={() => {
+                navigator.clipboard.writeText(window.location.href);
+                addToast('Inspection link copied', 'info');
+              }}
+              style={{ padding: '0.45rem 0.85rem' }}
+            >
+              <Share2 size={15} />
+              <span>Share</span>
+            </button>
+
+            <button
+              className="btn btn-danger"
+              onClick={() => {
+                if (window.confirm(`Delete "${selectedDoc.filename}" from vault?`)) {
+                  handleDeleteDocument(selectedDoc.id);
+                }
+              }}
+              style={{ padding: '0.45rem 0.85rem' }}
+            >
+              <span>Delete</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Decision Banner */}
+        <OcrDecisionBadge document={selectedDoc} engineInfo={engineInfo} />
+
+        {/* 2-Column Inspection Grid */}
+        <div className="result-grid">
+          {/* Left Column: Visual Document Preview */}
+          <DocumentPreview document={selectedDoc} />
+
+          {/* Right Column: Tabbed Inspector */}
+          <div className="inspect-panel">
+            <div className="tabs-nav">
+              <button
+                className={`tab-btn ${inspectTab === 'fields' ? 'active' : ''}`}
+                onClick={() => setInspectTab('fields')}
+              >
+                <ShieldCheck size={16} />
+                <span>Extracted Fields</span>
+              </button>
+
+              <button
+                className={`tab-btn ${inspectTab === 'text' ? 'active' : ''}`}
+                onClick={() => setInspectTab('text')}
+              >
+                <FileText size={16} />
+                <span>Extracted Text ({selectedDoc.extracted_text?.length || 0} chars)</span>
+              </button>
+
+              <button
+                className={`tab-btn ${inspectTab === 'json' ? 'active' : ''}`}
+                onClick={() => setInspectTab('json')}
+              >
+                <FileCode size={16} />
+                <span>Raw JSON Payload</span>
+              </button>
+            </div>
+
+            <div className="tab-content">
+              {inspectTab === 'fields' && (
+                <ExtractedFields document={selectedDoc} onCopyToast={addToast} />
+              )}
+
+              {inspectTab === 'text' && (
+                <ExtractedTextViewer
+                  text={selectedDoc.extracted_text}
+                  filename={selectedDoc.filename}
+                  onCopyToast={addToast}
+                />
+              )}
+
+              {inspectTab === 'json' && (
+                <JsonResultViewer document={selectedDoc} onCopyToast={addToast} />
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div className="app-layout">
-      <Sidebar
+    <>
+      <DashboardLayout
+        mode={appMode}
+        onSelectMode={(mode) => {
+          setAppMode(mode);
+          setSelectedDoc(null);
+        }}
         currentTab={currentTab}
         onSelectTab={(tab) => {
           setCurrentTab(tab);
           setSelectedDoc(null);
         }}
+        isBackendConnected={isBackendConnected}
+        isRefreshing={isRefreshing}
+        onRefresh={loadData}
         onOpenSettings={() => setIsSettingsOpen(true)}
+        onLogout={
+          authEnabled
+            ? () => {
+                api.logout();
+                setIsAuthenticated(false);
+                addToast('Signed out successfully.', 'info');
+              }
+            : undefined
+        }
         engineInfo={engineInfo}
+        supportedTypes={supportedTypes}
+        stats={stats}
+        documents={documents}
+        onDocumentUploaded={handleDocumentUploaded}
+        onDeleteDocument={handleDeleteDocument}
+        onSelectDocument={(doc) => setSelectedDoc(doc)}
+        onNotify={addToast}
+        selectedDoc={selectedDoc}
+        inspectContent={renderInspectionContent()}
       />
-
-      <div className="main-content">
-        <Header
-          title={getPageTitle()}
-          isBackendConnected={isBackendConnected}
-          onOpenSettings={() => setIsSettingsOpen(true)}
-          onRefresh={loadData}
-          onLogout={
-            authEnabled
-              ? () => {
-                  api.logout();
-                  setIsAuthenticated(false);
-                  addToast('Signed out successfully.', 'info');
-                }
-              : undefined
-          }
-          isRefreshing={isRefreshing}
-        />
-
-        <main className="content-body">
-          {/* If inspecting a specific document */}
-          {selectedDoc ? (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1.25rem' }}>
-                <button
-                  className="btn btn-secondary"
-                  onClick={() => setSelectedDoc(null)}
-                  style={{ padding: '0.45rem 0.85rem' }}
-                >
-                  <ArrowLeft size={16} />
-                  <span>Back to {currentTab === 'upload' ? 'Upload' : 'Repository'}</span>
-                </button>
-
-                <div style={{ display: 'flex', gap: '0.5rem' }}>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => {
-                      navigator.clipboard.writeText(window.location.href);
-                      addToast('Inspection link copied', 'info');
-                    }}
-                    style={{ padding: '0.45rem 0.85rem' }}
-                  >
-                    <Share2 size={15} />
-                    <span>Share</span>
-                  </button>
-
-                  <button
-                    className="btn btn-danger"
-                    onClick={() => {
-                      if (window.confirm(`Delete "${selectedDoc.filename}" from vault?`)) {
-                        handleDeleteDocument(selectedDoc.id);
-                      }
-                    }}
-                    style={{ padding: '0.45rem 0.85rem' }}
-                  >
-                    <span>Delete</span>
-                  </button>
-                </div>
-              </div>
-
-              {/* Decision Banner */}
-              <OcrDecisionBadge document={selectedDoc} engineInfo={engineInfo} />
-
-              {/* 2-Column Inspection Grid */}
-              <div className="result-grid">
-                {/* Left Column: Visual Document Preview */}
-                <DocumentPreview document={selectedDoc} />
-
-                {/* Right Column: Tabbed Inspector */}
-                <div className="inspect-panel">
-                  <div className="tabs-nav">
-                    <button
-                      className={`tab-btn ${inspectTab === 'fields' ? 'active' : ''}`}
-                      onClick={() => setInspectTab('fields')}
-                    >
-                      <ShieldCheck size={16} />
-                      <span>Extracted Fields</span>
-                    </button>
-
-                    <button
-                      className={`tab-btn ${inspectTab === 'text' ? 'active' : ''}`}
-                      onClick={() => setInspectTab('text')}
-                    >
-                      <FileText size={16} />
-                      <span>Extracted Text ({selectedDoc.extracted_text.length} chars)</span>
-                    </button>
-
-                    <button
-                      className={`tab-btn ${inspectTab === 'json' ? 'active' : ''}`}
-                      onClick={() => setInspectTab('json')}
-                    >
-                      <FileCode size={16} />
-                      <span>Raw JSON Payload</span>
-                    </button>
-                  </div>
-
-                  <div className="tab-content">
-                    {inspectTab === 'fields' && (
-                      <ExtractedFields document={selectedDoc} onCopyToast={addToast} />
-                    )}
-
-                    {inspectTab === 'text' && (
-                      <ExtractedTextViewer
-                        text={selectedDoc.extracted_text}
-                        filename={selectedDoc.filename}
-                        onCopyToast={addToast}
-                      />
-                    )}
-
-                    {inspectTab === 'json' && (
-                      <JsonResultViewer document={selectedDoc} onCopyToast={addToast} />
-                    )}
-                  </div>
-                </div>
-              </div>
-            </div>
-          ) : (
-            <>
-              {/* Dashboard Tab */}
-              {currentTab === 'dashboard' && (
-                <>
-                  <DashboardStats
-                    stats={stats}
-                    engineInfo={engineInfo}
-                    documents={documents}
-                    onNavigateTab={(tab) => setCurrentTab(tab)}
-                  />
-
-                  <UploadCard
-                    supportedTypes={supportedTypes}
-                    onUploadSuccess={handleDocumentUploaded}
-                    onError={(msg) => addToast(msg, 'error')}
-                  />
-
-                  <div style={{ marginTop: '2.5rem' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
-                      <h2 style={{ fontSize: '1.15rem', fontWeight: 600 }}>Recent Document Ingestions</h2>
-                      <button
-                        className="btn btn-ghost"
-                        onClick={() => setCurrentTab('repository')}
-                        style={{ fontSize: '0.82rem' }}
-                      >
-                        View All in Vault →
-                      </button>
-                    </div>
-
-                    <DocumentsTable
-                      documents={documents.slice(0, 5)}
-                      supportedTypes={supportedTypes}
-                      onSelectDocument={(doc) => setSelectedDoc(doc)}
-                      onDeleteDocument={handleDeleteDocument}
-                      onRefresh={loadData}
-                      isLoading={isRefreshing}
-                      engineInfo={engineInfo}
-                    />
-                  </div>
-                </>
-              )}
-
-              {/* Upload Tab */}
-              {currentTab === 'upload' && (
-                <div>
-                  <UploadCard
-                    supportedTypes={supportedTypes}
-                    onUploadSuccess={handleDocumentUploaded}
-                    onError={(msg) => addToast(msg, 'error')}
-                  />
-                </div>
-              )}
-
-              {/* Document Repository Tab */}
-              {currentTab === 'repository' && (
-                <div>
-                  <div style={{ marginBottom: '1.5rem' }}>
-                    <h2 style={{ fontSize: '1.25rem', fontWeight: 600, marginBottom: '0.35rem' }}>
-                      Stored Document Vault
-                    </h2>
-                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                      Search, inspect, and retrieve previously processed documents with full verification metrics.
-                    </p>
-                  </div>
-
-                  <DocumentsTable
-                    documents={documents}
-                    supportedTypes={supportedTypes}
-                    onSelectDocument={(doc) => setSelectedDoc(doc)}
-                    onDeleteDocument={handleDeleteDocument}
-                    onRefresh={loadData}
-                    isLoading={isRefreshing}
-                    engineInfo={engineInfo}
-                  />
-                </div>
-              )}
-            </>
-          )}
-        </main>
-      </div>
 
       {/* Settings Modal */}
       <SettingsModal
@@ -409,9 +328,8 @@ export const App: React.FC = () => {
 
       {/* Toast Notifications */}
       <Toast toasts={toasts} onDismiss={removeToast} />
-    </div>
+    </>
   );
 };
 
 export default App;
-

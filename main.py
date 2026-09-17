@@ -23,6 +23,13 @@ import logging
 from typing import Any, Dict, List, Optional
 import uuid
 
+from dotenv import load_dotenv
+
+load_dotenv()
+
+import ai_service
+from pydantic import BaseModel, Field
+
 logger = logging.getLogger("company_server_ocr")
 
 
@@ -651,6 +658,8 @@ SUPPORTED_DOC_TYPES = [
     {"id": "income_certificate", "name": "Income Certificate", "category": "Certificate"},
 ]
 
+SUPPORTED_DOC_TYPE_IDS = {t["id"] for t in SUPPORTED_DOC_TYPES if t["id"] != "auto"}
+
 
 @app.get("/api/supported-types")
 async def get_supported_types():
@@ -1002,8 +1011,420 @@ async def upload_document_endpoint(
                 pass
 
 
+
+# ==============================================================================
+# Dedicated Operational Modes: Offline Mode & AI Mode Endpoints
+# ==============================================================================
+
+class AiChatPayload(BaseModel):
+    document_id: str
+    message: str
+    history: Optional[List[Dict[str, str]]] = None
+
+
+@app.get("/api/mode/ai/status")
+async def get_ai_mode_status(
+    auth: dict = Depends(authenticate_request),
+):
+    """Returns runtime AI provider configuration status and model metadata."""
+    return ai_service.check_ai_status()
+
+
+@app.post("/api/mode/offline")
+async def process_offline_mode_endpoint(
+    file: UploadFile = File(...),
+    doc_type: Optional[str] = Form(None),
+    expected_data: Optional[str] = Form(None),
+    auth: dict = Depends(authenticate_request),
+):
+    """
+    Offline Mode Document Processing Endpoint:
+    - Strictly for the 22 predefined document types supported by the application.
+    - Uses local PaddleOCR / text-layer extraction pipeline (zero external AI API requirement).
+    - If uploaded document does not match a supported document type, returns a clear rejection:
+      "This document type is not supported in Offline Mode. Please use AI Mode for unknown documents."
+    - If supported: extracts fields, validates checksums, sanitizes PII, and stores in vault.
+    """
+    filename = file.filename or "document.bin"
+    ext = os.path.splitext(filename)[1].lower()
+    allowed_exts = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file format '{ext}'. Allowed: PDF, PNG, JPG, JPEG, WEBP",
+        )
+
+    file_bytes = await file.read()
+    if len(file_bytes) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+    if len(file_bytes) > 25 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File size exceeds 25 MB limit",
+        )
+
+    temp_path = os.path.join(TEMP_DIR, f"offline_upload_{uuid.uuid4()}{ext}")
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes)
+
+    try:
+        # 1. Text Layer Detection & OCR
+        requested_type = (doc_type or "").strip().lower()
+        init_langs = get_languages_for_doc_type(requested_type) if requested_type and requested_type != "auto" else None
+        try:
+            if ext == ".pdf":
+                doc_res = ocr_engine.process_pdf(temp_path, languages=init_langs)
+            else:
+                doc_res = ocr_engine.process_file(temp_path, languages=init_langs)
+        except Exception as ex:
+            logger.error("OCR extraction exception in /api/mode/offline: %s", ex, exc_info=True)
+            doc_res = OCRDocumentResult(
+                pages=[],
+                full_text="",
+                average_confidence=0.0,
+                ocr_required=True,
+                text_source="none",
+                engine_error=f"ocr_extraction_failed: {str(ex)}",
+            )
+
+        ocr_required = getattr(doc_res, "ocr_required", True)
+        text_source = getattr(doc_res, "text_source", "none")
+
+        has_text = bool(doc_res.full_text and doc_res.full_text.strip())
+        has_lines = any(bool(p.lines) for p in doc_res.pages) if doc_res.pages else False
+        has_engine_error = bool(getattr(doc_res, "engine_error", None))
+
+        if has_engine_error or not has_text or doc_res.average_confidence == 0.0 or not has_lines:
+            failure_detail = getattr(doc_res, "engine_error", None) or "OCR engine returned no text or zero confidence: document image may be blank, corrupt, or unreadable"
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=failure_detail,
+            )
+
+        # 2. Document Classification
+        if not requested_type or requested_type == "auto":
+            detected = detect_document_type(doc_res.full_text)
+            resolved_type = detected if detected else "unknown"
+            if resolved_type == "unknown" and doc_res.ocr_required:
+                try:
+                    fallback_langs = ["en", "hi", "mr"]
+                    if ext == ".pdf":
+                        retry_res = ocr_engine.process_pdf(temp_path, languages=fallback_langs)
+                    else:
+                        retry_res = ocr_engine.process_file(temp_path, languages=fallback_langs)
+                    retry_detected = detect_document_type(retry_res.full_text)
+                    if retry_detected:
+                        doc_res = retry_res
+                        resolved_type = retry_detected
+                except Exception as ex:
+                    logger.warning("Regional fallback pass in /api/mode/offline failed: %s", ex)
+        else:
+            resolved_type = requested_type
+
+        # 3. Validation against supported document types
+        if resolved_type not in SUPPORTED_DOC_TYPE_IDS or resolved_type == "unknown":
+            return JSONResponse(
+                status_code=status.HTTP_200_OK,
+                content={
+                    "supported": False,
+                    "status": "unsupported",
+                    "message": "This document type is not supported in Offline Mode. Please use AI Mode for unknown documents.",
+                    "doc_type": "unknown",
+                    "document_type": "Unsupported Document",
+                    "confidence": round(doc_res.average_confidence, 4),
+                    "ocr_required": ocr_required,
+                    "text_source": text_source,
+                    "extracted_text": doc_res.full_text[:500] if doc_res.full_text else "",
+                },
+            )
+
+        # 4. Processing for supported document
+        first_page_img: Optional[Image.Image] = None
+        if doc_res.pages and doc_res.pages[0].image:
+            first_page_img = doc_res.pages[0].image
+        elif ext == ".pdf":
+            pdf_imgs = render_pdf_pages_to_images(temp_path)
+            if pdf_imgs:
+                first_page_img = pdf_imgs[0]
+        else:
+            try:
+                with Image.open(temp_path) as img:
+                    first_page_img = img.convert("RGB").copy()
+            except Exception:
+                pass
+
+        raw_fields: Dict[str, Any] = {}
+        sanitized_fields: Dict[str, Any] = {}
+        field_confs: Dict[str, float] = {}
+        checksum_valid = True
+        checksum_reason: Optional[str] = None
+        cross_check_results = None
+
+        try:
+            raw_fields, field_confs = extract_document_fields_raw(resolved_type, doc_res)
+            if resolved_type == "cancelled_cheque":
+                ocr_func = None
+                if first_page_img:
+                    ocr_func = lambda img: (ocr_engine.process_image(img).full_text, None)
+                micr_data = extract_micr_from_cheque(
+                    cheque_img=first_page_img or Image.new("RGB", (100, 100)),
+                    ocr_func=ocr_func,
+                    ocr_full_text=doc_res.full_text,
+                    full_page_fields=raw_fields,
+                )
+                raw_fields["micr_line"] = micr_data.get("micr_line")
+                raw_fields["micr_confidence"] = micr_data.get("micr_confidence", "low")
+                if micr_data.get("micr_code"):
+                    raw_fields["micr_code"] = micr_data["micr_code"]
+                if micr_data.get("account_number_masked"):
+                    raw_fields["micr_account_number_masked"] = micr_data["account_number_masked"]
+                if micr_data.get("tran_code"):
+                    raw_fields["tran_code"] = micr_data["tran_code"]
+                if micr_data.get("cheque_number") and not raw_fields.get("cheque_number"):
+                    raw_fields["cheque_number"] = micr_data["cheque_number"]
+                if "micr_match" in micr_data:
+                    raw_fields["micr_match"] = micr_data["micr_match"]
+                if micr_data.get("micr_disagreements"):
+                    raw_fields["micr_disagreements"] = micr_data["micr_disagreements"]
+
+            checksum_valid, checksum_reason = validate_document_checksums(resolved_type, raw_fields)
+            if expected_data:
+                try:
+                    expected_dict = json.loads(expected_data)
+                    if isinstance(expected_dict, dict):
+                        cross_check_results = perform_cross_check(raw_fields, expected_dict)
+                except Exception:
+                    pass
+            sanitized_fields, field_confs = sanitize_extracted_fields(resolved_type, raw_fields, field_confs)
+        except Exception as ex:
+            checksum_valid = False
+            checksum_reason = f"Extraction error: {str(ex)}"
+
+        doc_status = determine_document_status(
+            checksum_valid=checksum_valid,
+            average_confidence=doc_res.average_confidence,
+            vault_mode=True,
+        )
+
+        thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
+
+        result_payload = {
+            "doc_type": resolved_type,
+            "ocr_required": ocr_required,
+            "text_source": text_source,
+            "status": doc_status,
+            "confidence": doc_res.average_confidence,
+            "pages": len(doc_res.pages),
+            "reason": checksum_reason,
+            "extracted_fields": sanitized_fields,
+            "field_confidences": field_confs,
+            "extracted_text": doc_res.full_text,
+            "checksum_valid": checksum_valid,
+            "checksum_reason": checksum_reason,
+            "cross_check": cross_check_results,
+        }
+
+        saved_record = document_store.save_document(
+            file_bytes=file_bytes,
+            filename=filename,
+            result_data=result_payload,
+            thumbnail_bytes=thumb_bytes,
+        )
+        saved_record["supported"] = True
+        return saved_record
+
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+@app.post("/api/mode/ai/analyze")
+async def process_ai_analyze_endpoint(
+    file: UploadFile = File(...),
+    auth: dict = Depends(authenticate_request),
+):
+    """
+    AI Mode Document Analyze Endpoint:
+    - Allows uploading documents NOT included in the predefined Offline Mode list.
+    - Extracts text via embedded PDF layer (digital) or neural OCR (scanned/images).
+    - AI analyzes document structure to determine document type, confidence, and reasoning.
+    - Persists document in vault and returns structured AI classification result.
+    """
+    filename = file.filename or "document.bin"
+    ext = os.path.splitext(filename)[1].lower()
+    allowed_exts = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Unsupported file format '{ext}'. Allowed: PDF, PNG, JPG, JPEG, WEBP",
+        )
+
+    file_bytes = await file.read()
+    if len(file_bytes) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+    if len(file_bytes) > 25 * 1024 * 1024:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File size exceeds 25 MB limit",
+        )
+
+    temp_path = os.path.join(TEMP_DIR, f"ai_upload_{uuid.uuid4()}{ext}")
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes)
+
+    try:
+        # Extract text: check PDF text layer first, fallback to OCR
+        if ext == ".pdf":
+            doc_res = ocr_engine.process_pdf(temp_path)
+        else:
+            doc_res = ocr_engine.process_file(temp_path)
+
+        ocr_required = getattr(doc_res, "ocr_required", True)
+        text_source = getattr(doc_res, "text_source", "none")
+
+        if not doc_res.full_text or not doc_res.full_text.strip():
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="No readable text detected in uploaded document. Please upload a legible document.",
+            )
+
+        # Call AI analysis service
+        try:
+            ai_res = await ai_service.analyze_document(doc_res.full_text, filename=filename)
+        except RuntimeError as ai_err:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=str(ai_err),
+            )
+        except Exception as ex:
+            logger.error("AI document analysis failed: %s", ex, exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"AI analysis failed: {str(ex)}",
+            )
+
+        thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
+
+        result_payload = {
+            "doc_type": "ai_analyzed",
+            "document_type": ai_res.get("document_type", "Analyzed Document"),
+            "ocr_required": ocr_required,
+            "text_source": text_source,
+            "status": "completed",
+            "confidence": 0.95 if ai_res.get("confidence") == "high" else (0.80 if ai_res.get("confidence") == "medium" else 0.60),
+            "pages": len(doc_res.pages) if doc_res.pages else 1,
+            "reason": None,
+            "extracted_fields": {
+                "detected_document_type": ai_res.get("document_type"),
+                "confidence": ai_res.get("confidence"),
+                "summary": ai_res.get("summary"),
+                "reasoning": ai_res.get("reasoning", []),
+            },
+            "field_confidences": {},
+            "extracted_text": doc_res.full_text,
+            "ai_analysis": ai_res,
+        }
+
+        saved_record = document_store.save_document(
+            file_bytes=file_bytes,
+            filename=filename,
+            result_data=result_payload,
+            thumbnail_bytes=thumb_bytes,
+        )
+
+        return {
+            "document_id": saved_record["id"],
+            "filename": saved_record["filename"],
+            "document_type": ai_res["document_type"],
+            "confidence": ai_res["confidence"],
+            "summary": ai_res["summary"],
+            "reasoning": ai_res["reasoning"],
+            "file_url": saved_record["file_url"],
+            "preview_url": saved_record.get("preview_url"),
+            "file_size": saved_record["file_size"],
+            "pages": saved_record["pages"],
+            "text_source": text_source,
+            "extracted_text": doc_res.full_text,
+        }
+
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+@app.post("/api/mode/ai/chat")
+async def process_ai_chat_endpoint(
+    payload: AiChatPayload,
+    auth: dict = Depends(authenticate_request),
+):
+    """
+    AI Mode Interactive Chat Endpoint:
+    - Receives user query and document_id.
+    - Answers using the uploaded document's extracted text as context.
+    - Maintains conversational continuity while keeping documents isolated.
+    """
+    if not payload.document_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="document_id is required",
+        )
+    if not payload.message or not payload.message.strip():
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="message cannot be empty",
+        )
+
+    doc = document_store.get_document(payload.document_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{payload.document_id}' not found in vault",
+        )
+
+    doc_text = doc.get("extracted_text") or ""
+    if not doc_text.strip():
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="Document text is not available for this document. Please re-upload.",
+        )
+
+    filename = doc.get("filename", "document")
+    try:
+        reply = await ai_service.chat_with_document(
+            document_text=doc_text,
+            filename=filename,
+            message=payload.message,
+            history=payload.history,
+        )
+        return {"response": reply}
+    except RuntimeError as ai_err:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(ai_err),
+        )
+    except Exception as ex:
+        logger.error("AI chat failed for document %s: %s", payload.document_id, ex, exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"AI chat error: {str(ex)}",
+        )
+
+
 # Mount frontend single page application if built
 FRONTEND_DIST = os.path.join(os.path.dirname(os.path.abspath(__file__)), "frontend", "dist")
 if os.path.exists(FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+
 

@@ -84,3 +84,46 @@ export interface AuthStatusResponse {
   auth_mode: string;
 }
 
+export type AppMode = 'offline' | 'ai';
+
+export interface AiAnalysisResult {
+  document_id: string;
+  filename: string;
+  document_type: string;
+  confidence: 'high' | 'medium' | 'low' | string;
+  summary: string;
+  reasoning: string[];
+  file_url: string;
+  preview_url?: string | null;
+  file_size: number;
+  pages: number;
+  text_source: string;
+  extracted_text: string;
+}
+
+export interface ChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  timestamp: string;
+}
+
+export interface AiStatusResponse {
+  configured: boolean;
+  provider: string;
+  model: string;
+  base_url: string;
+  message: string;
+}
+
+export interface OfflineUploadResult {
+  supported: boolean;
+  status: string;
+  message?: string;
+  doc_type?: string;
+  document_type?: string;
+  confidence?: number;
+  extracted_text?: string;
+  [key: string]: any;
+}
+
