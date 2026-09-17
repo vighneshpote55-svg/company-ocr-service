@@ -2006,35 +2006,28 @@ p, span, div {
   overflow: hidden;
 }
 
+/* Document Vault Toolbar Layout */
 .vault-toolbar {
-  padding: 1.25rem 1.65rem;
+  padding: 1.15rem 1.65rem;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 1rem;
+  gap: 12px;
   border-bottom: 1px solid var(--border-subtle);
   background-color: var(--bg-surface);
-  flex-wrap: wrap;
-}
-
-.vault-filter-controls {
-  display: flex;
-  align-items: center;
-  gap: 0.85rem;
-  flex-wrap: wrap;
-  flex: 1;
 }
 
 .vault-search-box {
   position: relative;
-  min-width: 280px;
-  flex: 1;
-  max-width: 400px;
+  width: 320px;
+  min-width: 320px;
+  max-width: 320px;
+  flex-shrink: 0;
 }
 
 .vault-search-icon {
   position: absolute;
-  left: 0.95rem;
+  left: 0.85rem;
   top: 50%;
   transform: translateY(-50%);
   color: var(--text-subtle);
@@ -2043,13 +2036,15 @@ p, span, div {
 
 .vault-search-input {
   width: 100%;
-  padding: 0.65rem 0.95rem 0.65rem 2.45rem;
+  height: 38px;
+  padding: 0 0.85rem 0 2.45rem;
   border-radius: var(--radius-sm);
   background-color: var(--bg-input);
   border: 1px solid var(--border-subtle);
   color: var(--text-main);
-  font-size: 0.9rem;
+  font-size: 0.88rem;
   outline: none;
+  box-sizing: border-box;
   transition: all 0.18s ease;
 }
 
@@ -2058,21 +2053,70 @@ p, span, div {
   box-shadow: 0 0 0 3px var(--primary-glow);
 }
 
-.vault-select-group {
+.vault-controls-group {
   display: flex;
   align-items: center;
-  gap: 0.6rem;
-  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 12px;
+  flex: 1;
+}
+
+.vault-filters-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
 }
 
 .vault-filter-select {
-  padding: 0.65rem 0.95rem;
+  height: 38px;
+  padding: 0 0.85rem;
   border-radius: var(--radius-sm);
   background-color: var(--bg-input);
   border: 1px solid var(--border-subtle);
   color: var(--text-main);
   font-size: 0.86rem;
   outline: none;
+  box-sizing: border-box;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.vault-filter-select:focus {
+  border-color: var(--border-focus);
+  box-shadow: 0 0 0 3px var(--primary-glow);
+}
+
+.vault-type-select {
+  width: 170px;
+  min-width: 170px;
+}
+
+.vault-status-select {
+  width: 140px;
+  min-width: 140px;
+}
+
+.vault-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.vault-action-btn {
+  height: 38px;
+  padding: 0 14px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.86rem;
+  font-weight: 600;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.vault-action-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
 }
 
 .vault-table-scroll-wrapper {
@@ -4526,6 +4570,40 @@ p, span, div {
   .ai-quick-actions-grid {
     grid-template-columns: repeat(3, 1fr);
   }
+
+  /* Tablet Document Vault Toolbar: Search full width, filters next row, buttons right */
+  .vault-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .vault-search-box {
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+  }
+
+  .vault-controls-group {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .vault-filters-group {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .vault-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-left: auto;
+  }
 }
 
 @media (max-width: 768px) {
@@ -4691,6 +4769,52 @@ p, span, div {
 
   .ai-chat-input-sticky {
     padding: 12px 14px;
+  }
+
+  /* Mobile Document Vault Toolbar: Stack controls, buttons stay on same row */
+  .vault-toolbar {
+    padding: 1rem;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+
+  .vault-search-box {
+    width: 100%;
+    min-width: 100%;
+    max-width: 100%;
+  }
+
+  .vault-controls-group {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .vault-filters-group {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .vault-type-select,
+  .vault-status-select {
+    width: 100%;
+    min-width: 100%;
+  }
+
+  .vault-toolbar-actions {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+  }
+
+  .vault-action-btn {
+    flex: 1;
+    justify-content: center;
   }
 }
 

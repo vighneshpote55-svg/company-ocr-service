@@ -139,23 +139,27 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
     <div className="vault-table-container">
       {/* Search and Filtering Toolbar */}
       <div className="vault-toolbar">
-        <div className="vault-filter-controls">
-          <div className="vault-search-box">
-            <Search size={16} className="vault-search-icon" />
-            <input
-              type="text"
-              className="vault-search-input"
-              placeholder="Search documents by filename, type, or content..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
+        {/* Search Input (320px on desktop, full width on tablet/mobile) */}
+        <div className="vault-search-box">
+          <Search size={15} className="vault-search-icon" />
+          <input
+            type="text"
+            className="vault-search-input"
+            placeholder="Search documents by filename, type, or content..."
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+          />
+        </div>
 
-          <div className="vault-select-group">
+        {/* Filters and Actions Controls Group */}
+        <div className="vault-controls-group">
+          {/* Filters: Document Type (170px) and Status (140px) */}
+          <div className="vault-filters-group">
             <select
-              className="vault-filter-select"
+              className="vault-filter-select vault-type-select"
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value)}
+              aria-label="Filter by document type"
             >
               <option value="all">All Document Types</option>
               {supportedTypes
@@ -168,9 +172,10 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
             </select>
 
             <select
-              className="vault-filter-select"
+              className="vault-filter-select vault-status-select"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
+              aria-label="Filter by status"
             >
               <option value="all">All Statuses</option>
               <option value="verified">Verified (Green)</option>
@@ -179,31 +184,31 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
               <option value="failed">Failed (Red)</option>
             </select>
           </div>
-        </div>
 
-        <div className="vault-toolbar-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-          <button
-            className="btn btn-secondary vault-refresh-btn"
-            onClick={onRefresh}
-            disabled={isLoading}
-            title="Refresh table data"
-          >
-            <RefreshCw size={14} className={isLoading ? 'spin-anim' : ''} />
-            <span>Refresh</span>
-          </button>
-
-          {onClearAll && (
+          {/* Actions: Refresh & Clear All */}
+          <div className="vault-toolbar-actions">
             <button
-              className="btn btn-danger vault-clear-all-btn"
-              onClick={onClearAll}
-              disabled={documents.length === 0 || isLoading}
-              title="Clear all documents from Document Vault"
-              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+              className="btn btn-secondary vault-action-btn vault-refresh-btn"
+              onClick={onRefresh}
+              disabled={isLoading}
+              title="Refresh table data"
             >
-              <Trash2 size={14} />
-              <span>Clear All</span>
+              <RefreshCw size={14} className={isLoading ? 'spin-anim' : ''} />
+              <span>Refresh</span>
             </button>
-          )}
+
+            {onClearAll && (
+              <button
+                className="btn btn-danger vault-action-btn vault-clear-all-btn"
+                onClick={onClearAll}
+                disabled={documents.length === 0 || isLoading}
+                title="Clear all documents from Document Vault"
+              >
+                <Trash2 size={14} />
+                <span>Clear All</span>
+              </button>
+            )}
+          </div>
         </div>
       </div>
 
