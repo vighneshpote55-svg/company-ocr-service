@@ -1,6 +1,19 @@
-import React from 'react';
-import { Settings, RefreshCw, LogOut, ShieldCheck, Sparkles, Menu, X } from 'lucide-react';
+import React, { useState } from 'react';
+import {
+  RefreshCw,
+  LogOut,
+  Menu,
+  X,
+  Sun,
+  Moon,
+  Bell,
+  User,
+  Settings,
+  CheckCircle2,
+  SlidersHorizontal,
+} from 'lucide-react';
 import type { AppMode } from '../types';
+import { ModeSwitcher } from './ModeSwitcher';
 
 interface HeaderProps {
   mode: AppMode;
@@ -12,6 +25,8 @@ interface HeaderProps {
   isRefreshing?: boolean;
   onToggleMobileSidebar?: () => void;
   isMobileSidebarOpen?: boolean;
+  isDarkMode?: boolean;
+  onToggleTheme?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -24,9 +39,15 @@ export const Header: React.FC<HeaderProps> = ({
   isRefreshing = false,
   onToggleMobileSidebar,
   isMobileSidebarOpen = false,
+  isDarkMode = false,
+  onToggleTheme,
 }) => {
+  const [showNotifications, setShowNotifications] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+
   return (
-    <header className="top-header">
+    <header className="top-header glass-header">
+      {/* Left: Branding */}
       <div className="header-left-box">
         {onToggleMobileSidebar && (
           <button
@@ -44,70 +65,148 @@ export const Header: React.FC<HeaderProps> = ({
         </div>
       </div>
 
-      {/* Centered Shared Mode Switch */}
+      {/* Center: Mode Switcher (identical position in both modes) */}
       <div className="header-mode-switch-wrapper">
-        <div className="header-mode-switch" role="tablist" aria-label="Mode selector">
-          <button
-            role="tab"
-            aria-selected={mode === 'offline'}
-            className={`header-mode-btn ${mode === 'offline' ? 'active-offline' : ''}`}
-            onClick={() => onModeChange('offline')}
-          >
-            <ShieldCheck size={16} />
-            <span>⚡ Offline Mode</span>
-          </button>
-
-          <button
-            role="tab"
-            aria-selected={mode === 'ai'}
-            className={`header-mode-btn ${mode === 'ai' ? 'active-ai' : ''}`}
-            onClick={() => onModeChange('ai')}
-          >
-            <Sparkles size={16} />
-            <span>🤖 AI Mode</span>
-          </button>
-        </div>
+        <ModeSwitcher mode={mode} onModeChange={onModeChange} />
       </div>
 
-      {/* Header Actions */}
-      <div className="header-actions">
-        <div className={`status-pill ${isBackendConnected ? 'online' : 'offline'}`}>
+      {/* Right: Notifications, Theme Toggle, Settings Shortcut, User Profile */}
+      <div className="header-right-box">
+        {/* Backend Status Dot */}
+        <div
+          className={`status-pill ${isBackendConnected ? 'online' : 'offline'}`}
+          title={isBackendConnected ? 'FastAPI Neural Backend connected' : 'Backend offline'}
+        >
           <span className="status-dot" />
-          <span>{isBackendConnected ? 'Backend Connected' : 'Disconnected'}</span>
+          <span className="status-text">{isBackendConnected ? 'Online' : 'Offline'}</span>
         </div>
 
+        {/* Sync Refresh Button */}
         <button
-          className="btn btn-secondary"
+          className="header-icon-btn"
           onClick={onRefresh}
           disabled={isRefreshing}
-          title="Refresh statistics and documents"
-          style={{ padding: '0.45rem 0.75rem' }}
+          title="Synchronize vault data and metrics"
+          aria-label="Synchronize data"
         >
-          <RefreshCw size={15} className={isRefreshing ? 'spin-anim' : ''} />
-          <span style={{ fontSize: '0.8rem' }}>Sync</span>
+          <RefreshCw size={17} className={isRefreshing ? 'spin-anim' : ''} />
         </button>
 
-        <button
-          className="btn btn-secondary"
-          onClick={onOpenSettings}
-          style={{ padding: '0.45rem 0.75rem' }}
-          title="Server Settings"
-        >
-          <Settings size={15} />
-          <span style={{ fontSize: '0.8rem' }}>Settings</span>
-        </button>
-
-        {onLogout && (
+        {/* Theme Toggle Button */}
+        {onToggleTheme && (
           <button
-            className="btn btn-secondary"
-            onClick={onLogout}
-            style={{ padding: '0.45rem 0.75rem' }}
-            title="Sign Out"
+            className="header-icon-btn theme-toggle-btn"
+            onClick={onToggleTheme}
+            title={isDarkMode ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
+            aria-label="Toggle dark/light theme"
           >
-            <LogOut size={15} color="var(--accent-rose)" />
-            <span style={{ fontSize: '0.8rem' }}>Sign Out</span>
+            {isDarkMode ? <Sun size={17} className="sun-icon" /> : <Moon size={17} />}
           </button>
         )}
+
+        {/* Notification Bell */}
+        <div className="header-popover-container">
+          <button
+            className="header-icon-btn notification-btn"
+            onClick={() => {
+              setShowNotifications(!showNotifications);
+              setShowUserMenu(false);
+            }}
+            title="System Activity & Notifications"
+            aria-label="View notifications"
+          >
+            <Bell size={17} />
+            <span className="notification-indicator" />
+          </button>
+
+          {showNotifications && (
+            <div className="header-dropdown-menu notification-menu">
+              <div className="dropdown-header">
+                <span className="dropdown-title">System Status</span>
+                <span className="dropdown-tag">Healthy</span>
+              </div>
+              <div className="dropdown-list">
+                <div className="dropdown-item">
+                  <CheckCircle2 size={16} color="var(--success)" className="dropdown-item-icon" />
+                  <div>
+                    <p className="dropdown-item-title">Neural Engine Operational</p>
+                    <span className="dropdown-item-time">Local OCR & PII Guard active</span>
+                  </div>
+                </div>
+                <div className="dropdown-item">
+                  <SlidersHorizontal size={16} color="var(--primary)" className="dropdown-item-icon" />
+                  <div>
+                    <p className="dropdown-item-title">22 Document Classifiers Ready</p>
+                    <span className="dropdown-item-time">Zero cloud dependency</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Settings Shortcut */}
+        <button
+          className="header-icon-btn settings-shortcut-btn"
+          onClick={onOpenSettings}
+          title="Server & Engine Settings"
+          aria-label="Settings shortcut"
+        >
+          <Settings size={17} />
+        </button>
+
+        {/* User Profile Avatar */}
+        <div className="header-popover-container">
+          <button
+            className="user-profile-pill-btn"
+            onClick={() => {
+              setShowUserMenu(!showUserMenu);
+              setShowNotifications(false);
+            }}
+            title="User Profile & Settings"
+            aria-label="Open user menu"
+          >
+            <div className="user-avatar-circle">
+              <User size={15} />
+            </div>
+            <span className="user-avatar-label">User Profile</span>
+          </button>
+
+          {showUserMenu && (
+            <div className="header-dropdown-menu user-dropdown-menu">
+              <div className="user-dropdown-info">
+                <div className="user-dropdown-name">Enterprise Operator</div>
+                <div className="user-dropdown-email">operator@company-ocr.internal</div>
+              </div>
+              <div className="dropdown-divider" />
+              <button
+                className="dropdown-menu-action"
+                onClick={() => {
+                  setShowUserMenu(false);
+                  onOpenSettings();
+                }}
+              >
+                <Settings size={15} />
+                <span>Engine & Network Configuration</span>
+              </button>
+              {onLogout && (
+                <>
+                  <div className="dropdown-divider" />
+                  <button
+                    className="dropdown-menu-action text-danger"
+                    onClick={() => {
+                      setShowUserMenu(false);
+                      onLogout();
+                    }}
+                  >
+                    <LogOut size={15} />
+                    <span>Sign Out</span>
+                  </button>
+                </>
+              )}
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );

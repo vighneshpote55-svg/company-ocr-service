@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { AppMode, DashboardStats as StatsType, DocumentItem, EngineInfo, SupportedType } from '../types';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
@@ -7,6 +7,7 @@ import { DashboardStats } from './DashboardStats';
 import { DocumentsTable } from './DocumentsTable';
 import { UploadCard } from './UploadCard';
 import { AIModeView } from './AIModeView';
+import { PageHeader } from './PageHeader';
 
 export interface DashboardLayoutProps {
   mode: AppMode;
@@ -57,10 +58,40 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   inspectContent,
 }) => {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    try {
+      const saved = localStorage.getItem('theme_preference');
+      if (saved) return saved === 'dark';
+      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (isDarkMode) {
+        document.documentElement.setAttribute('data-theme', 'dark');
+        document.documentElement.classList.add('dark');
+        localStorage.setItem('theme_preference', 'dark');
+      } else {
+        document.documentElement.setAttribute('data-theme', 'light');
+        document.documentElement.classList.remove('dark');
+        localStorage.setItem('theme_preference', 'light');
+      }
+    } catch {
+      // Ignore storage errors in restricted contexts
+    }
+  }, [isDarkMode]);
+
+  const toggleTheme = () => {
+    setIsDarkMode((prev) => !prev);
+  };
 
   return (
-    <div className="app-layout">
-      {/* Shared Sidebar */}
+    <div className={`app-layout ${isSidebarCollapsed ? 'layout-collapsed' : ''}`}>
+      {/* Shared Sidebar with Collapsible & Mobile Drawer Support */}
       <Sidebar
         currentTab={currentTab}
         onSelectTab={onSelectTab}
@@ -70,10 +101,12 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         onSelectMode={onSelectMode}
         isOpenMobile={isMobileSidebarOpen}
         onCloseMobile={() => setIsMobileSidebarOpen(false)}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapse={() => setIsSidebarCollapsed((prev) => !prev)}
       />
 
-      <div className="main-content">
-        {/* Shared Header */}
+      <div className={`main-content ${isSidebarCollapsed ? 'content-collapsed' : ''}`}>
+        {/* Sticky Unified Top Header */}
         <Header
           mode={mode}
           onModeChange={onSelectMode}
@@ -84,23 +117,21 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           isRefreshing={isRefreshing}
           onToggleMobileSidebar={() => setIsMobileSidebarOpen((prev) => !prev)}
           isMobileSidebarOpen={isMobileSidebarOpen}
+          isDarkMode={isDarkMode}
+          onToggleTheme={toggleTheme}
         />
 
         <main className="content-body">
-          {/* Inspection View if a document is selected */}
+          {/* 1. Document Inspection Mode */}
           {selectedDoc && inspectContent ? (
             inspectContent
           ) : currentTab === 'repository' ? (
-            /* Document Vault Full Page */
-            <div>
-              <div style={{ marginBottom: '1.5rem' }}>
-                <h2 style={{ fontSize: '1.25rem', fontWeight: 700, marginBottom: '0.35rem', color: 'var(--text-main)' }}>
-                  Stored Document Vault
-                </h2>
-                <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                  Search, inspect, and retrieve previously processed documents with full verification metrics.
-                </p>
-              </div>
+            /* 2. Document Vault Full View */
+            <div className="vault-view-wrapper mode-fade-enter">
+              <PageHeader
+                title="Document Vault"
+                subtitle="Secure document repository with cryptographic checksums and verification histories."
+              />
 
               <DocumentsTable
                 documents={documents}
@@ -112,27 +143,10 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 engineInfo={engineInfo}
               />
             </div>
-          ) : currentTab === 'upload' ? (
-            /* Dedicated Upload Tab Workspace */
-            <div className="workspace-container mode-fade-enter" key={mode}>
-              {mode === 'offline' ? (
-                <UploadCard
-                  supportedTypes={supportedTypes}
-                  onUploadSuccess={onDocumentUploaded}
-                  onError={(msg) => onNotify(msg, 'error')}
-                  onSwitchToAiMode={() => onSelectMode('ai')}
-                />
-              ) : (
-                <AIModeView
-                  onNotify={onNotify}
-                  onSwitchToOffline={() => onSelectMode('offline')}
-                />
-              )}
-            </div>
           ) : (
-            /* Shared Dashboard: Stats -> Center Workspace -> Recent Documents */
-            <>
-              {/* Dashboard Stats (Identical in both modes) */}
+            /* 3. Primary Dashboard: Stats -> Centered Main Workspace -> Recent Ingestions */
+            <div className="dashboard-view-wrapper">
+              {/* Dashboard Metric Cards (4 cards: Total, Verified, Review, Storage) */}
               <DashboardStats
                 stats={stats}
                 engineInfo={engineInfo}
@@ -140,8 +154,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 onNavigateTab={(tab) => onSelectTab(tab)}
               />
 
-              {/* Main Workspace Switching (UploadCard or AIModeView) */}
-              <div className="workspace-container mode-fade-enter" key={mode}>
+              {/* Centered Large Workspace Card (Changes based on mode) */}
+              <div className="main-workspace-card-wrapper mode-fade-enter" key={mode}>
                 {mode === 'offline' ? (
                   <UploadCard
                     supportedTypes={supportedTypes}
@@ -157,25 +171,21 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 )}
               </div>
 
-              {/* Recent Documents Table (Identical in both modes) */}
-              <div style={{ marginTop: '2.5rem' }}>
-                <div
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    alignItems: 'center',
-                    marginBottom: '1rem',
-                  }}
-                >
-                  <h2 style={{ fontSize: '1.15rem', fontWeight: 700, color: 'var(--text-main)' }}>
-                    Recent Document Ingestions
-                  </h2>
+              {/* Recent Ingestions Table */}
+              <div className="recent-documents-section">
+                <div className="recent-section-header">
+                  <div>
+                    <h3 className="recent-section-title">Recent Ingestions</h3>
+                    <p className="recent-section-subtitle">
+                      Latest documents verified across active pipelines
+                    </p>
+                  </div>
                   <button
-                    className="btn btn-ghost"
+                    className="btn btn-ghost view-vault-link-btn"
                     onClick={() => onSelectTab('repository')}
-                    style={{ fontSize: '0.82rem', fontWeight: 600, color: 'var(--primary)' }}
                   >
-                    View All in Vault →
+                    <span>View all in Document Vault</span>
+                    <span aria-hidden="true">→</span>
                   </button>
                 </div>
 
@@ -189,7 +199,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                   engineInfo={engineInfo}
                 />
               </div>
-            </>
+            </div>
           )}
         </main>
       </div>

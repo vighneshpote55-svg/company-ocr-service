@@ -1,8 +1,21 @@
 import React, { useState, useRef } from 'react';
-import { UploadCloud, Sparkles, ChevronDown, ChevronUp, AlertCircle, ArrowRight, ShieldCheck } from 'lucide-react';
+import {
+  UploadCloud,
+  Sparkles,
+  ChevronDown,
+  ChevronUp,
+  AlertTriangle,
+  ArrowRight,
+  ShieldCheck,
+  FileCheck2,
+  CheckCircle2,
+  FileText,
+  Loader2,
+  Eye,
+  FileUp,
+} from 'lucide-react';
 import type { SupportedType, DocumentItem, UploadProgress } from '../types';
 import { api } from '../services/api';
-import { ProcessingTimeline } from './ProcessingTimeline';
 
 interface UploadCardProps {
   supportedTypes: SupportedType[];
@@ -23,6 +36,9 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [unsupportedError, setUnsupportedError] = useState<string | null>(null);
+  const [activeFile, setActiveFile] = useState<{ name: string; size: number } | null>(null);
+  const [completedDoc, setCompletedDoc] = useState<DocumentItem | null>(null);
+
   const [progress, setProgress] = useState<UploadProgress>({
     step: 'idle',
     percent: 0,
@@ -63,51 +79,54 @@ export const UploadCard: React.FC<UploadCardProps> = ({
     );
 
     if (!hasValidExt) {
-      onError(`Invalid file type. Please upload a PDF, PNG, JPG, or WEBP.`);
+      onError(`Invalid file type. Supported formats: PDF, PNG, JPG, WEBP.`);
       return;
     }
 
     if (file.size > 25 * 1024 * 1024) {
-      onError(`File is too large (${(file.size / (1024 * 1024)).toFixed(1)}MB). Maximum size is 25MB.`);
+      onError(`File size (${(file.size / (1024 * 1024)).toFixed(1)}MB) exceeds 25MB limit.`);
       return;
     }
 
     setUnsupportedError(null);
+    setCompletedDoc(null);
+    setActiveFile({ name: file.name, size: file.size });
     setIsProcessing(true);
-    setProgress({ step: 'uploading', percent: 20, message: 'Uploading document payload...' });
+    setProgress({ step: 'uploading', percent: 25, message: 'Transferring file payload...' });
 
     try {
       setTimeout(() => {
-        setProgress({ step: 'analyzing', percent: 45, message: 'Checking embedded text layer (pdftotext)...' });
+        setProgress({ step: 'analyzing', percent: 50, message: 'Detecting text layer and PDF streams...' });
       }, 300);
 
       setTimeout(() => {
-        setProgress({ step: 'extracting', percent: 70, message: 'Classifying document against supported types...' });
+        setProgress({ step: 'extracting', percent: 75, message: 'Applying local neural OCR model...' });
       }, 700);
 
       setTimeout(() => {
-        setProgress({ step: 'verifying', percent: 90, message: 'Validating checksums & masking PII...' });
-      }, 1000);
+        setProgress({ step: 'verifying', percent: 90, message: 'Validating checksums and masking sensitive PII...' });
+      }, 1050);
 
       const doc = await api.uploadOfflineDocument(file, selectedType, expectedData || undefined);
 
       if (doc.supported === false) {
         setIsProcessing(false);
+        setActiveFile(null);
         const rejectionMsg =
           doc.message ||
-          'This document type is not supported in Offline Mode. Please use AI Mode for unknown documents.';
+          'This document type is unsupported in Offline Mode. Switch to AI Mode for universal classification.';
         setUnsupportedError(rejectionMsg);
         onError(rejectionMsg);
         return;
       }
 
-      setProgress({ step: 'done', percent: 100, message: 'Document analysis complete!' });
-      setTimeout(() => {
-        setIsProcessing(false);
-        onUploadSuccess(doc as unknown as DocumentItem);
-      }, 400);
+      setProgress({ step: 'done', percent: 100, message: 'Document successfully processed!' });
+      const completedDocItem = doc as unknown as DocumentItem;
+      setCompletedDoc(completedDocItem);
+      setIsProcessing(false);
     } catch (err: any) {
       setIsProcessing(false);
+      setActiveFile(null);
       setProgress({ step: 'error', percent: 0, message: err.message || 'Processing failed' });
       onError(err.message || 'Upload and processing failed');
     } finally {
@@ -117,53 +136,57 @@ export const UploadCard: React.FC<UploadCardProps> = ({
     }
   };
 
+  const handleResetForNewUpload = () => {
+    setCompletedDoc(null);
+    setActiveFile(null);
+    setProgress({ step: 'idle', percent: 0, message: '' });
+  };
+
   const nonAutoSupportedTypes = supportedTypes.filter((t) => t.id !== 'auto');
 
   return (
-    <div className="upload-card">
-      <div className="upload-header">
-        <div>
-          <div className="offline-mode-badge-pill">
-            <ShieldCheck size={16} />
-            <span>Offline Mode • Local PaddleOCR Engine</span>
-          </div>
-          <h2 className="upload-title" style={{ marginTop: '0.6rem' }}>
-            Ingest & Verify Predefined Document
-          </h2>
-          <p className="upload-subtitle">
-            Strictly processes supported document types using the local OCR pipeline without external AI APIs. If your document is not on the supported list, use <strong>AI Mode</strong>.
-          </p>
+    <div className="upload-workspace-card">
+      {/* Workspace Header */}
+      <div className="upload-workspace-header">
+        <div className="upload-mode-badge offline-badge">
+          <ShieldCheck size={16} />
+          <span>Offline Mode • Zero Cloud Callouts</span>
         </div>
+        <h2 className="upload-main-title">Offline Document Ingestion</h2>
+        <p className="upload-main-subtitle">
+          Local, air-gapped OCR processing for 22 predefined document formats with automated verification and PII protection.
+        </p>
       </div>
 
-      {/* Unsupported Document Rejection Notice */}
+      {/* Visually Attractive Unsupported Document Banner */}
       {unsupportedError && (
-        <div className="offline-unsupported-banner">
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', flex: 1 }}>
-            <AlertCircle size={22} color="var(--accent-amber)" style={{ flexShrink: 0 }} />
+        <div className="unsupported-document-banner-attractive" role="alert">
+          <div className="unsupported-banner-glow" aria-hidden="true" />
+          <div className="unsupported-banner-content">
+            <div className="unsupported-icon-circle">
+              <AlertTriangle size={24} />
+            </div>
             <div>
-              <div style={{ fontWeight: 600, fontSize: '0.92rem', color: 'var(--text-main)' }}>
-                Document Not Supported in Offline Mode
-              </div>
-              <div style={{ fontSize: '0.84rem', color: 'var(--text-muted)', marginTop: '2px' }}>
+              <h4 className="unsupported-title">Unsupported in Offline Mode</h4>
+              <p className="unsupported-desc">
                 {unsupportedError}
-              </div>
+              </p>
             </div>
           </div>
           {onSwitchToAiMode && (
             <button
-              className="btn btn-primary"
+              className="btn btn-primary switch-ai-glow-btn"
               onClick={onSwitchToAiMode}
-              style={{ padding: '0.45rem 0.9rem', fontSize: '0.82rem', whiteSpace: 'nowrap' }}
             >
-              <Sparkles size={14} />
+              <Sparkles size={16} />
               <span>Switch to AI Mode</span>
-              <ArrowRight size={14} />
+              <ArrowRight size={15} />
             </button>
           )}
         </div>
       )}
 
+      {/* Hidden File Input */}
       <input
         ref={fileInputRef}
         type="file"
@@ -173,36 +196,112 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         disabled={isProcessing}
       />
 
-      {isProcessing ? (
-        <ProcessingTimeline progress={progress} />
+      {/* Completed State: Success Animation + Actions */}
+      {completedDoc ? (
+        <div className="upload-completed-card">
+          <div className="upload-success-icon-wrap">
+            <CheckCircle2 size={48} className="success-pulse-icon" />
+          </div>
+          <h3 className="upload-completed-title">Ingestion Successful</h3>
+          <p className="upload-completed-subtitle">
+            <strong>{completedDoc.filename}</strong> has been extracted and verified with{' '}
+            <span className="text-success font-bold">{Math.round(completedDoc.confidence * 100)}%</span> confidence.
+          </p>
+
+          <div className="upload-completed-actions">
+            <button
+              className="btn btn-primary btn-lg"
+              onClick={() => onUploadSuccess(completedDoc)}
+            >
+              <Eye size={17} />
+              <span>View Extracted Fields</span>
+            </button>
+            <button
+              className="btn btn-secondary"
+              onClick={handleResetForNewUpload}
+            >
+              <FileCheck2 size={16} />
+              <span>Upload Another Document</span>
+            </button>
+          </div>
+        </div>
+      ) : isProcessing ? (
+        /* Processing State: Filename, size, progress bar, spinner */
+        <div className="upload-active-progress-card">
+          <div className="upload-active-file-header">
+            <div className="upload-file-icon">
+              <FileText size={26} color="var(--primary)" />
+            </div>
+            <div className="upload-file-details">
+              <div className="upload-file-name">{activeFile?.name || 'Document'}</div>
+              <div className="upload-file-size">
+                {activeFile ? `${(activeFile.size / 1024).toFixed(1)} KB` : ''} • Local OCR Engine Pipeline
+              </div>
+            </div>
+            <div className="upload-spinner-wrap">
+              <Loader2 size={24} className="spin-anim" color="var(--primary)" />
+            </div>
+          </div>
+
+          <div className="progress-bar-track">
+            <div
+              className="progress-bar-fill"
+              style={{ width: `${progress.percent}%` }}
+            />
+          </div>
+
+          <div className="progress-status-row">
+            <span className="progress-status-msg">{progress.message}</span>
+            <span className="progress-status-pct">{progress.percent}%</span>
+          </div>
+        </div>
       ) : (
+        /* Before Upload: Drag & Drop Documents, Browse Files, PDF • PNG • JPG • WEBP */
         <>
           <div
-            className={`dropzone ${dragActive ? 'drag-active' : ''}`}
+            className={`enterprise-dropzone ${dragActive ? 'drag-active' : ''}`}
             onDragEnter={handleDrag}
             onDragLeave={handleDrag}
             onDragOver={handleDrag}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
           >
-            <div className="dropzone-icon">
-              <UploadCloud size={28} />
+            <div className="dropzone-illustration-wrap">
+              <div className="illustration-glow-ring" />
+              <div className="illustration-icon-box">
+                <FileUp size={36} className="illustration-file-icon" />
+                <UploadCloud size={24} className="illustration-cloud-icon" />
+              </div>
             </div>
-            <div className="dropzone-text">Click to browse or drag & drop files here</div>
-            <div className="dropzone-subtext">PDF documents (digital or scanned), PNG, JPG up to 25MB</div>
-            <div className="file-types-badge-row">
-              <span className="file-badge">PDF (Auto text layer detection)</span>
-              <span className="file-badge">PNG</span>
-              <span className="file-badge">JPG / JPEG</span>
-              <span className="file-badge">WEBP</span>
+
+            <div className="dropzone-headline">
+              <span className="dropzone-lead">Drag & Drop Documents</span> or{' '}
+              <span className="dropzone-browse-cta">Browse Files</span>
             </div>
+
+            <p className="dropzone-formats-badge">
+              PDF • PNG • JPG • WEBP
+            </p>
+
+            <span className="dropzone-limit-hint">
+              Maximum file size 25MB • Automated digital text detection & OCR fallback
+            </span>
           </div>
 
-          <div className="upload-controls-grid">
-            <div className="form-group">
-              <label className="form-label">Predefined Document Type</label>
+          {/* Model Selection Bar */}
+          <div className="upload-options-bar">
+            <div className="form-group-field">
+              <label className="field-select-label">Target Document Profile</label>
               <select
-                className="form-select"
+                className="modern-select"
                 value={selectedType}
                 onChange={(e) => {
                   setSelectedType(e.target.value);
@@ -210,7 +309,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
                 }}
                 disabled={isProcessing}
               >
-                <option value="auto">⚡ Auto-Detect Type (Local Signature Matcher)</option>
+                <option value="auto">⚡ Auto-Detect Type (Local Pattern Matcher)</option>
                 {nonAutoSupportedTypes.map((t) => (
                   <option key={t.id} value={t.id}>
                     {t.name} ({t.category})
@@ -219,56 +318,61 @@ export const UploadCard: React.FC<UploadCardProps> = ({
               </select>
             </div>
 
-            <div className="form-group" style={{ justifyContent: 'flex-end' }}>
-              <button
-                type="button"
-                className="btn btn-secondary"
-                style={{ alignSelf: 'flex-start', marginTop: 'auto' }}
-                onClick={() => setShowAdvanced(!showAdvanced)}
-              >
-                <Sparkles size={15} />
-                <span>{showAdvanced ? 'Hide Advanced Options' : 'Cross-Check Verification (Optional)'}</span>
-                {showAdvanced ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Supported Document Catalog Preview */}
-          <div className="supported-catalog-box">
-            <div className="supported-catalog-header">
-              <span>Supported Document Types ({nonAutoSupportedTypes.length}):</span>
-            </div>
-            <div className="supported-tags-cloud">
-              {nonAutoSupportedTypes.map((t) => (
-                <span
-                  key={t.id}
-                  className={`supported-tag ${selectedType === t.id ? 'active' : ''}`}
-                  onClick={() => setSelectedType(t.id)}
-                  title={`Select ${t.name}`}
-                >
-                  {t.name}
-                </span>
-              ))}
-            </div>
+            <button
+              type="button"
+              className="btn btn-secondary advanced-toggle-btn"
+              onClick={() => setShowAdvanced(!showAdvanced)}
+            >
+              <Sparkles size={15} />
+              <span>{showAdvanced ? 'Hide Cross-Check' : 'Cross-Check Verification'}</span>
+              {showAdvanced ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            </button>
           </div>
 
           {showAdvanced && (
-            <div style={{ marginTop: '1.25rem', paddingTop: '1.25rem', borderTop: '1px solid var(--border-subtle)' }}>
-              <div className="form-group">
-                <label className="form-label">Expected Data JSON (For Automated Cross-Check)</label>
-                <textarea
-                  className="form-textarea"
-                  rows={3}
-                  placeholder='{"name": "VIKRAM SHARMA", "pan": "ABCDE1234F", "dob": "15/08/1985"}'
-                  value={expectedData}
-                  onChange={(e) => setExpectedData(e.target.value)}
-                />
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
-                  Provide expected customer records to test fuzzy cross-checking and discrepancy calculation.
-                </span>
-              </div>
+            <div className="advanced-options-panel">
+              <label className="field-select-label">Expected Customer Data (JSON Cross-Check)</label>
+              <textarea
+                className="modern-textarea"
+                rows={3}
+                placeholder='{"name": "VIKRAM SHARMA", "pan": "ABCDE1234F", "dob": "15/08/1985"}'
+                value={expectedData}
+                onChange={(e) => setExpectedData(e.target.value)}
+              />
+              <span className="field-helper-note">
+                Provide expected record attributes to calculate fuzzy verification scores and highlight discrepancies.
+              </span>
             </div>
           )}
+
+          {/* 22 Document Chips Responsive Grid with Hover Glow */}
+          <div className="supported-catalog-container">
+            <div className="catalog-header-bar">
+              <span className="catalog-count-title">
+                Supported Document Types ({nonAutoSupportedTypes.length})
+              </span>
+              <span className="catalog-subtext">Click any chip to pin classification</span>
+            </div>
+
+            <div className="document-chips-grid">
+              {nonAutoSupportedTypes.map((t) => {
+                const isSelected = selectedType === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    className={`document-chip ${isSelected ? 'selected' : ''}`}
+                    onClick={() => setSelectedType(isSelected ? 'auto' : t.id)}
+                    title={`Select ${t.name} (${t.category})`}
+                  >
+                    <span className="chip-indicator" />
+                    <span className="chip-name">{t.name}</span>
+                    <span className="chip-category">{t.category}</span>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
         </>
       )}
     </div>

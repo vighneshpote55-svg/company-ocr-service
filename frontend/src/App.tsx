@@ -189,7 +189,7 @@ export const App: React.FC = () => {
             style={{ padding: '0.45rem 0.85rem' }}
           >
             <ArrowLeft size={16} />
-            <span>Back to {currentTab === 'upload' ? 'Upload' : 'Repository'}</span>
+            <span>Back to {currentTab === 'repository' ? 'Document Vault' : 'Dashboard'}</span>
           </button>
 
           <div style={{ display: 'flex', gap: '0.5rem' }}>

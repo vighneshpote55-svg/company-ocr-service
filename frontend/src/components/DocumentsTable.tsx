@@ -1,5 +1,18 @@
 import React, { useState } from 'react';
-import { Search, Eye, Trash2, Download, FileText, Zap, Scan, RefreshCw, AlertCircle, AlertTriangle } from 'lucide-react';
+import {
+  Search,
+  Eye,
+  Trash2,
+  Download,
+  FileText,
+  Zap,
+  Scan,
+  RefreshCw,
+  AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  Clock,
+} from 'lucide-react';
 import type { DocumentItem, SupportedType, EngineInfo } from '../types';
 import { api } from '../services/api';
 
@@ -24,26 +37,41 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
-  const [sourceFilter, setSourceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
+
+  const getStatusCategory = (doc: DocumentItem): 'verified' | 'review' | 'processing' | 'failed' => {
+    if (doc.status === 'failed' || doc.status === 'error') {
+      return 'failed';
+    }
+    if (doc.status === 'processing') {
+      return 'processing';
+    }
+    if (
+      doc.status === 'warning' ||
+      doc.status === 'low_confidence' ||
+      doc.checksum_valid === false
+    ) {
+      return 'review';
+    }
+    return 'verified';
+  };
 
   const filteredDocs = documents.filter((doc) => {
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
       const matchName = doc.filename.toLowerCase().includes(q);
-      const matchType = (doc.document_type || doc.doc_type).toLowerCase().includes(q);
+      const matchType = (doc.document_type || doc.doc_type || '').toLowerCase().includes(q);
       const matchText = (doc.extracted_text || '').toLowerCase().includes(q);
       if (!matchName && !matchType && !matchText) return false;
     }
 
-    if (typeFilter !== 'all' && doc.doc_type.toLowerCase() !== typeFilter.toLowerCase()) {
+    if (typeFilter !== 'all' && (doc.doc_type || '').toLowerCase() !== typeFilter.toLowerCase()) {
       return false;
     }
 
-    if (sourceFilter === 'bypassed' && doc.ocr_required !== false) {
-      return false;
-    }
-    if (sourceFilter === 'ocr' && doc.ocr_required !== true) {
-      return false;
+    if (statusFilter !== 'all') {
+      const category = getStatusCategory(doc);
+      if (category !== statusFilter) return false;
     }
 
     return true;
@@ -63,68 +91,114 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
     }
   };
 
+  const renderStatusBadge = (doc: DocumentItem) => {
+    const category = getStatusCategory(doc);
+
+    switch (category) {
+      case 'verified':
+        return (
+          <span className="status-badge-saas badge-verified" title="Verified Clean Document">
+            <CheckCircle2 size={13} />
+            <span>Verified</span>
+          </span>
+        );
+      case 'review':
+        return (
+          <span
+            className="status-badge-saas badge-review"
+            title={doc.reason || doc.checksum_reason || 'Review Required'}
+          >
+            <AlertTriangle size={13} />
+            <span>Review</span>
+          </span>
+        );
+      case 'processing':
+        return (
+          <span className="status-badge-saas badge-processing" title="Processing Document">
+            <Clock size={13} className="spin-anim" />
+            <span>Processing</span>
+          </span>
+        );
+      case 'failed':
+      default:
+        return (
+          <span
+            className="status-badge-saas badge-failed"
+            title={doc.reason || 'Document Ingestion Failed'}
+          >
+            <AlertCircle size={13} />
+            <span>Failed</span>
+          </span>
+        );
+    }
+  };
+
   return (
-    <div className="table-card">
-      <div className="table-toolbar">
-        <div className="table-filter-group">
-          <div className="search-input-wrap">
-            <Search size={15} className="search-icon-pos" />
+    <div className="vault-table-container">
+      {/* Search and Filtering Toolbar */}
+      <div className="vault-toolbar">
+        <div className="vault-filter-controls">
+          <div className="vault-search-box">
+            <Search size={16} className="vault-search-icon" />
             <input
               type="text"
-              className="form-input"
-              placeholder="Search filename, type, or extracted text..."
+              className="vault-search-input"
+              placeholder="Search documents by filename, type, or content..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              style={{ width: '280px' }}
             />
           </div>
 
-          <select
-            className="form-select"
-            value={typeFilter}
-            onChange={(e) => setTypeFilter(e.target.value)}
-            style={{ width: '180px' }}
-          >
-            <option value="all">All Document Types</option>
-            {supportedTypes
-              .filter((t) => t.id !== 'auto')
-              .map((t) => (
-                <option key={t.id} value={t.id}>
-                  {t.name}
-                </option>
-              ))}
-          </select>
+          <div className="vault-select-group">
+            <select
+              className="vault-filter-select"
+              value={typeFilter}
+              onChange={(e) => setTypeFilter(e.target.value)}
+            >
+              <option value="all">All Document Types</option>
+              {supportedTypes
+                .filter((t) => t.id !== 'auto')
+                .map((t) => (
+                  <option key={t.id} value={t.id}>
+                    {t.name}
+                  </option>
+                ))}
+            </select>
 
-          <select
-            className="form-select"
-            value={sourceFilter}
-            onChange={(e) => setSourceFilter(e.target.value)}
-            style={{ width: '190px' }}
-          >
-            <option value="all">All Ingestion Modes</option>
-            <option value="bypassed">⚡ Text Layer (OCR Bypassed)</option>
-            <option value="ocr">🔍 OCR Executed</option>
-          </select>
+            <select
+              className="vault-filter-select"
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value)}
+            >
+              <option value="all">All Statuses</option>
+              <option value="verified">Verified (Green)</option>
+              <option value="review">Review (Orange)</option>
+              <option value="processing">Processing (Blue)</option>
+              <option value="failed">Failed (Red)</option>
+            </select>
+          </div>
         </div>
 
         <button
-          className="btn btn-secondary"
+          className="btn btn-secondary vault-refresh-btn"
           onClick={onRefresh}
           disabled={isLoading}
-          style={{ padding: '0.5rem 0.85rem' }}
+          title="Refresh table data"
         >
           <RefreshCw size={14} className={isLoading ? 'spin-anim' : ''} />
           <span>Refresh</span>
         </button>
       </div>
 
-      <div className="table-wrapper">
-        <table className="doc-table">
+      {/* Rounded Table Shell with Sticky Header */}
+      <div className="vault-table-scroll-wrapper">
+        <table className="vault-table">
           <thead>
             <tr>
-              <th style={{ width: '60px' }}>Preview</th>
-              <th>Document Name</th>
-              <th>Document Type</th>
+              <th style={{ width: '56px' }}>Preview</th>
+              <th>Document</th>
+              <th>Type</th>
+              <th>Status</th>
               <th>OCR Decision</th>
               <th>Confidence</th>
               <th>Processed At</th>
@@ -134,16 +208,20 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
           <tbody>
             {filteredDocs.length === 0 ? (
               <tr>
-                <td colSpan={7} style={{ textAlign: 'center', padding: '3.5rem 1rem', color: 'var(--text-muted)' }}>
-                  <FileText size={32} style={{ margin: '0 auto 0.75rem', opacity: 0.5 }} />
-                  <div style={{ fontWeight: 600 }}>No documents found</div>
-                  <div style={{ fontSize: '0.85rem' }}>Upload a new document or adjust your filters.</div>
+                <td colSpan={8} className="vault-empty-row">
+                  <div className="vault-empty-state">
+                    <FileText size={36} className="vault-empty-icon" />
+                    <h4 className="vault-empty-title">No documents match your query</h4>
+                    <p className="vault-empty-subtitle">
+                      Try adjusting filters, clearing your search query, or ingest new files.
+                    </p>
+                  </div>
                 </td>
               </tr>
             ) : (
               filteredDocs.map((doc) => {
                 const isBypassed = !doc.ocr_required;
-                const isError = doc.status === 'error' || doc.status === 'failed';
+                const isFailed = doc.status === 'error' || doc.status === 'failed';
                 const previewUrl = api.getPreviewUrl(doc.id);
 
                 const getEngineLabel = () => {
@@ -157,21 +235,20 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                 return (
                   <tr
                     key={doc.id}
-                    className={isError ? 'row-error' : undefined}
-                    style={isError ? { backgroundColor: 'rgba(239, 68, 68, 0.04)' } : undefined}
+                    className={`vault-table-row ${isFailed ? 'row-failed' : ''}`}
                   >
                     <td>
                       {doc.has_preview ? (
                         <img
                           src={previewUrl}
                           alt={doc.filename}
-                          className="table-thumb"
+                          className="vault-thumb-img"
                           onError={(e) => {
                             (e.target as HTMLElement).style.display = 'none';
                           }}
                         />
                       ) : (
-                        <div className="thumb-fallback">
+                        <div className="vault-thumb-fallback">
                           <FileText size={18} />
                         </div>
                       )}
@@ -179,183 +256,81 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
 
                     <td>
                       <div
-                        style={{
-                          fontWeight: 600,
-                          color: 'var(--text-main)',
-                          cursor: 'pointer',
-                          maxWidth: '240px',
-                          overflow: 'hidden',
-                          textOverflow: 'ellipsis',
-                          whiteSpace: 'nowrap',
-                        }}
+                        className="vault-doc-filename"
                         onClick={() => onSelectDocument(doc)}
                         title="Click to view full inspection"
                       >
                         {doc.filename}
                       </div>
-                      <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)' }}>
+                      <div className="vault-doc-meta">
                         {(doc.file_size / 1024).toFixed(1)} KB • {doc.pages} {doc.pages === 1 ? 'page' : 'pages'}
                       </div>
                     </td>
 
                     <td>
-                      {isError ? (
-                        <span
-                          title={doc.reason || 'Image returned no text or zero confidence — unreadable or blank image'}
-                          style={{
-                            padding: '0.2rem 0.6rem',
-                            borderRadius: 'var(--radius-sm)',
-                            fontSize: '0.78rem',
-                            fontWeight: 600,
-                            backgroundColor: 'rgba(239, 68, 68, 0.15)',
-                            color: '#ef4444',
-                            border: '1px solid rgba(239, 68, 68, 0.3)',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.3rem',
-                          }}
-                        >
-                          <AlertCircle size={13} />
-                          OCR Failed
-                        </span>
-                      ) : doc.status === 'warning' || doc.checksum_valid === false ? (
-                        <div style={{ display: 'inline-flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
-                          <span
-                            style={{
-                              padding: '0.2rem 0.6rem',
-                              borderRadius: 'var(--radius-sm)',
-                              fontSize: '0.78rem',
-                              fontWeight: 500,
-                              backgroundColor: 'rgba(255, 255, 255, 0.07)',
-                              color: 'var(--text-main)',
-                              display: 'inline-block',
-                            }}
-                          >
-                            {doc.document_type || doc.doc_type}
-                          </span>
-                          <span
-                            title={doc.reason || doc.checksum_reason ? `Validation warning: ${doc.reason || doc.checksum_reason}` : 'Checksum/format validation warning'}
-                            style={{
-                              padding: '0.15rem 0.5rem',
-                              borderRadius: 'var(--radius-sm)',
-                              fontSize: '0.72rem',
-                              fontWeight: 600,
-                              backgroundColor: 'var(--warning-bg)',
-                              color: '#fbbf24',
-                              border: '1px solid var(--warning-border)',
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              gap: '0.25rem',
-                            }}
-                          >
-                            <AlertTriangle size={11} />
-                            {doc.reason || doc.checksum_reason || 'Warning'}
-                          </span>
-                        </div>
-                      ) : (
-                        <span
-                          style={{
-                            padding: '0.2rem 0.6rem',
-                            borderRadius: 'var(--radius-sm)',
-                            fontSize: '0.78rem',
-                            fontWeight: 500,
-                            backgroundColor: 'rgba(255, 255, 255, 0.07)',
-                            color: 'var(--text-main)',
-                            display: 'inline-block',
-                          }}
-                        >
-                          {doc.document_type || doc.doc_type}
-                        </span>
-                      )}
+                      <span className="doc-type-pill">
+                        {doc.document_type || doc.doc_type || 'Unknown'}
+                      </span>
                     </td>
+
+                    {/* Status badge: Green = Verified, Orange = Review, Blue = Processing, Red = Failed */}
+                    <td>{renderStatusBadge(doc)}</td>
 
                     <td>
                       <span
-                        style={{
-                          display: 'inline-flex',
-                          alignItems: 'center',
-                          gap: '0.35rem',
-                          padding: '0.2rem 0.6rem',
-                          borderRadius: 'var(--radius-sm)',
-                          fontSize: '0.78rem',
-                          fontWeight: 600,
-                          backgroundColor: isError
-                            ? 'rgba(239, 68, 68, 0.1)'
-                            : isBypassed
-                            ? 'var(--success-bg)'
-                            : 'rgba(99, 102, 241, 0.15)',
-                          color: isError ? '#ef4444' : isBypassed ? '#34d399' : '#818cf8',
-                          border: `1px solid ${
-                            isError
-                              ? 'rgba(239, 68, 68, 0.25)'
-                              : isBypassed
-                              ? 'var(--success-border)'
-                              : 'rgba(99, 102, 241, 0.3)'
-                          }`,
-                        }}
+                        className={`ocr-decision-chip ${isFailed ? 'decision-failed' : isBypassed ? 'decision-bypassed' : 'decision-neural'}`}
                       >
-                        {isError ? <AlertCircle size={13} /> : isBypassed ? <Zap size={13} /> : <Scan size={13} />}
-                        {getEngineLabel()}
+                        {isFailed ? (
+                          <AlertCircle size={13} />
+                        ) : isBypassed ? (
+                          <Zap size={13} />
+                        ) : (
+                          <Scan size={13} />
+                        )}
+                        <span>{getEngineLabel()}</span>
                       </span>
                     </td>
 
                     <td>
-                      {isError ? (
-                        <span
-                          title={doc.reason || 'Zero confidence OCR failure'}
-                          style={{
-                            fontFamily: 'var(--font-mono)',
-                            fontWeight: 600,
-                            color: '#ef4444',
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: '0.25rem',
-                          }}
-                        >
-                          <AlertCircle size={13} />
-                          0%
-                        </span>
-                      ) : (
-                        <span style={{ fontFamily: 'var(--font-mono)', fontWeight: 600, color: 'var(--text-main)' }}>
-                          {Math.round(doc.confidence * 100)}%
-                        </span>
-                      )}
+                      <span className="vault-confidence-text">
+                        {isFailed ? '0%' : `${Math.round(doc.confidence * 100)}%`}
+                      </span>
                     </td>
 
-                    <td style={{ fontSize: '0.8rem', color: 'var(--text-subtle)' }}>
-                      {formatDate(doc.created_at)}
+                    <td>
+                      <span className="vault-timestamp-text">{formatDate(doc.created_at)}</span>
                     </td>
 
                     <td style={{ textAlign: 'right' }}>
-                      <div style={{ display: 'inline-flex', gap: '0.35rem' }}>
+                      <div className="vault-actions-cluster">
                         <button
-                          className="btn btn-secondary"
+                          className="btn btn-secondary vault-inspect-btn"
                           onClick={() => onSelectDocument(doc)}
                           title="Inspect Document"
-                          style={{ padding: '0.35rem 0.65rem' }}
                         >
                           <Eye size={14} />
-                          <span style={{ fontSize: '0.78rem' }}>Inspect</span>
+                          <span>Inspect</span>
                         </button>
 
                         <a
                           href={api.getFileUrl(doc.id, true)}
                           download={doc.filename}
-                          className="copy-btn"
+                          className="icon-action-btn"
                           title="Download original file"
+                          aria-label="Download original file"
                         >
                           <Download size={14} />
                         </a>
 
                         <button
-                          className="copy-btn"
+                          className="icon-action-btn delete-btn"
                           onClick={() => {
                             if (window.confirm(`Delete "${doc.filename}" from vault?`)) {
                               onDeleteDocument(doc.id);
                             }
                           }}
                           title="Delete document"
-                          style={{ color: '#f87171' }}
+                          aria-label="Delete document"
                         >
                           <Trash2 size={14} />
                         </button>

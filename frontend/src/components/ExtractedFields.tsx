@@ -1,10 +1,125 @@
 import React, { useState } from 'react';
-import { Copy, Check, ShieldCheck, AlertCircle } from 'lucide-react';
+import {
+  Copy,
+  Check,
+  ShieldCheck,
+  AlertCircle,
+  User,
+  Calendar,
+  CreditCard,
+  Building2,
+  FileText,
+  MapPin,
+  Phone,
+  Mail,
+  Hash,
+  DollarSign,
+  Briefcase,
+  Layers,
+} from 'lucide-react';
 import type { DocumentItem } from '../types';
+import { SectionCard } from './SectionCard';
 
 interface ExtractedFieldsProps {
   document: DocumentItem;
   onCopyToast?: (msg: string) => void;
+}
+
+const PERSONAL_KEYS = new Set([
+  'name',
+  'full_name',
+  'person_name',
+  'employee_name',
+  'customer_name',
+  'holder_name',
+  'applicant_name',
+  'father_name',
+  'mother_name',
+  'spouse_name',
+  'dob',
+  'date_of_birth',
+  'birth_date',
+  'gender',
+  'sex',
+  'age',
+  'nationality',
+  'address',
+  'permanent_address',
+  'current_address',
+  'phone',
+  'mobile',
+  'contact',
+  'email',
+]);
+
+const DOCUMENT_KEYS = new Set([
+  'document_number',
+  'doc_number',
+  'id_number',
+  'pan',
+  'pan_number',
+  'aadhaar',
+  'aadhaar_number',
+  'voter_id',
+  'epic_number',
+  'passport_no',
+  'passport_number',
+  'driving_license_no',
+  'dl_number',
+  'rc_number',
+  'chassis_number',
+  'engine_number',
+  'issue_date',
+  'issued_on',
+  'expiry_date',
+  'valid_till',
+  'valid_until',
+  'authority',
+  'place_of_issue',
+  'issuing_state',
+  'registration_date',
+]);
+
+const FINANCIAL_KEYS = new Set([
+  'account_number',
+  'acc_number',
+  'account_no',
+  'ifsc',
+  'ifsc_code',
+  'bank_name',
+  'bank',
+  'branch',
+  'micr',
+  'salary',
+  'net_pay',
+  'net_salary',
+  'gross_pay',
+  'gross_salary',
+  'basic_pay',
+  'total_amount',
+  'amount',
+  'tax_amount',
+  'gstin',
+  'gst_number',
+  'invoice_number',
+  'invoice_no',
+  'employer',
+  'company_name',
+  'transactions',
+]);
+
+function getFieldIcon(key: string) {
+  const lower = key.toLowerCase();
+  if (lower.includes('name') || lower.includes('gender') || lower.includes('sex')) return <User size={15} />;
+  if (lower.includes('date') || lower.includes('dob') || lower.includes('expiry') || lower.includes('valid')) return <Calendar size={15} />;
+  if (lower.includes('address') || lower.includes('state') || lower.includes('place')) return <MapPin size={15} />;
+  if (lower.includes('phone') || lower.includes('mobile')) return <Phone size={15} />;
+  if (lower.includes('email')) return <Mail size={15} />;
+  if (lower.includes('account') || lower.includes('pan') || lower.includes('aadhaar') || lower.includes('passport') || lower.includes('license')) return <CreditCard size={15} />;
+  if (lower.includes('bank') || lower.includes('company') || lower.includes('employer')) return <Building2 size={15} />;
+  if (lower.includes('salary') || lower.includes('amount') || lower.includes('pay') || lower.includes('tax')) return <DollarSign size={15} />;
+  if (lower.includes('number') || lower.includes('no') || lower.includes('id')) return <Hash size={15} />;
+  return <FileText size={15} />;
 }
 
 export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({ document, onCopyToast }) => {
@@ -15,7 +130,11 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({ document, onCo
   const fieldKeys = Object.keys(fields).filter((k) => fields[k] !== null && fields[k] !== undefined);
 
   const handleCopy = (key: string, val: any) => {
-    const textVal = Array.isArray(val) ? val.join(', ') : typeof val === 'object' && val !== null ? JSON.stringify(val) : String(val);
+    const textVal = Array.isArray(val)
+      ? val.join(', ')
+      : typeof val === 'object' && val !== null
+      ? JSON.stringify(val)
+      : String(val);
     navigator.clipboard.writeText(textVal);
     setCopiedKey(key);
     if (onCopyToast) onCopyToast(`Copied ${key.replace(/_/g, ' ')} to clipboard`);
@@ -30,119 +149,169 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({ document, onCo
 
   if (fieldKeys.length === 0) {
     return (
-      <div style={{ textAlign: 'center', padding: '3rem 1rem', color: 'var(--text-muted)' }}>
-        <AlertCircle size={32} style={{ margin: '0 auto 0.75rem', opacity: 0.6 }} />
-        <div style={{ fontWeight: 600, marginBottom: '0.25rem' }}>No structured fields detected</div>
-        <div style={{ fontSize: '0.85rem' }}>
+      <div className="empty-fields-state">
+        <AlertCircle size={36} className="empty-fields-icon" />
+        <div className="empty-fields-title">No structured fields detected</div>
+        <div className="empty-fields-subtitle">
           Document type is unclassified or no regex patterns matched. View the "Extracted Text" tab for full raw text.
         </div>
       </div>
     );
   }
 
+  // Split into categories
+  const personalKeys = fieldKeys.filter((k) => PERSONAL_KEYS.has(k.toLowerCase()));
+  const documentKeys = fieldKeys.filter((k) => DOCUMENT_KEYS.has(k.toLowerCase()));
+  const financialKeys = fieldKeys.filter((k) => FINANCIAL_KEYS.has(k.toLowerCase()));
+  const otherKeys = fieldKeys.filter(
+    (k) =>
+      !PERSONAL_KEYS.has(k.toLowerCase()) &&
+      !DOCUMENT_KEYS.has(k.toLowerCase()) &&
+      !FINANCIAL_KEYS.has(k.toLowerCase())
+  );
+
+  const renderFieldItem = (key: string) => {
+    const value = fields[key];
+    const conf = confidences[key];
+    const icon = getFieldIcon(key);
+
+    return (
+      <div key={key} className="field-item-card">
+        <div className="field-item-header">
+          <div className="field-label-wrap">
+            <span className="field-type-icon">{icon}</span>
+            <span className="field-label">{formatKeyName(key)}</span>
+          </div>
+
+          <div className="field-header-actions">
+            {conf !== undefined && (
+              <span
+                className="field-conf-badge"
+                style={{
+                  color: conf >= 0.85 ? '#16a34a' : conf >= 0.65 ? '#ea580c' : '#dc2626',
+                  backgroundColor:
+                    conf >= 0.85
+                      ? 'rgba(22, 163, 74, 0.1)'
+                      : conf >= 0.65
+                      ? 'rgba(234, 88, 12, 0.1)'
+                      : 'rgba(220, 38, 38, 0.1)',
+                }}
+              >
+                {Math.round(conf * 100)}%
+              </span>
+            )}
+            <button
+              className="copy-btn"
+              onClick={() => handleCopy(key, value)}
+              title="Copy field value"
+              aria-label={`Copy ${key}`}
+            >
+              {copiedKey === key ? <Check size={14} color="#16a34a" /> : <Copy size={14} />}
+            </button>
+          </div>
+        </div>
+
+        <div className="field-value-box">
+          {Array.isArray(value) ? (
+            <div className="field-array-list">
+              {value.map((item, idx) => (
+                <span key={idx} className="field-tag-item">
+                  {typeof item === 'object' && item !== null
+                    ? item.date
+                      ? `${item.date} • ${item.type ? item.type + ' ' : ''}${item.amount} • Bal: ${item.balance || '-'} • ${item.description || ''}`
+                      : JSON.stringify(item)
+                    : String(item)}
+                </span>
+              ))}
+            </div>
+          ) : typeof value === 'object' && value !== null ? (
+            <pre className="field-json-pre">{JSON.stringify(value, null, 2)}</pre>
+          ) : (
+            <span className="field-text-value">{String(value)}</span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
   return (
-    <div>
+    <div className="extracted-fields-wrapper">
       {document.cross_check && (
         <div
+          className="cross-check-banner"
           style={{
-            marginBottom: '1.25rem',
-            padding: '1rem',
-            borderRadius: 'var(--radius-md)',
             backgroundColor: document.cross_check.match ? 'var(--success-bg)' : 'var(--warning-bg)',
-            border: `1px solid ${document.cross_check.match ? 'var(--success-border)' : 'var(--warning-border)'}`,
+            borderColor: document.cross_check.match ? 'var(--success-border)' : 'var(--warning-border)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', fontWeight: 600, fontSize: '0.9rem' }}>
-            <ShieldCheck size={18} color={document.cross_check.match ? '#34d399' : '#fbbf24'} />
+          <div className="cross-check-header">
+            <ShieldCheck size={18} color={document.cross_check.match ? 'var(--success)' : 'var(--warning)'} />
             <span>Cross-Check Verification Score: {Math.round(document.cross_check.score * 100)}%</span>
           </div>
           {document.cross_check.discrepancies?.length > 0 && (
-            <div style={{ marginTop: '0.5rem', fontSize: '0.8rem', color: '#fca5a5' }}>
+            <div className="cross-check-discrepancies">
               Discrepancies: {document.cross_check.discrepancies.join(', ')}
             </div>
           )}
         </div>
       )}
 
-      <div className="fields-grid">
-        {fieldKeys.map((key) => {
-          const value = fields[key];
-          const conf = confidences[key];
-
-          return (
-            <div key={key} className="field-card">
-              <div>
-                <div className="field-top">
-                  <span className="field-label">{formatKeyName(key)}</span>
-                  {conf !== undefined && (
-                    <span
-                      className="field-conf-badge"
-                      style={{
-                        color: conf >= 0.85 ? '#34d399' : conf >= 0.65 ? '#fbbf24' : '#f87171',
-                      }}
-                    >
-                      {Math.round(conf * 100)}%
-                    </span>
-                  )}
-                </div>
-
-                <div className="field-value-row">
-                  <div className="field-value" style={{ flex: 1 }}>
-                    {Array.isArray(value) ? (
-                      <div
-                        style={{
-                          display: 'flex',
-                          flexDirection: key === 'transactions' ? 'column' : 'row',
-                          flexWrap: key === 'transactions' ? 'nowrap' : 'wrap',
-                          gap: '0.35rem',
-                          marginTop: '0.2rem',
-                          maxHeight: key === 'transactions' ? '240px' : undefined,
-                          overflowY: key === 'transactions' ? 'auto' : undefined,
-                        }}
-                      >
-                        {value.map((item, idx) => (
-                          <span
-                            key={idx}
-                            style={{
-                              display: 'inline-flex',
-                              alignItems: 'center',
-                              padding: key === 'transactions' ? '0.25rem 0.5rem' : '0.15rem 0.5rem',
-                              borderRadius: '4px',
-                              backgroundColor: 'rgba(59, 130, 246, 0.15)',
-                              border: '1px solid rgba(59, 130, 246, 0.3)',
-                              color: 'var(--text-primary)',
-                              fontSize: '0.82rem',
-                              fontWeight: 500,
-                            }}
-                          >
-                            {typeof item === 'object' && item !== null
-                              ? item.date
-                                ? `${item.date} • ${item.type ? item.type + ' ' : ''}${item.amount} • Bal: ${item.balance || '-'} • ${item.description || ''}`
-                                : JSON.stringify(item)
-                              : String(item)}
-                          </span>
-                        ))}
-                      </div>
-                    ) : typeof value === 'object' && value !== null ? (
-                      <pre style={{ margin: 0, fontSize: '0.8rem', whiteSpace: 'pre-wrap', maxHeight: '140px', overflowY: 'auto' }}>
-                        {JSON.stringify(value, null, 2)}
-                      </pre>
-                    ) : (
-                      String(value)
-                    )}
-                  </div>
-                  <button
-                    className="copy-btn"
-                    onClick={() => handleCopy(key, value)}
-                    title="Copy field value"
-                  >
-                    {copiedKey === key ? <Check size={14} color="#34d399" /> : <Copy size={14} />}
-                  </button>
-                </div>
-              </div>
+      <div className="field-sections-stack">
+        {/* 1. Personal Information */}
+        {personalKeys.length > 0 && (
+          <SectionCard
+            title="Personal Information"
+            subtitle="Extracted identity, bio, and contact attributes"
+            icon={<User size={18} />}
+          >
+            <div className="fields-two-column-grid">
+              {personalKeys.map(renderFieldItem)}
             </div>
-          );
-        })}
+          </SectionCard>
+        )}
+
+        {/* 2. Document Information */}
+        {documentKeys.length > 0 && (
+          <SectionCard
+            title="Document Information"
+            subtitle="Document identifiers, validity dates, and registry parameters"
+            icon={<CreditCard size={18} />}
+          >
+            <div className="fields-two-column-grid">
+              {documentKeys.map(renderFieldItem)}
+            </div>
+          </SectionCard>
+        )}
+
+        {/* 3. Financial & Business Information */}
+        {financialKeys.length > 0 && (
+          <SectionCard
+            title="Financial & Business Details"
+            subtitle="Banking coordinates, compensations, and corporate data"
+            icon={<Briefcase size={18} />}
+          >
+            <div className="fields-two-column-grid">
+              {financialKeys.map(renderFieldItem)}
+            </div>
+          </SectionCard>
+        )}
+
+        {/* 4. Additional Extracted Data */}
+        {otherKeys.length > 0 && (
+          <SectionCard
+            title={
+              personalKeys.length === 0 && documentKeys.length === 0 && financialKeys.length === 0
+                ? 'Extracted Document Fields'
+                : 'Additional Extracted Fields'
+            }
+            subtitle="Other structural attributes discovered in the payload"
+            icon={<Layers size={18} />}
+          >
+            <div className="fields-two-column-grid">
+              {otherKeys.map(renderFieldItem)}
+            </div>
+          </SectionCard>
+        )}
       </div>
     </div>
   );
