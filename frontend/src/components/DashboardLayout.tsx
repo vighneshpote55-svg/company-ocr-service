@@ -29,6 +29,7 @@ export interface DashboardLayoutProps {
   // Actions
   onDocumentUploaded: (doc: DocumentItem) => void;
   onDeleteDocument: (id: string) => void;
+  onClearAll?: () => void;
   onSelectDocument: (doc: DocumentItem) => void;
   onNotify: (message: string, type?: 'success' | 'error' | 'info') => void;
   // Optional inspection view when inspecting a single document
@@ -52,6 +53,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   documents,
   onDocumentUploaded,
   onDeleteDocument,
+  onClearAll,
   onSelectDocument,
   onNotify,
   selectedDoc,
@@ -138,6 +140,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 supportedTypes={supportedTypes}
                 onSelectDocument={onSelectDocument}
                 onDeleteDocument={onDeleteDocument}
+                onClearAll={onClearAll}
                 onRefresh={onRefresh}
                 isLoading={isRefreshing}
                 engineInfo={engineInfo}

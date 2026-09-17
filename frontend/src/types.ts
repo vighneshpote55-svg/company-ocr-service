@@ -112,20 +112,22 @@ export interface ChatMessage {
   timestamp: string;
 }
 
+export interface OllamaStatusResponse {
+  reachable: boolean;
+  model_installed: boolean;
+  model: string;
+  installed_models?: string[];
+  message?: string;
+  error?: string;
+}
+
 export interface AiStatusResponse {
   configured: boolean;
   provider: string;
   model: string;
   base_url: string;
   message?: string;
-  ollama?: {
-    reachable: boolean;
-    model_installed: boolean;
-    model: string;
-    installed_models?: string[];
-    error?: string;
-    message?: string;
-  };
+  ollama?: OllamaStatusResponse;
 }
 
 export interface OfflineUploadResult {

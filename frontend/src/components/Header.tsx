@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   RefreshCw,
   LogOut,
@@ -45,6 +45,36 @@ export const Header: React.FC<HeaderProps> = ({
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
+  const notificationsRef = useRef<HTMLDivElement>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as Node;
+      if (notificationsRef.current && !notificationsRef.current.contains(target)) {
+        setShowNotifications(false);
+      }
+      if (userMenuRef.current && !userMenuRef.current.contains(target)) {
+        setShowUserMenu(false);
+      }
+    };
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setShowNotifications(false);
+        setShowUserMenu(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, []);
+
   return (
     <header className="top-header glass-header">
       {/* Left: Branding */}
@@ -84,7 +114,11 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Sync Refresh Button */}
         <button
           className="header-icon-btn"
-          onClick={onRefresh}
+          onClick={() => {
+            setShowNotifications(false);
+            setShowUserMenu(false);
+            onRefresh();
+          }}
           disabled={isRefreshing}
           title="Synchronize vault data and metrics"
           aria-label="Synchronize data"
@@ -96,7 +130,11 @@ export const Header: React.FC<HeaderProps> = ({
         {onToggleTheme && (
           <button
             className="header-icon-btn theme-toggle-btn"
-            onClick={onToggleTheme}
+            onClick={() => {
+              setShowNotifications(false);
+              setShowUserMenu(false);
+              onToggleTheme();
+            }}
             title={isDarkMode ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
             aria-label="Toggle dark/light theme"
           >
@@ -104,16 +142,17 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
 
-        {/* Notification Bell */}
-        <div className="header-popover-container">
+        {/* Notification Bell / System Status Popover */}
+        <div className="header-popover-container" ref={notificationsRef}>
           <button
             className="header-icon-btn notification-btn"
             onClick={() => {
-              setShowNotifications(!showNotifications);
+              setShowNotifications((prev) => !prev);
               setShowUserMenu(false);
             }}
             title="System Activity & Notifications"
             aria-label="View notifications"
+            aria-expanded={showNotifications}
           >
             <Bell size={17} />
             <span className="notification-indicator" />
@@ -148,7 +187,11 @@ export const Header: React.FC<HeaderProps> = ({
         {/* Settings Shortcut */}
         <button
           className="header-icon-btn settings-shortcut-btn"
-          onClick={onOpenSettings}
+          onClick={() => {
+            setShowNotifications(false);
+            setShowUserMenu(false);
+            onOpenSettings();
+          }}
           title="Server & Engine Settings"
           aria-label="Settings shortcut"
         >
@@ -156,15 +199,16 @@ export const Header: React.FC<HeaderProps> = ({
         </button>
 
         {/* User Profile Avatar */}
-        <div className="header-popover-container">
+        <div className="header-popover-container" ref={userMenuRef}>
           <button
             className="user-profile-pill-btn"
             onClick={() => {
-              setShowUserMenu(!showUserMenu);
+              setShowUserMenu((prev) => !prev);
               setShowNotifications(false);
             }}
             title="User Profile & Settings"
             aria-label="Open user menu"
+            aria-expanded={showUserMenu}
           >
             <div className="user-avatar-circle">
               <User size={15} />

@@ -3339,31 +3339,94 @@ p, span, div {
   max-width: 950px;
 }
 
-/* AI Config Warning Banner */
-.ai-config-warning-banner {
-  background-color: var(--warning-bg);
-  border: 1px solid var(--warning-border);
-  color: var(--warning-text);
+/* Local AI Status Banners (Live Ollama local health status) */
+.local-ai-status-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   padding: 14px 20px;
   border-radius: var(--radius-md);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  margin-bottom: 1.5rem;
+  transition: all var(--transition-fast);
+}
+
+.local-ai-status-banner.banner-ready {
+  background-color: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.28);
+  color: var(--text-main);
+}
+
+.local-ai-status-banner.banner-offline {
+  background-color: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.28);
+  color: var(--text-main);
+}
+
+.local-ai-status-left {
   display: flex;
   align-items: center;
   gap: 14px;
-  font-size: 0.9rem;
-  line-height: 1.5;
-}
-
-.ai-banner-content {
   flex: 1;
 }
 
-.ai-banner-content code {
-  background: rgba(0, 0, 0, 0.06);
-  padding: 2px 6px;
-  border-radius: 4px;
-  font-family: var(--font-mono);
-  font-size: 0.85rem;
+.local-ai-status-icon-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
+
+.local-ai-status-icon-wrap.icon-success {
+  color: #10b981;
+}
+
+.local-ai-status-icon-wrap.icon-error {
+  color: #ef4444;
+}
+
+.local-ai-status-content {
+  flex: 1;
+}
+
+.local-ai-status-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  color: var(--text-main);
+  margin-bottom: 2px;
+}
+
+.local-ai-model-pill {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 1px 8px;
+  border-radius: 9999px;
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.local-ai-status-desc {
+  font-size: 0.86rem;
+  color: var(--text-muted);
+  margin: 0;
+}
+
+.local-ai-retry-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  flex-shrink: 0;
+}
+
 
 /* 4. Large AI Upload Card */
 .ai-upload-workspace-card {

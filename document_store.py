@@ -225,6 +225,60 @@ def delete_document(doc_id: str) -> bool:
         return True
 
 
+def clear_all_documents() -> int:
+    """
+    Permanently delete all document records and their associated files:
+    - original uploads in ORIGINAL_DIR
+    - thumbnails and previews in PROCESSED_DIR
+    - result json files in RESULTS_DIR
+    - resets documents.json to an empty list
+    Returns the count of deleted documents.
+    """
+    with _lock:
+        items = _load_index()
+        count = len(items)
+
+        # 1. Clean files referenced by indexed documents
+        for doc in items:
+            fpath = doc.get("file_path")
+            if fpath and os.path.exists(fpath):
+                try:
+                    os.remove(fpath)
+                except Exception:
+                    pass
+
+            doc_id = doc.get("id")
+            if doc_id:
+                thumb = os.path.join(PROCESSED_DIR, f"{doc_id}_thumb.png")
+                if os.path.exists(thumb):
+                    try:
+                        os.remove(thumb)
+                    except Exception:
+                        pass
+                res_file = os.path.join(RESULTS_DIR, f"{doc_id}.json")
+                if os.path.exists(res_file):
+                    try:
+                        os.remove(res_file)
+                    except Exception:
+                        pass
+
+        # 2. Clean any remaining files in the upload folders (safe: only within upload subdirectories)
+        for folder in (ORIGINAL_DIR, PROCESSED_DIR, RESULTS_DIR):
+            if os.path.isdir(folder):
+                for fname in os.listdir(folder):
+                    fpath = os.path.join(folder, fname)
+                    if os.path.isfile(fpath):
+                        try:
+                            os.remove(fpath)
+                        except Exception:
+                            pass
+
+        # 3. Reset document index
+        _save_index([])
+        return count
+
+
+
 def get_document_file_path(doc_id: str) -> Optional[str]:
     """Return local path to the original uploaded document file."""
     doc = get_document(doc_id)

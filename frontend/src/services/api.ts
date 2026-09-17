@@ -7,6 +7,7 @@ import type {
   AuthStatusResponse,
   AiAnalysisResult,
   AiStatusResponse,
+  OllamaStatusResponse,
   OfflineUploadResult,
 } from '../types';
 
@@ -313,6 +314,19 @@ export class ApiService {
     return res.ok;
   }
 
+  public async clearAllDocuments(): Promise<{ success: boolean; deleted_count: number; message: string }> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/documents/clear'), {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to clear documents' }));
+      throw new Error(err.detail || 'Failed to clear documents');
+    }
+    return res.json();
+  }
+
+
   public async uploadDocument(
     file: File,
     docType?: string,
@@ -458,7 +472,7 @@ export class ApiService {
     });
   }
 
-  public async getOllamaStatus(): Promise<any> {
+  public async getOllamaStatus(): Promise<OllamaStatusResponse> {
     const res = await this.fetchWithAuth(this.getUrl('/api/ollama/status'));
     if (!res.ok) throw new Error('Failed to fetch Ollama status');
     return res.json();

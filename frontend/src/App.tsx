@@ -17,6 +17,7 @@ import { ExtractedFields } from './components/ExtractedFields';
 import { ExtractedTextViewer } from './components/ExtractedTextViewer';
 import { JsonResultViewer } from './components/JsonResultViewer';
 import { SettingsModal } from './components/SettingsModal';
+import { ConfirmClearModal } from './components/ConfirmClearModal';
 import { LoginView } from './components/LoginView';
 import { Toast } from './components/Toast';
 import type { ToastMessage } from './components/Toast';
@@ -44,6 +45,8 @@ export const App: React.FC = () => {
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
+  const [isClearModalOpen, setIsClearModalOpen] = useState<boolean>(false);
+  const [isClearingVault, setIsClearingVault] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
 
   const addToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
@@ -153,6 +156,28 @@ export const App: React.FC = () => {
       addToast(`Delete failed: ${err.message}`, 'error');
     }
   };
+
+  const handleClearAllDocuments = async () => {
+    setIsClearingVault(true);
+    try {
+      const res = await api.clearAllDocuments();
+      if (res.success) {
+        setIsClearModalOpen(false);
+        if (selectedDoc) {
+          setSelectedDoc(null);
+        }
+        addToast('All documents deleted successfully.', 'success');
+        await loadData();
+      } else {
+        addToast(res.message || 'Failed to delete documents', 'error');
+      }
+    } catch (err: any) {
+      addToast(`Failed to delete documents: ${err.message || err}`, 'error');
+    } finally {
+      setIsClearingVault(false);
+    }
+  };
+
 
   // Only gate the dashboard if the backend actually reports auth is enabled AND user has no valid token
   if (authEnabled && !isAuthenticated) {
@@ -310,10 +335,19 @@ export const App: React.FC = () => {
         documents={documents}
         onDocumentUploaded={handleDocumentUploaded}
         onDeleteDocument={handleDeleteDocument}
+        onClearAll={() => setIsClearModalOpen(true)}
         onSelectDocument={(doc) => setSelectedDoc(doc)}
         onNotify={addToast}
         selectedDoc={selectedDoc}
         inspectContent={renderInspectionContent()}
+      />
+
+      {/* Clear All Confirmation Modal */}
+      <ConfirmClearModal
+        isOpen={isClearModalOpen}
+        onClose={() => setIsClearModalOpen(false)}
+        onConfirm={handleClearAllDocuments}
+        isDeleting={isClearingVault}
       />
 
       {/* Settings Modal */}

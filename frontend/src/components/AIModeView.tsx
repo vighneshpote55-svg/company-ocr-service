@@ -1,9 +1,11 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Sparkles,
   AlertCircle,
+  CheckCircle2,
+  RefreshCw,
 } from 'lucide-react';
-import type { AiAnalysisResult, ChatMessage, UploadProgress } from '../types';
+import type { AiAnalysisResult, ChatMessage, UploadProgress, OllamaStatusResponse } from '../types';
 import { api } from '../services/api';
 import { AIUploadCard } from './AIUploadCard';
 import { AIAnalysisCard } from './AIAnalysisCard';
@@ -27,19 +29,31 @@ export const AIModeView: React.FC<AIModeViewProps> = ({ onNotify, onSwitchToOffl
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isAiThinking, setIsAiThinking] = useState(false);
-  const [aiConfigured, setAiConfigured] = useState<boolean | null>(null);
+  const [ollamaStatus, setOllamaStatus] = useState<OllamaStatusResponse | null>(null);
+  const [isCheckingOllama, setIsCheckingOllama] = useState(false);
 
   const fileInputHiddenRef = useRef<HTMLInputElement>(null);
 
-  useEffect(() => {
-    api.getAiStatus()
-      .then((status) => {
-        setAiConfigured(status.configured);
-      })
-      .catch(() => {
-        setAiConfigured(false);
+  const fetchOllamaStatus = useCallback(async () => {
+    setIsCheckingOllama(true);
+    try {
+      const status = await api.getOllamaStatus();
+      setOllamaStatus(status);
+    } catch {
+      setOllamaStatus({
+        reachable: false,
+        model_installed: false,
+        model: 'qwen2.5vl:3b',
+        error: 'Ollama server is not reachable.',
       });
+    } finally {
+      setIsCheckingOllama(false);
+    }
   }, []);
+
+  useEffect(() => {
+    fetchOllamaStatus();
+  }, [fetchOllamaStatus]);
 
   const handleFileUpload = async (file: File) => {
     const validExtensions = ['.pdf', '.png', '.jpg', '.jpeg', '.webp'];
@@ -213,14 +227,54 @@ export const AIModeView: React.FC<AIModeViewProps> = ({ onNotify, onSwitchToOffl
         </p>
       </div>
 
-      {/* AI Provider Status Banner */}
-      {aiConfigured === false && (
-        <div className="ai-config-warning-banner">
-          <AlertCircle size={20} className="text-warning" />
-          <div className="ai-banner-content">
-            <strong>AI Provider Notice:</strong> No external <code>AI_API_KEY</code> detected in environment. Using integrated local classification engine. Configure an API key in Settings to unlock deep multi-turn LLM reasoning.
+      {/* Local AI Live Status Banner */}
+      {ollamaStatus && (
+        ollamaStatus.reachable && ollamaStatus.model_installed ? (
+          <div className="local-ai-status-banner banner-ready">
+            <div className="local-ai-status-left">
+              <div className="local-ai-status-icon-wrap icon-success">
+                <CheckCircle2 size={20} />
+              </div>
+              <div className="local-ai-status-content">
+                <div className="local-ai-status-title">
+                  <strong>Local AI Ready</strong>
+                  <span className="local-ai-model-pill">Qwen2.5-VL:3B</span>
+                </div>
+                <p className="local-ai-status-desc">
+                  Ollama (Qwen2.5-VL:3B) is running locally. All AI document analysis is performed completely offline.
+                </p>
+              </div>
+            </div>
           </div>
-        </div>
+        ) : (
+          <div className="local-ai-status-banner banner-offline">
+            <div className="local-ai-status-left">
+              <div className="local-ai-status-icon-wrap icon-error">
+                <AlertCircle size={20} />
+              </div>
+              <div className="local-ai-status-content">
+                <div className="local-ai-status-title">
+                  <strong>Local AI Offline</strong>
+                </div>
+                <p className="local-ai-status-desc">
+                  {!ollamaStatus.reachable
+                    ? 'Start Ollama to enable AI document analysis.'
+                    : (ollamaStatus.error || 'Start Ollama to enable AI document analysis.')}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              className="btn btn-secondary local-ai-retry-btn"
+              onClick={fetchOllamaStatus}
+              disabled={isCheckingOllama}
+              title="Check Ollama status again"
+            >
+              <RefreshCw size={14} className={isCheckingOllama ? 'spin-anim' : ''} />
+              <span>{isCheckingOllama ? 'Checking...' : 'Retry'}</span>
+            </button>
+          </div>
+        )
       )}
 
       {/* When no document is loaded or while processing */}

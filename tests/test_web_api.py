@@ -339,3 +339,47 @@ def test_upload_cross_check_ordering_with_masked_fields(client):
     finally:
         # Clean up
         client.delete(f"/api/documents/{doc_id}")
+
+
+def test_clear_all_documents_endpoint(client):
+    """
+    DELETE /api/documents/clear should permanently remove every document record,
+    delete stored files and thumbnails, and reset Document Vault.
+    """
+    # 1. Seed two dummy documents in storage
+    doc1 = document_store.save_document(
+        file_bytes=b"dummy file 1 content",
+        filename="dummy1.txt",
+        result_data={"status": "completed", "doc_type": "generic", "extracted_fields": {}},
+    )
+    doc2 = document_store.save_document(
+        file_bytes=b"dummy file 2 content",
+        filename="dummy2.txt",
+        result_data={"status": "completed", "doc_type": "generic", "extracted_fields": {}},
+    )
+
+    assert os.path.exists(doc1["file_path"])
+    assert os.path.exists(doc2["file_path"])
+
+    list_resp = client.get("/api/documents")
+    assert list_resp.status_code == 200
+    assert list_resp.json()["total"] >= 2
+
+    # 2. Call clear endpoint
+    clear_resp = client.delete("/api/documents/clear")
+    assert clear_resp.status_code == 200
+    clear_data = clear_resp.json()
+    assert clear_data["success"] is True
+    assert clear_data["deleted_count"] >= 2
+    assert clear_data["message"] == "All documents have been deleted."
+
+    # 3. Vault index should now be empty
+    after_list = client.get("/api/documents")
+    assert after_list.status_code == 200
+    assert after_list.json()["total"] == 0
+    assert after_list.json()["items"] == []
+
+    # 4. Upload files should be deleted
+    assert not os.path.exists(doc1["file_path"])
+    assert not os.path.exists(doc2["file_path"])
+

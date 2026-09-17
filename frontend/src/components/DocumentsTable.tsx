@@ -21,6 +21,7 @@ interface DocumentsTableProps {
   supportedTypes: SupportedType[];
   onSelectDocument: (doc: DocumentItem) => void;
   onDeleteDocument: (id: string) => void;
+  onClearAll?: () => void;
   onRefresh: () => void;
   isLoading?: boolean;
   engineInfo?: EngineInfo | null;
@@ -31,6 +32,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
   supportedTypes,
   onSelectDocument,
   onDeleteDocument,
+  onClearAll,
   onRefresh,
   isLoading = false,
   engineInfo,
@@ -179,15 +181,30 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
           </div>
         </div>
 
-        <button
-          className="btn btn-secondary vault-refresh-btn"
-          onClick={onRefresh}
-          disabled={isLoading}
-          title="Refresh table data"
-        >
-          <RefreshCw size={14} className={isLoading ? 'spin-anim' : ''} />
-          <span>Refresh</span>
-        </button>
+        <div className="vault-toolbar-actions" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+          <button
+            className="btn btn-secondary vault-refresh-btn"
+            onClick={onRefresh}
+            disabled={isLoading}
+            title="Refresh table data"
+          >
+            <RefreshCw size={14} className={isLoading ? 'spin-anim' : ''} />
+            <span>Refresh</span>
+          </button>
+
+          {onClearAll && (
+            <button
+              className="btn btn-danger vault-clear-all-btn"
+              onClick={onClearAll}
+              disabled={documents.length === 0 || isLoading}
+              title="Clear all documents from Document Vault"
+              style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+            >
+              <Trash2 size={14} />
+              <span>Clear All</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Rounded Table Shell with Sticky Header */}
@@ -211,9 +228,13 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                 <td colSpan={8} className="vault-empty-row">
                   <div className="vault-empty-state">
                     <FileText size={36} className="vault-empty-icon" />
-                    <h4 className="vault-empty-title">No documents match your query</h4>
+                    <h4 className="vault-empty-title">
+                      {documents.length === 0 ? 'Document Vault is empty' : 'No documents match your query'}
+                    </h4>
                     <p className="vault-empty-subtitle">
-                      Try adjusting filters, clearing your search query, or ingest new files.
+                      {documents.length === 0
+                        ? 'There are no documents in the vault. Upload or ingest documents to get started.'
+                        : 'Try adjusting filters, clearing your search query, or ingest new files.'}
                     </p>
                   </div>
                 </td>

@@ -775,6 +775,19 @@ async def get_document_preview_endpoint(
     return FileResponse(preview_path, media_type="image/png")
 
 
+@app.delete("/api/documents/clear")
+async def clear_all_documents_endpoint(
+    auth: dict = Depends(authenticate_request),
+):
+    """Permanently delete all documents from Document Vault, clearing files and records."""
+    deleted_count = document_store.clear_all_documents()
+    return {
+        "success": True,
+        "deleted_count": deleted_count,
+        "message": "All documents have been deleted.",
+    }
+
+
 @app.delete("/api/documents/{doc_id}")
 async def delete_document_endpoint(
     doc_id: str,

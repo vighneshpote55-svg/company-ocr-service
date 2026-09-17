@@ -106,3 +106,71 @@ test('ApiService triggers unauthorized listener and clears token on 401', async 
     globalThis.fetch = originalFetch;
   }
 });
+
+test('ApiService clearAllDocuments calls DELETE /api/documents/clear and returns result', async () => {
+  const api = new ApiService();
+  api.setAuthEnabled(false);
+
+  let capturedUrl = '';
+  let capturedMethod = '';
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url: any, options: any) => {
+    capturedUrl = String(url);
+    capturedMethod = options?.method || 'GET';
+    return {
+      status: 200,
+      ok: true,
+      json: async () => ({
+        success: true,
+        deleted_count: 5,
+        message: 'All documents have been deleted.',
+      }),
+    } as any;
+  };
+
+  try {
+    const res = await api.clearAllDocuments();
+    assert.equal(capturedUrl, 'http://localhost:8000/api/documents/clear');
+    assert.equal(capturedMethod, 'DELETE');
+    assert.equal(res.success, true);
+    assert.equal(res.deleted_count, 5);
+    assert.equal(res.message, 'All documents have been deleted.');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ApiService getOllamaStatus calls GET /api/ollama/status and returns health object', async () => {
+  const api = new ApiService();
+  api.setAuthEnabled(false);
+
+  let capturedUrl = '';
+
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url: any) => {
+    capturedUrl = String(url);
+    return {
+      status: 200,
+      ok: true,
+      json: async () => ({
+        reachable: true,
+        model_installed: true,
+        model: 'qwen2.5vl:3b',
+        message: 'Ollama server is running and qwen2.5vl:3b is ready.',
+      }),
+    } as any;
+  };
+
+  try {
+    const res = await api.getOllamaStatus();
+    assert.equal(capturedUrl, 'http://localhost:8000/api/ollama/status');
+    assert.equal(res.reachable, true);
+    assert.equal(res.model_installed, true);
+    assert.equal(res.model, 'qwen2.5vl:3b');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+

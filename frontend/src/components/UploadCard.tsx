@@ -344,35 +344,6 @@ export const UploadCard: React.FC<UploadCardProps> = ({
               </span>
             </div>
           )}
-
-          {/* 22 Document Chips Responsive Grid with Hover Glow */}
-          <div className="supported-catalog-container">
-            <div className="catalog-header-bar">
-              <span className="catalog-count-title">
-                Supported Document Types ({nonAutoSupportedTypes.length})
-              </span>
-              <span className="catalog-subtext">Click any chip to pin classification</span>
-            </div>
-
-            <div className="document-chips-grid">
-              {nonAutoSupportedTypes.map((t) => {
-                const isSelected = selectedType === t.id;
-                return (
-                  <button
-                    key={t.id}
-                    type="button"
-                    className={`document-chip ${isSelected ? 'selected' : ''}`}
-                    onClick={() => setSelectedType(isSelected ? 'auto' : t.id)}
-                    title={`Select ${t.name} (${t.category})`}
-                  >
-                    <span className="chip-indicator" />
-                    <span className="chip-name">{t.name}</span>
-                    <span className="chip-category">{t.category}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
         </>
       )}
     </div>
