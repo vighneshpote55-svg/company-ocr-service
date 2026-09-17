@@ -13,4 +13,5 @@ python-dotenv==1.2.3
 requests==2.32.5
 onnxruntime==1.29.0
 rapidocr-onnxruntime==1.2.3
+ollama>=0.6.0
 

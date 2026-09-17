@@ -317,10 +317,12 @@ export class ApiService {
     file: File,
     docType?: string,
     expectedData?: string,
-    onProgress?: (percent: number) => void
+    onProgress?: (percent: number) => void,
+    mode: 'offline' | 'ai' = 'offline'
   ): Promise<DocumentItem> {
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('mode', mode);
     if (docType && docType !== 'auto') {
       formData.append('doc_type', docType);
     }
@@ -396,6 +398,7 @@ export class ApiService {
   ): Promise<OfflineUploadResult> {
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('mode', 'offline');
     if (docType && docType !== 'auto') {
       formData.append('doc_type', docType);
     }
@@ -455,12 +458,19 @@ export class ApiService {
     });
   }
 
+  public async getOllamaStatus(): Promise<any> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/ollama/status'));
+    if (!res.ok) throw new Error('Failed to fetch Ollama status');
+    return res.json();
+  }
+
   public async analyzeAiDocument(
     file: File,
     onProgress?: (percent: number) => void
   ): Promise<AiAnalysisResult> {
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('mode', 'ai');
 
     return new Promise((resolve, reject) => {
       const xhr = new XMLHttpRequest();

@@ -28,6 +28,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 import ai_service
+import ollama_ai
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger("company_server_ocr")
@@ -792,20 +793,15 @@ async def delete_document_endpoint(
 @app.post("/api/upload")
 async def upload_document_endpoint(
     file: UploadFile = File(...),
+    mode: Optional[str] = Form("offline"),
     doc_type: Optional[str] = Form(None),
     expected_data: Optional[str] = Form(None),
     auth: dict = Depends(authenticate_request),
 ):
     """
     Direct browser upload endpoint:
-    - Automatically tests if PDF has selectable text layer (>= 50 chars via pdftotext)
-    - If text layer exists: extracts directly (ocr_required=false, text_source='embedded_pdf_text')
-    - If scanned/image: runs PaddleOCR (ocr_required=true, text_source='paddle_ocr')
-    - Classifies doc_type if not manually supplied (auto-detect)
-    - Extracts fields, performs checksum/format verification, minimises PII
-    - Generates document thumbnail
-    - Stores document and analysis results locally in uploads/
-    - Returns rich document record
+    - If mode == "ai": passes document to local Ollama (qwen2.5vl:3b) for visual reasoning and structured field extraction.
+    - If mode == "offline": executes the existing RapidOCR / text layer pipeline for predefined document types.
     """
     filename = file.filename or "document.bin"
     ext = os.path.splitext(filename)[1].lower()
@@ -833,7 +829,77 @@ async def upload_document_endpoint(
         f.write(file_bytes)
 
     try:
-        # 1. Text Layer Detection & OCR
+        # ====================================================================
+        # AI Mode Branch: Local Ollama + Qwen2.5-VL:3B Document Understanding
+        # ====================================================================
+        if (mode or "").strip().lower() == "ai":
+            health = ollama_ai.check_ollama_health()
+            if not health.get("reachable"):
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"error": "Ollama server is not running."},
+                )
+            if not health.get("model_installed"):
+                return JSONResponse(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    content={"error": health.get("error", "Model 'qwen2.5vl:3b' is missing. Please run: ollama pull qwen2.5vl:3b")},
+                )
+
+            ai_res = ollama_ai.analyze_document(temp_path, filename=filename)
+            if "error" in ai_res:
+                err_code = (
+                    status.HTTP_503_SERVICE_UNAVAILABLE
+                    if "not running" in ai_res["error"] or "missing" in ai_res["error"]
+                    else status.HTTP_500_INTERNAL_SERVER_ERROR
+                )
+                return JSONResponse(status_code=err_code, content=ai_res)
+
+            thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
+
+            result_payload = {
+                "doc_type": "ai_analyzed",
+                "document_type": ai_res.get("document_type", "Analyzed Document"),
+                "ocr_required": False,
+                "text_source": "ollama_qwen2.5vl",
+                "status": "completed",
+                "confidence": 0.95 if ai_res.get("confidence") == "high" else (0.80 if ai_res.get("confidence") == "medium" else 0.60),
+                "pages": 1,
+                "reason": None,
+                "extracted_fields": ai_res.get("extracted_fields", {}),
+                "field_confidences": {},
+                "extracted_text": json.dumps(ai_res.get("extracted_fields", {}), indent=2),
+                "ai_analysis": ai_res,
+            }
+
+            saved_record = document_store.save_document(
+                file_bytes=file_bytes,
+                filename=filename,
+                result_data=result_payload,
+                thumbnail_bytes=thumb_bytes,
+            )
+
+            return {
+                "document_id": saved_record["id"],
+                "filename": saved_record["filename"],
+                "document_type": ai_res.get("document_type", "Analyzed Document"),
+                "confidence": ai_res.get("confidence", "high"),
+                "summary": ai_res.get("summary", ""),
+                "reasoning": ai_res.get("reasoning", []),
+                "extracted_fields": ai_res.get("extracted_fields", {}),
+                "file_url": saved_record["file_url"],
+                "preview_url": saved_record.get("preview_url"),
+                "file_size": saved_record["file_size"],
+                "pages": saved_record["pages"],
+                "text_source": "ollama_qwen2.5vl",
+                "extracted_text": json.dumps(ai_res.get("extracted_fields", {}), indent=2),
+                "processing_time_seconds": ai_res.get("processing_time_seconds"),
+                "model_used": ai_res.get("model_used", "qwen2.5vl:3b"),
+                "is_local_ai": True,
+            }
+
+        # ====================================================================
+        # Offline Mode Branch (RapidOCR + ONNX) - 100% Unchanged
+        # ====================================================================
         requested_type = (doc_type or "").strip().lower()
         init_langs = get_languages_for_doc_type(requested_type) if requested_type and requested_type != "auto" else None
         try:
@@ -1022,12 +1088,23 @@ class AiChatPayload(BaseModel):
     history: Optional[List[Dict[str, str]]] = None
 
 
+@app.get("/api/ollama/status")
+async def get_ollama_status():
+    """Returns local Ollama server and Qwen2.5-VL model health status."""
+    return ollama_ai.check_ollama_health()
+
+
 @app.get("/api/mode/ai/status")
 async def get_ai_mode_status(
     auth: dict = Depends(authenticate_request),
 ):
     """Returns runtime AI provider configuration status and model metadata."""
-    return ai_service.check_ai_status()
+    res = ai_service.check_ai_status()
+    try:
+        res["ollama"] = ollama_ai.check_ollama_health()
+    except Exception:
+        pass
+    return res
 
 
 @app.post("/api/mode/offline")

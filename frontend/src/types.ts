@@ -93,12 +93,16 @@ export interface AiAnalysisResult {
   confidence: 'high' | 'medium' | 'low' | string;
   summary: string;
   reasoning: string[];
+  extracted_fields?: Record<string, any>;
   file_url: string;
   preview_url?: string | null;
   file_size: number;
   pages: number;
   text_source: string;
   extracted_text: string;
+  is_local_ai?: boolean;
+  model_used?: string;
+  processing_time_seconds?: number;
 }
 
 export interface ChatMessage {
@@ -113,7 +117,15 @@ export interface AiStatusResponse {
   provider: string;
   model: string;
   base_url: string;
-  message: string;
+  message?: string;
+  ollama?: {
+    reachable: boolean;
+    model_installed: boolean;
+    model: string;
+    installed_models?: string[];
+    error?: string;
+    message?: string;
+  };
 }
 
 export interface OfflineUploadResult {
