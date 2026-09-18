@@ -908,8 +908,6 @@ def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
         fields["statement_period"] = {
             "from_date": from_str,
             "to_date": to_str,
-            "from": from_str,
-            "to": to_str,
         }
 
     # 6. Customer Number / ID / CIF

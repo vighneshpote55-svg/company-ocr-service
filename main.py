@@ -55,6 +55,7 @@ from PIL import Image
 from audit_logger import log_audit_event
 import document_store
 from extractors import (
+    EXTRACTOR_REGISTRY,
     PII_ALLOWLIST,
     extract_document_fields,
     extract_document_fields_raw,
@@ -1269,23 +1270,44 @@ async def process_offline_mode_endpoint(
         else:
             resolved_type = requested_type
 
-        # 3. Validation against supported document types
-        if resolved_type not in SUPPORTED_DOC_TYPE_IDS or resolved_type == "unknown":
-            return JSONResponse(
-                status_code=status.HTTP_200_OK,
-                content={
-                    "supported": False,
-                    "status": "unsupported",
-                    "message": "This document type is not supported in Offline Mode. Please use AI Mode for unknown documents.",
-                    "doc_type": "unknown",
-                    "document_type": "Unknown Document",
-                    "confidence": "low",
-                    "ocr_required": ocr_required,
-                    "text_source": text_source,
-                    "extracted_text": doc_res.full_text[:500] if doc_res.full_text else "",
-                    "evidence": classification.get("evidence", []),
-                },
+        # 3. Check against supported document types & EXTRACTOR_REGISTRY
+        if resolved_type not in SUPPORTED_DOC_TYPE_IDS or resolved_type == "unknown" or resolved_type not in EXTRACTOR_REGISTRY:
+            # Unsupported / Unknown document in Offline Mode:
+            # 100% OCR is performed, text preserved, thumbnail generated, and stored in Document Vault
+            thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
+            doc_status = "low_confidence" if doc_res.average_confidence < 0.6 else "completed"
+            result_payload = {
+                "doc_type": "unknown",
+                "document_type": "Unknown Document",
+                "issuer": None,
+                "classification": classification,
+                "evidence": classification.get("evidence", []),
+                "ocr_required": ocr_required,
+                "text_source": text_source,
+                "status": doc_status,
+                "confidence": doc_res.average_confidence,
+                "pages": len(doc_res.pages) if doc_res.pages else 1,
+                "reason": "Offline OCR completed successfully. Document is not one of the 22 supported structured types.",
+                "extracted_fields": {},
+                "fields": {},
+                "field_confidences": {},
+                "extracted_text": doc_res.full_text,
+                "checksum_valid": None,
+                "checksum_reason": None,
+                "cross_check": None,
+                "ocr_completed": True,
+                "message": "Offline OCR completed successfully. Use AI Mode for detailed document understanding.",
+            }
+            saved_record = document_store.save_document(
+                file_bytes=file_bytes,
+                filename=filename,
+                result_data=result_payload,
+                thumbnail_bytes=thumb_bytes,
             )
+            saved_record["supported"] = True
+            saved_record["ocr_completed"] = True
+            saved_record["message"] = "Offline OCR completed successfully. Use AI Mode for detailed document understanding."
+            return saved_record
 
         meta = DOC_TYPE_METADATA.get(resolved_type, {})
         detected_doc_title = classification.get("document_type") or meta.get("name") or (
@@ -1400,6 +1422,7 @@ async def process_offline_mode_endpoint(
             thumbnail_bytes=thumb_bytes,
         )
         saved_record["supported"] = True
+        saved_record["ocr_completed"] = True
         return saved_record
 
     finally:

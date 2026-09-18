@@ -109,7 +109,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
 
       const doc = await api.uploadOfflineDocument(file, selectedType, expectedData || undefined);
 
-      if (doc.supported === false) {
+      if (doc.supported === false && !doc.id) {
         setIsProcessing(false);
         setActiveFile(null);
         setCompletedDoc(null);
@@ -148,6 +148,10 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   };
 
   const nonAutoSupportedTypes = supportedTypes.filter((t) => t.id !== 'auto');
+
+  const isUnknownDoc =
+    completedDoc &&
+    (completedDoc.doc_type === 'unknown' || completedDoc.document_type === 'Unknown Document');
 
   return (
     <div className="upload-workspace-card">
@@ -207,19 +211,30 @@ export const UploadCard: React.FC<UploadCardProps> = ({
           <div className="upload-success-icon-wrap">
             <CheckCircle2 size={48} className="success-pulse-icon" />
           </div>
-          <h3 className="upload-completed-title">Ingestion Successful</h3>
+          <h3 className="upload-completed-title">
+            {isUnknownDoc ? 'Offline OCR Completed' : 'Ingestion Successful'}
+          </h3>
           <p className="upload-completed-subtitle">
-            <strong>{completedDoc.filename}</strong> has been extracted and verified with{' '}
-            <span className="text-success font-bold">{Math.round(completedDoc.confidence * 100)}%</span> confidence.
+            {isUnknownDoc ? (
+              <>
+                <strong>{completedDoc.filename}</strong> has been scanned using Offline OCR.{' '}
+                <span className="text-success font-bold">Raw text is ready.</span> Switch to AI Mode for structured analysis.
+              </>
+            ) : (
+              <>
+                <strong>{completedDoc.filename}</strong> has been extracted and verified with{' '}
+                <span className="text-success font-bold">{Math.round(completedDoc.confidence * 100)}%</span> confidence.
+              </>
+            )}
           </p>
 
-          <div className="upload-completed-actions">
+          <div className="upload-completed-actions" style={{ flexWrap: 'wrap', justifyContent: 'center' }}>
             <button
               className="btn btn-primary btn-lg"
               onClick={() => onUploadSuccess(completedDoc)}
             >
               <Eye size={17} />
-              <span>View Extracted Fields</span>
+              <span>{isUnknownDoc ? 'View Document & Text' : 'View Extracted Fields'}</span>
             </button>
             <button
               className="btn btn-secondary"
@@ -228,6 +243,16 @@ export const UploadCard: React.FC<UploadCardProps> = ({
               <FileCheck2 size={16} />
               <span>Upload Another Document</span>
             </button>
+            {isUnknownDoc && onSwitchToAiMode && (
+              <button
+                className="btn btn-primary switch-ai-glow-btn"
+                onClick={onSwitchToAiMode}
+              >
+                <Sparkles size={16} />
+                <span>Switch to AI Mode</span>
+                <ArrowRight size={15} />
+              </button>
+            )}
           </div>
         </div>
       ) : isProcessing ? (

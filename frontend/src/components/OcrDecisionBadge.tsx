@@ -1,5 +1,5 @@
 import React from 'react';
-import { Zap, Scan, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
+import { Zap, Scan, CheckCircle, AlertTriangle, AlertCircle, FileText, Sparkles } from 'lucide-react';
 import type { DocumentItem, EngineInfo } from '../types';
 
 interface OcrDecisionBadgeProps {
@@ -10,6 +10,9 @@ interface OcrDecisionBadgeProps {
 export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, engineInfo }) => {
   const isBypassed = !document.ocr_required;
   const isError = document.status === 'error' || document.status === 'failed';
+  const isUnknown =
+    document.doc_type === 'unknown' ||
+    document.document_type === 'Unknown Document';
 
   const engineName =
     document.text_source === 'rapid_ocr'
@@ -54,6 +57,8 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
 
   const bannerTitle = isError
     ? '❌ OCR Extraction Failed — Document Unreadable'
+    : isUnknown
+    ? 'Unknown Document'
     : displayTitle
     ? isBypassed
       ? `⚡ ${displayTitle} — Text Layer Detected`
@@ -65,6 +70,8 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
   const bannerDesc = isError
     ? (document.reason ||
         'The engine returned empty text or zero confidence. Please ensure the document is clear, correctly rotated, and high contrast.')
+    : isUnknown
+    ? 'Offline OCR completed successfully.'
     : isBypassed
     ? 'PDF contains a clean digital text layer (≥ 50 characters). Extracted directly with zero character distortion.'
     : `Raster image or scanned document processed via ${engineName} neural OCR pass with line confidence scoring.`;
@@ -72,13 +79,18 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
   return (
     <div
       className={`ocr-decision-banner ${
-        isError ? 'error' : isBypassed ? 'bypassed' : 'paddle'
+        isError ? 'error' : isBypassed ? 'bypassed' : isUnknown ? 'unknown-badge-style' : 'paddle'
       }`}
       style={
         isError
           ? {
               backgroundColor: 'rgba(239, 68, 68, 0.1)',
               borderColor: 'rgba(239, 68, 68, 0.3)',
+            }
+          : isUnknown
+          ? {
+              backgroundColor: 'rgba(99, 102, 241, 0.08)',
+              borderColor: 'rgba(99, 102, 241, 0.25)',
             }
           : undefined
       }
@@ -113,6 +125,64 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
       </div>
 
       <div style={{ display: 'flex', gap: '0.65rem', alignItems: 'center', flexWrap: 'wrap' }}>
+        {isUnknown ? (
+          <>
+            <div
+              style={{
+                padding: '0.35rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'rgba(16, 185, 129, 0.15)',
+                color: '#34d399',
+                border: '1px solid rgba(16, 185, 129, 0.3)',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+              }}
+            >
+              <CheckCircle size={14} />
+              <span>OCR Completed</span>
+            </div>
+
+            <div
+              style={{
+                padding: '0.35rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'rgba(129, 140, 248, 0.15)',
+                color: '#818cf8',
+                border: '1px solid rgba(129, 140, 248, 0.3)',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+              }}
+            >
+              <FileText size={14} />
+              <span>Raw Text Available</span>
+            </div>
+
+            <div
+              style={{
+                padding: '0.35rem 0.75rem',
+                borderRadius: 'var(--radius-sm)',
+                backgroundColor: 'rgba(59, 130, 246, 0.15)',
+                color: '#60a5fa',
+                border: '1px solid rgba(59, 130, 246, 0.3)',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+                display: 'flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+              }}
+            >
+              <Sparkles size={14} />
+              <span>AI Mode Recommended</span>
+            </div>
+          </>
+        ) : null}
+
         <div
           style={{
             padding: '0.35rem 0.75rem',
@@ -136,7 +206,7 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
           {document.pages} {document.pages === 1 ? 'Page' : 'Pages'}
         </div>
 
-        {(document.checksum_valid !== undefined || document.status === 'warning') && (
+        {!isUnknown && (document.checksum_valid !== undefined || document.status === 'warning') && (
           <div
             style={{
               padding: '0.35rem 0.75rem',

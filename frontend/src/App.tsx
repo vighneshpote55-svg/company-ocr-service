@@ -282,7 +282,11 @@ export const App: React.FC = () => {
 
             <div className="tab-content">
               {inspectTab === 'fields' && (
-                <ExtractedFields document={selectedDoc} onCopyToast={addToast} />
+                <ExtractedFields
+                  document={selectedDoc}
+                  onCopyToast={addToast}
+                  onSwitchToAiMode={() => setAppMode('ai')}
+                />
               )}
 
               {inspectTab === 'text' && (

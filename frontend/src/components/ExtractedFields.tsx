@@ -16,6 +16,8 @@ import {
   DollarSign,
   Briefcase,
   Layers,
+  Sparkles,
+  ArrowRight,
 } from 'lucide-react';
 import type { DocumentItem } from '../types';
 import { SectionCard } from './SectionCard';
@@ -23,6 +25,7 @@ import { SectionCard } from './SectionCard';
 interface ExtractedFieldsProps {
   document: DocumentItem;
   onCopyToast?: (msg: string) => void;
+  onSwitchToAiMode?: () => void;
 }
 
 const PERSONAL_KEYS = new Set([
@@ -122,7 +125,11 @@ function getFieldIcon(key: string) {
   return <FileText size={15} />;
 }
 
-export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({ document, onCopyToast }) => {
+export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({
+  document,
+  onCopyToast,
+  onSwitchToAiMode,
+}) => {
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
   const fields = document.extracted_fields || document.fields || {};
@@ -147,7 +154,87 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({ document, onCo
       .replace(/\b\w/g, (l) => l.toUpperCase());
   };
 
-  if (fieldKeys.length === 0) {
+  const isUnknown =
+    document.doc_type === 'unknown' ||
+    document.document_type === 'Unknown Document';
+
+  if (isUnknown || fieldKeys.length === 0) {
+    if (isUnknown) {
+      return (
+        <div
+          className="empty-fields-state unknown-doc-fields-state"
+          style={{ textAlign: 'left', maxWidth: '640px', margin: '1.5rem auto' }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem', marginBottom: '1rem' }}>
+            <div
+              className="unsupported-icon-circle"
+              style={{ backgroundColor: 'rgba(99, 102, 241, 0.15)', color: '#818cf8' }}
+            >
+              <Sparkles size={24} />
+            </div>
+            <div>
+              <h3 style={{ fontSize: '1.2rem', fontWeight: 700, margin: 0, color: 'var(--text-main)' }}>
+                Unknown Document
+              </h3>
+              <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
+                Offline OCR completed successfully
+              </span>
+            </div>
+          </div>
+
+          <p style={{ fontSize: '0.92rem', lineHeight: '1.5', color: 'var(--text-main)', marginBottom: '0.75rem' }}>
+            This document has been successfully scanned using Offline OCR.
+          </p>
+          <p style={{ fontSize: '0.88rem', lineHeight: '1.5', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
+            The document is not one of the 22 supported Offline document types, so structured extraction and verification are unavailable in Offline Mode.
+          </p>
+
+          <div
+            style={{
+              backgroundColor: 'rgba(255, 255, 255, 0.04)',
+              border: '1px solid var(--border-color)',
+              borderRadius: 'var(--radius-md)',
+              padding: '1rem 1.25rem',
+              marginBottom: '1.5rem',
+            }}
+          >
+            <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-main)', marginBottom: '0.5rem' }}>
+              You can switch to AI Mode for:
+            </div>
+            <ul
+              style={{
+                margin: 0,
+                paddingLeft: '1.25rem',
+                fontSize: '0.85rem',
+                color: 'var(--text-muted)',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.35rem',
+              }}
+            >
+              <li>Document identification</li>
+              <li>Detailed field extraction</li>
+              <li>Document understanding</li>
+              <li>Question answering</li>
+              <li>Summary generation</li>
+            </ul>
+          </div>
+
+          {onSwitchToAiMode && (
+            <button
+              className="btn btn-primary switch-ai-glow-btn"
+              onClick={onSwitchToAiMode}
+              style={{ width: '100%', justifyContent: 'center' }}
+            >
+              <Sparkles size={16} />
+              <span>Switch to AI Mode</span>
+              <ArrowRight size={15} />
+            </button>
+          )}
+        </div>
+      );
+    }
+
     return (
       <div className="empty-fields-state">
         <AlertCircle size={36} className="empty-fields-icon" />

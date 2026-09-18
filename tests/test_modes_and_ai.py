@@ -98,11 +98,11 @@ def test_offline_mode_supported_document_succeeds(client):
     assert "extracted_fields" in data
 
 
-def test_offline_mode_unsupported_document_rejected(client):
+def test_offline_mode_unsupported_document_ocr_and_unknown(client):
     """
     Test Offline Mode with an unsupported document (e.g., Employment Agreement or general notice).
-    Must return clear rejection message:
-    'This document type is not supported in Offline Mode. Please use AI Mode for unknown documents.'
+    Must NOT reject the upload. Must perform OCR, classify as Unknown Document,
+    store in vault, preserve extracted_text, set ocr_completed=True, and recommend AI Mode.
     """
     buf = _create_test_image([
         "ACME CORPORATION EMPLOYMENT AGREEMENT",
@@ -119,10 +119,13 @@ def test_offline_mode_unsupported_document_rejected(client):
     )
     assert res.status_code == 200
     data = res.json()
-    assert data["supported"] is False
-    assert data["status"] == "unsupported"
-    expected_msg = "This document type is not supported in Offline Mode. Please use AI Mode for unknown documents."
-    assert data["message"] == expected_msg
+    assert data.get("supported") is True
+    assert data["doc_type"] == "unknown"
+    assert data["document_type"] == "Unknown Document"
+    assert data["ocr_completed"] is True
+    assert "EMPLOYMENT" in data["extracted_text"]
+    assert "id" in data
+    assert "Offline OCR completed successfully" in data["message"]
 
 
 @pytest.mark.asyncio
