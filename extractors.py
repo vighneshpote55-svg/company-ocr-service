@@ -903,10 +903,63 @@ def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
         re.IGNORECASE,
     )
     if period_match:
+        from_str = period_match.group(1).strip()
+        to_str = period_match.group(2).strip()
         fields["statement_period"] = {
-            "from_date": period_match.group(1).strip(),
-            "to_date": period_match.group(2).strip(),
+            "from_date": from_str,
+            "to_date": to_str,
+            "from": from_str,
+            "to": to_str,
         }
+
+    # 6. Customer Number / ID / CIF
+    cust_match = re.search(
+        r"(?:Customer\s*(?:No\.?|Number|ID)|Cust\s*ID|CIF\s*(?:No\.?|Number)?)[\s:]*([A-Za-z0-9]+)",
+        full_text,
+        re.IGNORECASE,
+    )
+    if cust_match:
+        cand_cust = cust_match.group(1).strip()
+        fields["customer_number"] = cand_cust
+        fields["customer_id"] = cand_cust
+        confidences["customer_number"] = find_line_confidence(cand_cust, all_lines)
+        confidences["customer_id"] = confidences["customer_number"]
+
+    # 7. Branch Name / Office / SOL
+    branch_val: Optional[str] = None
+    # 7a. Non-table header label like "Branch Office : <val>" or "Branch : <val>"
+    b_match = re.search(
+        r"(?:Branch\s*(?:Office|Name)?\s*[:\-]\s*)([A-Za-z0-9\s,\[\]\(\)\.\/-]+?)(?=[ \t]*(?:\r?\n\r?\n|\r?\n[A-Z0-9\s]+:|$|Account|IFSC|MICR|Tel|Scheme|Opening|Joint|\bS\.NO\b))",
+        full_text,
+        re.IGNORECASE,
+    )
+    if b_match:
+        cand_b = re.sub(r"\s+", " ", b_match.group(1).replace("\n", " ")).strip()
+        if cand_b and not re.search(r"^(?:Statement|Account|Balance|Customer|Period|Number|Name\(SOL\))$", cand_b, re.I):
+            branch_val = cand_b
+
+    # 7b. Finacle column format: Branch Name(SOL) followed by table rows
+    if not branch_val:
+        m_sol_header = re.search(r"Branch\s*Name(?:\(SOL\))?", full_text, re.I)
+        if m_sol_header:
+            after_header = full_text[m_sol_header.end():]
+            m_row_branch = re.search(r"(?:CR|DR)\s+[\d,.]+\s*(?:\d+)?\s+([A-Z][A-Z\s,\n]+?)(?:\[|\n\d+\s+\d{2}[/\-\.]|\r?\n\r?\n|$)", after_header)
+            if m_row_branch:
+                cand_b = re.sub(r"\s+", " ", m_row_branch.group(1).replace("\n", " ")).strip().rstrip(",")
+                if cand_b and len(cand_b) > 2:
+                    branch_val = cand_b
+
+    # 7c. Fallback to BRANCH ADDRESS or Branch: ...
+    if not branch_val:
+        br_addr = re.search(r"BRANCH\s+ADDRESS\s*[-:]\s*([^\n\r~]+(?:~[^\n\r]+)?)", full_text, re.IGNORECASE)
+        if br_addr:
+            branch_val = re.sub(r"[~]+", ", ", br_addr.group(1)).strip()
+
+    if branch_val:
+        fields["branch"] = branch_val
+        fields["branch_name"] = branch_val
+        confidences["branch"] = 0.95
+        confidences["branch_name"] = 0.95
 
     # 6. Opening Balance
     opening_bal: Optional[str] = None
@@ -2896,6 +2949,10 @@ PII_ALLOWLIST = {
         "account_holder_name",
         "account_holder_masked",
         "account_holder_name_masked",
+        "customer_number",
+        "customer_id",
+        "branch",
+        "branch_name",
         "ifsc",
         "ifsc_code",
         "statement_period",

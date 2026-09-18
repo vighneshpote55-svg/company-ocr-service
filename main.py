@@ -881,6 +881,15 @@ async def upload_document_endpoint(
             thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
             evidence_list = ai_res.get("evidence") or ai_res.get("reasoning", [])
 
+            # Guarantee canonical structured fields from shared classifier are retained
+            canonical_info = ai_service.classify_document_content(extracted_text, filename=filename)
+            canonical_fields = canonical_info.get("extracted_fields") or {}
+            merged_fields = dict(canonical_fields)
+            for k, v in ai_res.get("extracted_fields", {}).items():
+                if v and str(v).strip() and str(v).strip().lower() != "none" and (k not in merged_fields or not merged_fields[k]):
+                    merged_fields[k] = v
+            ai_res["extracted_fields"] = merged_fields
+
             result_payload = {
                 "doc_type": "ai_analyzed",
                 "document_type": ai_res.get("document_type", "Unknown Document"),

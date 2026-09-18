@@ -397,3 +397,77 @@ async def test_ai_mode_document_classifications():
     assert res_low["confidence"] == "low"
     assert "upload a clearer image" in res_low["summary"].lower()
 
+
+@pytest.mark.asyncio
+async def test_ai_mode_bank_statement_chat_grounding():
+    """Verify bank statement field intents, formatting, and follow-up handling."""
+    bank_text = (
+        "Account Statement Report\n"
+        "Statement of Axis Bank Account No : 925020052380170 for the period ( From : 30/07/2025 To : 30/07/2026 )\n"
+        "Customer No : 978738241     IFSC Code : UTIB0001435\n"
+        "Branch Name(SOL) : AJMERA COMPLEX,PIMPRI,PUNE\n"
+        "Account Holder Name: SNEHA\n"
+        "Opening Balance: INR 0.00\n"
+        "1 21/11/2025 5,00,000.00 CR 5,00,000.00 AJMERA COMPLEX,PIMPRI,PUNE\n"
+    )
+    stored_analysis = {
+        "document_type": "Bank Statement",
+        "extracted_fields": {
+            "bank_name": "Axis Bank",
+            "account_holder": "SNEHA",
+            "account_number": "XXXXXXXXXXX0170",
+            "customer_number": "978738241",
+            "ifsc": "UTIB0001435",
+            "branch": "AJMERA COMPLEX,PIMPRI,PUNE",
+            "statement_period": {"from_date": "30/07/2025", "to_date": "30/07/2026"},
+            "transactions": [
+                {"date": "21/11/2025", "amount": "500000.00", "type": "CR", "balance": "500000.00"}
+            ]
+        }
+    }
+
+    # 1. Bank name
+    r_bank = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the bank name?", stored_analysis=stored_analysis)
+    assert "Axis Bank" in r_bank
+
+    # 2. Account number
+    r_acc = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the account number?", stored_analysis=stored_analysis)
+    assert "0170" in r_acc
+
+    # 3. Account holder
+    r_holder = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the account holder?", stored_analysis=stored_analysis)
+    assert "SNEHA" in r_holder
+    assert "individual's name" not in r_holder
+
+    # 4. Statement period (NEVER raw dict)
+    r_period = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the statement period?", stored_analysis=stored_analysis)
+    assert "{'from_date'" not in r_period
+    assert "30/07/2025" in r_period and "30/07/2026" in r_period
+
+    # 5. Customer Number
+    r_cust = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the Customer No?", stored_analysis=stored_analysis)
+    assert "978738241" in r_cust
+
+    # 6. Follow-up Why?
+    history = [
+        {"role": "user", "content": "What is the Customer No?"},
+        {"role": "assistant", "content": r_cust}
+    ]
+    r_why = await ai_service.chat_with_document(bank_text, "statement.pdf", "Why?", history=history, stored_analysis=stored_analysis)
+    assert "customer number" in r_why.lower()
+    assert "employee" not in r_why.lower()
+
+    # 7. Branch
+    r_branch = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the branch?", stored_analysis=stored_analysis)
+    assert "AJMERA COMPLEX" in r_branch
+
+    # 8. IFSC
+    r_ifsc = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the IFSC Code?", stored_analysis=stored_analysis)
+    assert "UTIB0001435" in r_ifsc
+    assert "State Bank of India" not in r_ifsc
+
+    # 9. Total transactions
+    r_txns = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the total transactions amount?", stored_analysis=stored_analysis)
+    assert "₹" in r_txns and "Credits" in r_txns
+
+

@@ -239,7 +239,7 @@ def analyze_document(
     logger.info("Sending image to Ollama: %s", image_to_send)
     t0 = time.time()
 
-    trimmed_ocr = (ocr_text or "").strip()[:8000]
+    trimmed_ocr = (ocr_text or "").strip()[:2000]
 
     prompt = (
         "You are an expert document understanding AI. Analyze the uploaded document image and extracted text carefully.\n"
@@ -296,6 +296,7 @@ def analyze_document(
                     "images": [image_to_send],
                 }
             ],
+            options={"num_ctx": 8192},
             format="json",
         )
 
@@ -335,7 +336,16 @@ def analyze_document(
                 f"Contains verified text tokens and layout features",
             ]
 
-        extracted_fields = _normalize_extracted_fields(parsed.get("extracted_fields") or {})
+        # Ensure canonical structured fields from content classification are present
+        import ai_service
+        canonical_info = ai_service.classify_document_content(ocr_text, filename=filename)
+        canonical_fields = canonical_info.get("extracted_fields") or {}
+        merged_fields = dict(canonical_fields)
+        for k, v in _normalize_extracted_fields(parsed.get("extracted_fields") or {}).items():
+            if v and str(v).strip() and str(v).strip().lower() != "none" and (k not in merged_fields or not merged_fields[k]):
+                merged_fields[k] = v
+
+        extracted_fields = merged_fields
 
         return {
             "document_type": normalized_type,
@@ -355,6 +365,24 @@ def analyze_document(
         err_text = str(ex).lower()
         if "connection refused" in err_text or "connecterror" in err_text:
             return {"error": "Ollama server is not running."}
+        if ("exceed" in err_text and "context" in err_text) or "status code: 400" in err_text:
+            # Fall back to grounded local content analysis
+            try:
+                import ai_service
+                cls = ai_service.classify_document_content(ocr_text, filename=filename)
+                return {
+                    "document_type": cls.get("document_type", "Document"),
+                    "confidence": cls.get("confidence", "high"),
+                    "summary": cls.get("summary", ""),
+                    "evidence": cls.get("evidence", []),
+                    "reasoning": cls.get("reasoning", []),
+                    "extracted_fields": cls.get("extracted_fields", {}),
+                    "processing_time_seconds": round(duration, 2),
+                    "model_used": "grounded_content_classifier",
+                    "is_local_ai": True,
+                }
+            except Exception as fallback_ex:
+                logger.error("Fallback classification error: %s", fallback_ex)
         return {"error": f"Ollama analysis error: {str(ex)}"}
 
 
@@ -403,7 +431,9 @@ def chat_with_document(
         "5. If the user asks to summarize, provide a concise factual summary of what is actually in the document.\n"
         "6. If the user asks for dates, list only dates explicitly found. If no dates are found, state: 'No clear dates were found in the document.'\n"
         "7. If the user asks for financial or compensation details, list only monetary amounts explicitly found. If no financial information exists, state: 'No financial information was found in this document.'\n"
-        "8. Keep answers concise, direct, helpful, and professional."
+        "8. Keep answers concise, direct, helpful, and professional.\n"
+        "9. Never return a Bank Name, Branch, or Institution Name as an IFSC code. An IFSC code must be an 11-character alphanumeric code starting with 4 letters and '0' (e.g. UTIB0001435). If no valid IFSC is present, state: 'I could not find an IFSC Code in this document.'\n"
+        "10. Never output Python dictionary syntax such as {'from_date': ...}. Always format dates as clean bullet points with From and To labels."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
@@ -422,4 +452,12 @@ def chat_with_document(
 
     # Sanitize any raw OCR artifacts
     reply = reply.replace("***/Name", "the cardholder's name").replace("*/Name", "").replace("\u5dde/Name", "")
+    if "ifsc" in message.lower():
+        if not re.search(r"\b([A-Z]{4}0[A-Z0-9]{6})\b", reply):
+            reply = "I could not find an IFSC Code in this document."
+    if "{'from_date'" in reply or '{"from_date"' in reply or "{'from'" in reply:
+        m_f = re.search(r"['\"](?:from_date|from)['\"]\s*:\s*['\"]([^'\"]+)['\"]", reply)
+        m_t = re.search(r"['\"](?:to_date|to)['\"]\s*:\s*['\"]([^'\"]+)['\"]", reply)
+        if m_f and m_t:
+            reply = f"Statement Period:\n\n• From: {m_f.group(1)}\n\n• To: {m_t.group(1)}"
     return reply
