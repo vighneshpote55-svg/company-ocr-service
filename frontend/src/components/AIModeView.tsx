@@ -97,7 +97,7 @@ export const AIModeView: React.FC<AIModeViewProps> = ({ onNotify, onSwitchToOffl
           {
             id: 'init-msg',
             role: 'assistant',
-            content: `I have analyzed **${result.filename}** and classified it as **${result.document_type}** (${result.confidence} confidence).\n\n${result.summary}\n\nYou can ask any questions regarding this document below or use the quick actions.`,
+            content: `I analyzed this document and identified it as ${result.document_type} (${result.confidence} confidence).\n\n${result.summary}\n\nYou can ask any questions regarding this document below or use the quick actions.`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
@@ -157,16 +157,12 @@ export const AIModeView: React.FC<AIModeViewProps> = ({ onNotify, onSwitchToOffl
   const handleDownloadAnalysis = () => {
     if (!analyzedDoc) return;
     const payload = {
-      filename: analyzedDoc.filename,
+      document_id: analyzedDoc.document_id,
       document_type: analyzedDoc.document_type,
       confidence: analyzedDoc.confidence,
       summary: analyzedDoc.summary,
-      reasoning: analyzedDoc.reasoning,
-      pages: analyzedDoc.pages,
-      file_size_bytes: analyzedDoc.file_size,
-      text_source: analyzedDoc.text_source,
-      exported_at: new Date().toISOString(),
-      extracted_preview: analyzedDoc.extracted_text ? analyzedDoc.extracted_text.slice(0, 1500) : '',
+      evidence: analyzedDoc.reasoning || analyzedDoc.evidence || [],
+      extracted_fields: analyzedDoc.extracted_fields || {},
     };
 
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });

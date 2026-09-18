@@ -98,29 +98,14 @@ def _clean_json_response(raw_text: str) -> str:
 
 def classify_document_content(text: str, filename: str = "") -> Dict[str, Any]:
     """
-    Intelligently classify a document based on its actual extracted text content.
-    Never uses the filename or raw fragments like 'Incometaxdepartment'.
-    Returns canonical document types:
-    - 'PAN Card'
-    - 'Aadhaar Card'
-    - 'Income Tax Notice'
-    - 'Employment Contract'
-    - 'Bank Statement'
-    - 'Commercial Invoice'
-    - 'Salary Slip'
-    - 'Passport'
-    - 'Driving License'
-    - 'Voter ID'
-    - 'Rental Agreement'
-    - 'Unknown Document'
+    Intelligently classify a document using the shared verifier engine.
+    Ensures that all 22+ document types (including GST Registration Certificate,
+    PAN Card, Aadhaar, Bank Statement, Employment Contract, etc.) are recognized
+    consistently and populated with actual extracted fields.
     """
-    raw_lines = [l.strip() for l in text.split("\n") if l.strip()]
-    full_clean = " ".join(raw_lines)
-    lower_text = full_clean.lower()
-
-    # If OCR extracted almost no text (< 15 characters)
-    if len(text.strip()) < 15 or len(raw_lines) == 0:
+    if not text or len(text.strip()) < 15:
         return {
+            "doc_type": "unknown",
             "document_type": "Unknown Document",
             "confidence": "low",
             "summary": "I couldn't reliably read enough content from this document to determine its type. Please upload a clearer image.",
@@ -135,183 +120,56 @@ def classify_document_content(text: str, filename: str = "") -> Dict[str, Any]:
             "extracted_fields": {},
         }
 
+    import verifier
+    import extractors
+    from ocr_engine import OCRDocumentResult, OCRPageResult, OCRLine
+
+    cls = verifier.classify_document_content(text)
+    doc_type = cls.get("doc_type", "unknown")
+    document_type = cls.get("document_type", "Unknown Document")
+    confidence = cls.get("confidence", "low")
+    evidence = list(cls.get("evidence", []))
+    issuer = cls.get("issuer")
+
+    if doc_type == "unknown":
+        return {
+            "doc_type": "unknown",
+            "document_type": "Unknown Document",
+            "confidence": "low",
+            "summary": "This document could not be reliably classified into a recognized document type based on its visible content.",
+            "evidence": [
+                "No standard institutional headings or classification markers recognized",
+                "Visible text lacks defining structural fields of supported document classes",
+            ],
+            "reasoning": [
+                "No standard institutional headings or classification markers recognized",
+                "Visible text lacks defining structural fields of supported document classes",
+            ],
+            "extracted_fields": {},
+        }
+
     extracted_fields: Dict[str, Any] = {}
 
-    # Extract all standard dates
-    date_matches = re.findall(
-        r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})\b",
-        text,
-        re.IGNORECASE,
-    )
+    # 1. Run document-specific extractor if available in registry
+    if doc_type in extractors.EXTRACTOR_REGISTRY:
+        try:
+            lines = [OCRLine(text=l.strip(), confidence=0.98) for l in text.splitlines() if l.strip()]
+            page = OCRPageResult(page_num=1, full_text=text, lines=lines, average_confidence=0.98)
+            mock_doc = OCRDocumentResult(pages=[page], full_text=text, average_confidence=0.98)
+            raw_fields, _ = extractors.extract_document_fields_raw(doc_type, mock_doc)
+            for k, v in raw_fields.items():
+                if not k.startswith("detected_") and not k.startswith("language_") and not k.startswith("partial_") and v is not None:
+                    extracted_fields[k] = v
+        except Exception as ex:
+            logger.debug("Field extraction error for %s: %s", doc_type, ex)
 
-    # --------------------------------------------------------------------------
-    # 1. PAN Card
-    # --------------------------------------------------------------------------
-    has_pan_header = any(
-        k in lower_text
-        for k in [
-            "permanent account number",
-            "permanent account",
-            "income tax department",
-            "incometaxdepartment",
-            "govt. of india",
-            "govt.ofindia",
-        ]
-    )
-    pan_match = re.search(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b", text)
-    is_tax_notice = any(
-        k in lower_text
-        for k in ["notice under section", "u/s 143", "u/s 142", "u/s 148", "demand notice", "assessment year", "intimation u/s"]
-    )
-
-    if (has_pan_header or pan_match) and not is_tax_notice:
-        # Check if it has card markers
-        has_card_markers = any(k in lower_text for k in ["card", "father", "birth", "dob", "permanent account"]) or pan_match
-        if has_card_markers:
-            pan_num = pan_match.group(1) if pan_match else None
-            if pan_num:
-                extracted_fields["pan_number"] = pan_num
-
-            # Extract cardholder name
-            cardholder_name = None
-            for idx, line in enumerate(raw_lines):
-                clean_l = line.lower()
-                if "name" in clean_l and not ("father" in clean_l or "department" in clean_l):
-                    # Check if name is on the next line or same line after colon
-                    if ":" in line:
-                        parts = line.split(":", 1)
-                        if len(parts) > 1 and len(parts[1].strip()) > 2:
-                            cardholder_name = parts[1].strip()
-                    elif idx + 1 < len(raw_lines):
-                        nxt = raw_lines[idx + 1]
-                        if not any(k in nxt.lower() for k in ["father", "dob", "date", "permanent", "income", "govt"]):
-                            cardholder_name = nxt.strip()
-                    break
-
-            if cardholder_name:
-                extracted_fields["cardholder_name"] = cardholder_name
-
-            # Extract DOB
-            dob_match = re.search(r"\b(\d{2}[/-]\d{2}[/-]\d{4})\b", text)
-            if dob_match:
-                extracted_fields["date_of_birth"] = dob_match.group(1)
-
-            evidence = [
-                "Official header displays 'Permanent Account Number Card' and 'Government of India'",
-            ]
-            if pan_num:
-                evidence.append(f"Contains valid 10-character alphanumeric PAN identifier: {pan_num}")
-            if cardholder_name:
-                evidence.append(f"Identifies cardholder name: {cardholder_name}")
-            if dob_match:
-                evidence.append(f"Displays date of birth: {dob_match.group(1)}")
-
-            name_str = f" for {cardholder_name}" if cardholder_name else ""
-            pan_str = f" (PAN: {pan_num})" if pan_num else ""
-            summary = (
-                f"This document is a Permanent Account Number (PAN) Card issued by the Income Tax Department, "
-                f"Government of India{name_str}{pan_str}. It serves as official proof of identity."
-            )
-
-            return {
-                "document_type": "PAN Card",
-                "confidence": "high",
-                "summary": summary,
-                "evidence": evidence,
-                "reasoning": evidence,
-                "extracted_fields": extracted_fields,
-            }
-
-    # --------------------------------------------------------------------------
-    # 2. Aadhaar Card
-    # --------------------------------------------------------------------------
-    if any(k in lower_text for k in ["unique identification authority", "uidai", "mera aadhaar", "aadhaar", "aadhar"]):
-        aadhaar_match = re.search(r"\b(\d{4}\s\d{4}\s\d{4})\b", text)
-        if aadhaar_match:
-            extracted_fields["aadhaar_number"] = aadhaar_match.group(1)
-
-        evidence = [
-            "Header identifies Unique Identification Authority of India (UIDAI)",
-            "Contains official government biometric identity structure",
-        ]
-        if aadhaar_match:
-            evidence.append(f"Contains 12-digit Aadhaar format identifier: {aadhaar_match.group(1)}")
-
-        return {
-            "document_type": "Aadhaar Card",
-            "confidence": "high",
-            "summary": "This document is an Aadhaar Card issued by the Unique Identification Authority of India (UIDAI), serving as official identity and residence verification.",
-            "evidence": evidence,
-            "reasoning": evidence,
-            "extracted_fields": extracted_fields,
-        }
-
-    # --------------------------------------------------------------------------
-    # 3. Income Tax Notice
-    # --------------------------------------------------------------------------
-    if is_tax_notice or (
-        ("income tax" in lower_text or "incometax" in lower_text)
-        and any(k in lower_text for k in ["notice", "assessment year", "assessment", "demand", "intimation", "section 143", "section 142"])
-    ):
-        ay_match = re.search(r"assessment\s+year\s*[:\-]?\s*([0-9]{4}[\s\-–][0-9]{2,4})", text, re.IGNORECASE)
-        sec_match = re.search(r"(?:section|u/s)\s*([0-9]{2,3}(?:\([0-9a-zA-Z]+\))?)", text, re.IGNORECASE)
-        din_match = re.search(r"\bDIN\s*[:\-]?\s*([A-Za-z0-9/\(\)\-]+)", text, re.IGNORECASE)
-
-        if ay_match:
-            extracted_fields["assessment_year"] = ay_match.group(1).strip()
-        if sec_match:
-            extracted_fields["section"] = sec_match.group(1).strip()
-        if din_match:
-            extracted_fields["din"] = din_match.group(1).strip()
-
-        evidence = [
-            "Issued by the Income Tax Department under the statutory provisions of the Income Tax Act",
-        ]
-        if ay_match:
-            evidence.append(f"Specifies statutory Assessment Year: {ay_match.group(1).strip()}")
-        if sec_match:
-            evidence.append(f"Issued under Section {sec_match.group(1).strip()} of the Income Tax Act")
-        if din_match:
-            evidence.append(f"Features official Document Identification Number (DIN): {din_match.group(1).strip()}")
-
-        summary = (
-            "This document is an official Income Tax Department notice or intimation issued under the Income Tax Act, "
-            "specifying statutory compliance instructions and assessment period details."
-        )
-
-        return {
-            "document_type": "Income Tax Notice",
-            "confidence": "high",
-            "summary": summary,
-            "evidence": evidence,
-            "reasoning": evidence,
-            "extracted_fields": extracted_fields,
-        }
-
-    # --------------------------------------------------------------------------
-    # 4. Employment Contract
-    # --------------------------------------------------------------------------
-    is_contract = any(
-        k in lower_text
-        for k in [
-            "employment agreement",
-            "employment contract",
-            "offer of employment",
-            "appointment letter",
-            "terms of employment",
-            "contract of employment",
-        ]
-    ) or (
-        any(k in lower_text for k in ["agreement", "contract", "between"])
-        and any(k in lower_text for k in ["employee", "employer", "compensation", "salary", "base salary", "joining date", "effective date", "position:"])
-    )
-
-    if is_contract:
-        # Extract key fields
+    # 2. Handlers for non-predefined types (Employment Contract, Income Tax Notice, Commercial Invoice)
+    if doc_type == "employment_contract":
         emp_match = re.search(r"employee\s*(?:name)?\s*[:\-]\s*([A-Za-z\s\.\,\'\-]+)", text, re.IGNORECASE)
         between_match = re.search(r"between\s+(.*?)(?:\s+and\s+|\s*&\s+|and\s+|\s+to\s+)([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)", text, re.IGNORECASE)
         salary_match = re.search(r"(?:salary|compensation|base salary|remuneration)\s*[:\.\-]?\s*([$₹€£]?[0-9\s\,\.]+(?:per annum|per month|usd|inr)?)", text, re.IGNORECASE)
         joining_match = re.search(r"(?:joining date|effective date|start date|commencement date)\s*[:\-]?\s*([A-Za-z0-9\s\,\.\-]+)", text, re.IGNORECASE)
+        position_match = re.search(r"(?:position|role|designation)\s*[:\-]?\s*([A-Za-z0-9\s\.\-]+)", text, re.IGNORECASE)
 
         if emp_match:
             extracted_fields["employee_name"] = emp_match.group(1).strip().split("\n")[0].strip()
@@ -330,76 +188,21 @@ def classify_document_content(text: str, filename: str = "") -> Dict[str, Any]:
                 extracted_fields["salary"] = sal_val
         if joining_match:
             extracted_fields["joining_date"] = joining_match.group(1).strip().split("\n")[0].strip()
+        if position_match:
+            extracted_fields["position"] = position_match.group(1).strip().split("\n")[0].strip()
 
-        evidence = [
-            "Formal employment agreement defining terms between employer and employee",
-        ]
-        if "employee_name" in extracted_fields:
-            evidence.append(f"Identifies employee: {extracted_fields['employee_name']}")
-        if "salary" in extracted_fields:
-            evidence.append(f"Specifies stated compensation: {extracted_fields['salary']}")
-        if "joining_date" in extracted_fields:
-            evidence.append(f"Designates effective/joining date: {extracted_fields['joining_date']}")
-        evidence.append("Contains contractual covenants, responsibilities, and execution clauses")
+    elif doc_type == "income_tax_notice":
+        ay_match = re.search(r"assessment\s+year\s*[:\-]?\s*([0-9]{4}[\s\-–][0-9]{2,4})", text, re.IGNORECASE)
+        sec_match = re.search(r"(?:section|u/s)\s*([0-9]{2,3}(?:\([0-9a-zA-Z]+\))?)", text, re.IGNORECASE)
+        din_match = re.search(r"\bDIN\s*[:\-]?\s*([A-Za-z0-9/\(\)\-]+)", text, re.IGNORECASE)
+        if ay_match:
+            extracted_fields["assessment_year"] = ay_match.group(1).strip()
+        if sec_match:
+            extracted_fields["section"] = sec_match.group(1).strip()
+        if din_match:
+            extracted_fields["din"] = din_match.group(1).strip()
 
-        summary = (
-            "This document is an Employment Contract outlining binding employment terms, "
-            "defined roles, compensation details, and service obligations."
-        )
-
-        return {
-            "document_type": "Employment Contract",
-            "confidence": "high",
-            "summary": summary,
-            "evidence": evidence,
-            "reasoning": evidence,
-            "extracted_fields": extracted_fields,
-        }
-
-    # --------------------------------------------------------------------------
-    # 5. Bank Statement
-    # --------------------------------------------------------------------------
-    is_bank_stmt = any(
-        k in lower_text
-        for k in ["statement of account", "bank statement", "account statement", "account summary"]
-    ) or (
-        "account number" in lower_text
-        and any(k in lower_text for k in ["ifsc", "debit", "credit", "balance", "withdrawal", "transaction"])
-    )
-
-    if is_bank_stmt:
-        acct_match = re.search(r"(?:account|a/c)\s*(?:no|number)?\s*[:\-]?\s*([0-9]{9,18})", text, re.IGNORECASE)
-        if acct_match:
-            extracted_fields["account_number"] = acct_match.group(1)
-
-        evidence = [
-            "Header identifies banking institution and statement of account records",
-            "Contains structured transaction entries, debits, and credits",
-        ]
-        if acct_match:
-            evidence.append(f"Specifies bank account number: {acct_match.group(1)}")
-
-        summary = (
-            "This document is a Bank Statement providing transaction records, account balances, "
-            "and financial account activity for the specified period."
-        )
-
-        return {
-            "document_type": "Bank Statement",
-            "confidence": "high",
-            "summary": summary,
-            "evidence": evidence,
-            "reasoning": evidence,
-            "extracted_fields": extracted_fields,
-        }
-
-    # --------------------------------------------------------------------------
-    # 6. Commercial Invoice
-    # --------------------------------------------------------------------------
-    is_invoice = any(k in lower_text for k in ["tax invoice", "commercial invoice", "invoice", "bill to"]) and (
-        any(k in lower_text for k in ["total amount", "amount due", "invoice no", "gstin", "subtotal", "balance due"])
-    )
-    if is_invoice:
+    elif doc_type == "commercial_invoice":
         inv_match = re.search(r"invoice\s*(?:no|number)?\s*[:\-]?\s*([A-Za-z0-9\-_]+)", text, re.IGNORECASE)
         tot_match = re.search(r"(?:total|amount due|balance due)\s*[:\-]?\s*([$₹€£]?[0-9\s\,\.]+)", text, re.IGNORECASE)
         if inv_match:
@@ -407,96 +210,57 @@ def classify_document_content(text: str, filename: str = "") -> Dict[str, Any]:
         if tot_match:
             extracted_fields["total_amount"] = tot_match.group(1).strip()
 
-        evidence = [
-            "Contains itemized billing charges and vendor identification",
-        ]
-        if inv_match:
-            evidence.append(f"Lists invoice identifier: {inv_match.group(1)}")
-        if tot_match:
-            evidence.append(f"Specifies total amount payable: {tot_match.group(1).strip()}")
+    # 3. Generate grounded, factual summary based on verified fields
+    if doc_type == "gst_certificate":
+        gstin = extracted_fields.get("gstin", "")
+        legal = extracted_fields.get("legal_name", "")
+        const = extracted_fields.get("constitution_of_business", "")
+        summary = (
+            f"This document is a GST Registration Certificate (Registration Number: {gstin}) issued by Government of India - GST"
+            + (f" to {legal}" if legal else "")
+            + (f" for business operating as a {const}" if const else "")
+            + "."
+        )
+    elif doc_type == "pan":
+        name = extracted_fields.get("name", "")
+        pan_num = extracted_fields.get("pan_number", "")
+        name_str = f" for {name}" if name else ""
+        pan_str = f" (PAN: {pan_num})" if pan_num else ""
+        summary = f"This document is a Permanent Account Number (PAN) Card issued by the Income Tax Department, Government of India{name_str}{pan_str}."
+    elif doc_type == "aadhaar":
+        summary = "This document is an Aadhaar Card issued by the Unique Identification Authority of India (UIDAI), serving as official identity and residence verification."
+    elif doc_type == "bank_statement":
+        acct = extracted_fields.get("account_number", "")
+        holder = extracted_fields.get("account_holder", "")
+        bank = extracted_fields.get("bank_name", "the bank")
+        summary = f"This document is a Bank Statement for account held by {holder or 'the account holder'} at {bank}" + (f" (Account No: {acct})" if acct else "") + "."
+    elif doc_type == "employment_contract":
+        emp = extracted_fields.get("employee_name", "")
+        employer = extracted_fields.get("employer", "")
+        pos = extracted_fields.get("position", "")
+        summary = f"This document is an Employment Agreement" + (f" between {employer} and {emp}" if employer and emp else "") + (f" for the position of {pos}" if pos else "") + "."
+    elif doc_type == "income_tax_notice":
+        ay = extracted_fields.get("assessment_year", "")
+        sec = extracted_fields.get("section", "")
+        summary = f"This document is an official Income Tax Department notice issued under the Income Tax Act" + (f" (Section {sec})" if sec else "") + (f" for Assessment Year {ay}" if ay else "") + "."
+    elif doc_type == "commercial_invoice":
+        inv = extracted_fields.get("invoice_number", "")
+        tot = extracted_fields.get("total_amount", "")
+        summary = f"This document is a Commercial Invoice" + (f" #{inv}" if inv else "") + (f" for total amount {tot}" if tot else "") + "."
+    else:
+        summary = f"This document was analyzed and identified as a {document_type} issued by {issuer or 'the authorized authority'}."
 
-        summary = "This document is a Commercial Invoice detailing itemized goods or services and payment terms."
+    if not evidence:
+        evidence = [f"Contains structural signatures and tokens matching {document_type}"]
 
-        return {
-            "document_type": "Commercial Invoice",
-            "confidence": "high",
-            "summary": summary,
-            "evidence": evidence,
-            "reasoning": evidence,
-            "extracted_fields": extracted_fields,
-        }
-
-    # --------------------------------------------------------------------------
-    # 7. Salary Slip / Payslip
-    # --------------------------------------------------------------------------
-    if any(k in lower_text for k in ["salary slip", "pay slip", "payslip", "salary statement"]) or (
-        "pay slip" in lower_text and any(k in lower_text for k in ["earnings", "deductions", "basic pay", "net salary"])
-    ):
-        evidence = [
-            "Identifies periodic compensation and payroll statement",
-            "Lists itemized earnings and statutory deductions",
-        ]
-        summary = "This document is a Salary Slip detailing monthly employee compensation, statutory deductions, and net pay."
-        return {
-            "document_type": "Salary Slip",
-            "confidence": "high",
-            "summary": summary,
-            "evidence": evidence,
-            "reasoning": evidence,
-            "extracted_fields": extracted_fields,
-        }
-
-    # --------------------------------------------------------------------------
-    # 8. Passport / Driving License / Voter ID
-    # --------------------------------------------------------------------------
-    if "passport" in lower_text and ("republic of india" in lower_text or "nationality" in lower_text):
-        return {
-            "document_type": "Passport",
-            "confidence": "high",
-            "summary": "This document is an official national Passport used as international travel and identity certification.",
-            "evidence": [
-                "Official national passport header and travel authority markers",
-                "Contains demographic fields and personal identification credentials",
-            ],
-            "reasoning": [
-                "Official national passport header and travel authority markers",
-                "Contains demographic fields and personal identification credentials",
-            ],
-            "extracted_fields": extracted_fields,
-        }
-
-    if "driving licen" in lower_text or "driving licence" in lower_text:
-        return {
-            "document_type": "Driving License",
-            "confidence": "high",
-            "summary": "This document is a Driving License authorizing motor vehicle operation and serving as identity proof.",
-            "evidence": [
-                "Official licensing authority and motor vehicle credential markers",
-                "Lists driver identification and license authorization classes",
-            ],
-            "reasoning": [
-                "Official licensing authority and motor vehicle credential markers",
-                "Lists driver identification and license authorization classes",
-            ],
-            "extracted_fields": extracted_fields,
-        }
-
-    # --------------------------------------------------------------------------
-    # 9. Fallback: Unknown Document (NEVER invent or use raw unparsed OCR strings)
-    # --------------------------------------------------------------------------
     return {
-        "document_type": "Unknown Document",
-        "confidence": "low",
-        "summary": "This document could not be reliably classified into a recognized document type based on its visible content.",
-        "evidence": [
-            "No standard institutional headings or classification markers recognized",
-            "Visible text lacks defining structural fields of supported document classes",
-        ],
-        "reasoning": [
-            "No standard institutional headings or classification markers recognized",
-            "Visible text lacks defining structural fields of supported document classes",
-        ],
-        "extracted_fields": {},
+        "doc_type": doc_type,
+        "document_type": document_type,
+        "confidence": confidence,
+        "summary": summary,
+        "evidence": evidence,
+        "reasoning": evidence,
+        "extracted_fields": extracted_fields,
     }
 
 
@@ -511,10 +275,11 @@ async def analyze_document(
 ) -> Dict[str, Any]:
     """
     Unified AI Mode Document Analyzer:
-    - Combines local neural OCR text + vision image analysis
-    - Uses local Ollama (qwen2.5vl:3b) when running
-    - Falls back to cloud LLM or built-in local document intelligence
-    - Enforces canonical classification and returns structured evidence
+    - Performs canonical document analysis:
+        Upload -> Load file -> PDF text layer / RapidOCR -> Qwen2.5-VL vision analysis -> Shared classify_document_content()
+    - Returns structured canonical analysis object:
+        { document_type, confidence, summary, evidence, extracted_fields }
+    - All AI features (Initial message, Quick Actions, Chat, Vault) operate on this object.
     """
     logger.info("Analyzing document: filename='%s', has_image=%s, text_len=%d", filename, bool(file_path), len(document_text or ""))
 
@@ -547,14 +312,33 @@ async def analyze_document(
             "extracted_fields": {},
         }
 
-    # 2. Local Ollama Vision + Multimodal check
+    # 2. Shared Canonical Document Classifier
+    canonical_res = classify_document_content(document_text, filename=filename)
+
+    # If canonical classifier identified document with high/medium confidence, enforce it
+    if canonical_res["confidence"] in ("high", "medium") and canonical_res["document_type"] != "Unknown Document":
+        # If Ollama is running locally, optionally augment extracted fields with vision analysis
+        if file_path and os.path.exists(file_path):
+            health = ollama_ai.check_ollama_health()
+            if health.get("reachable") and health.get("model_installed"):
+                try:
+                    ollama_res = ollama_ai.analyze_document(file_path, filename=filename, ocr_text=document_text)
+                    if "error" not in ollama_res:
+                        extra_fields = ollama_res.get("extracted_fields") or {}
+                        # Keep canonical verified fields primary, add extra visual fields
+                        merged_fields = {**extra_fields, **canonical_res.get("extracted_fields", {})}
+                        canonical_res["extracted_fields"] = merged_fields
+                except Exception as ex:
+                    logger.warning("Ollama vision augmentation skipped: %s", ex)
+        return canonical_res
+
+    # 3. Local Ollama Vision + Multimodal check for unrecognized documents
     if file_path and os.path.exists(file_path):
         health = ollama_ai.check_ollama_health()
         if health.get("reachable") and health.get("model_installed"):
             try:
                 ollama_res = ollama_ai.analyze_document(file_path, filename=filename, ocr_text=document_text)
                 if "error" not in ollama_res:
-                    # Sanitize and cross-verify document type
                     norm_type = ollama_ai.normalize_document_type(
                         ollama_res.get("document_type", "Unknown Document"),
                         text_content=document_text,
@@ -562,26 +346,23 @@ async def analyze_document(
                     ollama_res["document_type"] = norm_type
                     if norm_type == "Unknown Document":
                         ollama_res["confidence"] = "low"
-
-                    # If Ollama returned empty evidence, backfill from verified content
                     if not ollama_res.get("evidence"):
-                        rule_res = classify_document_content(document_text, filename=filename)
-                        ollama_res["evidence"] = rule_res.get("evidence", [])
-                        ollama_res["reasoning"] = rule_res.get("evidence", [])
-
+                        ollama_res["evidence"] = canonical_res.get("evidence", [])
+                        ollama_res["reasoning"] = canonical_res.get("evidence", [])
                     return ollama_res
             except Exception as ex:
                 logger.warning("Ollama analysis error; falling back to local intelligence: %s", ex)
 
-    # 3. External Cloud LLM check (OpenAI / Gemini / OpenRouter)
+    # 4. External Cloud LLM check (OpenAI / Gemini / OpenRouter)
     cfg = get_ai_config()
     if cfg["configured"]:
         try:
             system_prompt = (
                 "You are an expert document understanding AI. Analyze the uploaded document's extracted text.\n"
-                "Classify it into its true document type (e.g. 'PAN Card', 'Aadhaar Card', 'Income Tax Notice', 'Employment Contract', 'Bank Statement', 'Commercial Invoice', 'Salary Slip', or 'Unknown Document').\n"
+                "Classify it into its true document type (e.g. 'GST Registration Certificate', 'PAN Card', 'Aadhaar Card', 'Income Tax Notice', 'Employment Contract', 'Bank Statement', 'Commercial Invoice', 'Salary Slip', or 'Unknown Document').\n"
                 "CRITICAL RULES:\n"
                 "- NEVER use the filename or raw text fragments like 'Incometaxdepartment' as the document type.\n"
+                "- If the document is a GST Registration Certificate, classify it as 'GST Registration Certificate'.\n"
                 "- If the document is a PAN Card, classify it as 'PAN Card'.\n"
                 "- If the document is an Aadhaar Card, classify it as 'Aadhaar Card'.\n"
                 "- If the document is an Income Tax Department notice, classify it as 'Income Tax Notice'.\n"
@@ -619,13 +400,13 @@ async def analyze_document(
                 "summary": parsed.get("summary", f"This document was analyzed and identified as a {norm_type}."),
                 "evidence": evidence,
                 "reasoning": evidence,
-                "extracted_fields": {},
+                "extracted_fields": canonical_res.get("extracted_fields", {}),
             }
         except Exception as ex:
             logger.warning("Cloud LLM document analysis failed: %s; falling back to local classifier", ex)
 
-    # 4. Built-in Local Grounded Document Classifier
-    return classify_document_content(document_text, filename=filename)
+    # 5. Built-in Local Grounded Document Classifier
+    return canonical_res
 
 
 # ==============================================================================
@@ -637,25 +418,113 @@ async def chat_with_document(
     filename: str,
     message: str,
     history: Optional[List[Dict[str, str]]] = None,
+    stored_analysis: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Grounded Document Chat Assistant:
+    - Uses stored canonical analysis object (document_type, confidence, summary, extracted_fields).
     - Strictly answers questions ONLY from the current document context.
-    - NEVER hallucinates missing fields (e.g. employee name on a tax notice or PAN card).
+    - NEVER hallucinates missing fields (e.g. employee name on a PAN card, GST cert, or bank statement).
     - If a requested field does not exist, explicitly states: "I could not find [field] in this document."
-    - Answers Quick Actions accurately based on document content.
+    - Answers Quick Actions directly from stored canonical analysis.
     """
     q = message.lower().strip()
 
-    # Pre-evaluate document content and entities
-    doc_info = classify_document_content(document_text, filename=filename)
-    doc_type = doc_info.get("document_type", "Document")
-    extracted = doc_info.get("extracted_fields", {})
+    # Pre-evaluate document content and entities from stored_analysis
+    if stored_analysis:
+        doc_type = stored_analysis.get("document_type") or "Document"
+        confidence = stored_analysis.get("confidence") or "high"
+        summary = stored_analysis.get("summary") or ""
+        evidence = stored_analysis.get("evidence") or []
+        extracted = stored_analysis.get("extracted_fields") or {}
+    else:
+        doc_info = classify_document_content(document_text, filename=filename)
+        doc_type = doc_info.get("document_type", "Document")
+        confidence = doc_info.get("confidence", "high")
+        summary = doc_info.get("summary", "")
+        evidence = doc_info.get("evidence", [])
+        extracted = doc_info.get("extracted_fields", {})
 
-    is_list_dates_action = any(k in q for k in ["list all dates", "find dates", "all dates"])
-    is_find_financials_action = any(k in q for k in ["identify all compensation", "find financial", "monetary values", "payment milestones"])
+    # 1. Quick Action: Summarize (Strictly Grounded to Stored Analysis)
+    is_summarize = any(k in q for k in ["summarize", "summary", "key provisions and scope", "executive overview"])
+    if is_summarize:
+        if summary:
+            return summary
+        return f"This document was analyzed and identified as a {doc_type}."
 
-    # Quick Action: Find Dates
+    # 2. Quick Action: Extract Key Information (Only fields actually found)
+    is_extract = any(k in q for k in ["extract all key", "extract key", "key entities", "key information", "structured fields", "identification numbers"])
+    if is_extract:
+        lines = [f"**Document Type**: {doc_type}"]
+        field_labels = {
+            "gstin": "GSTIN",
+            "legal_name": "Legal Business Name",
+            "trade_name": "Trade Name",
+            "constitution_of_business": "Constitution of Business",
+            "principal_place_of_business": "Principal Place of Business",
+            "pan_number": "PAN Number",
+            "name": "Cardholder Name",
+            "cardholder_name": "Cardholder Name",
+            "father_name": "Father's Name",
+            "date_of_birth": "Date of Birth",
+            "dob": "Date of Birth",
+            "aadhaar_number": "Aadhaar Number",
+            "gender": "Gender",
+            "address": "Address",
+            "account_number": "Account Number",
+            "account_holder": "Account Holder",
+            "bank_name": "Bank Name",
+            "ifsc": "IFSC Code",
+            "ifsc_code": "IFSC Code",
+            "statement_period": "Statement Period",
+            "opening_balance": "Opening Balance",
+            "closing_balance": "Closing Balance",
+            "employee_name": "Employee Name",
+            "employer": "Employer",
+            "position": "Position / Role",
+            "salary": "Salary / Compensation",
+            "joining_date": "Joining Date",
+            "invoice_number": "Invoice Number",
+            "total_amount": "Total Amount",
+            "assessment_year": "Assessment Year",
+            "section": "Section",
+            "din": "DIN",
+        }
+
+        # Order priority by document type
+        if "gst" in doc_type.lower():
+            preferred_order = ["gstin", "legal_name", "trade_name", "constitution_of_business", "principal_place_of_business"]
+        elif "pan" in doc_type.lower():
+            preferred_order = ["pan_number", "cardholder_name", "name", "father_name", "date_of_birth"]
+        elif "bank" in doc_type.lower():
+            preferred_order = ["bank_name", "account_holder", "account_number", "ifsc", "statement_period", "opening_balance", "closing_balance"]
+        elif "employment" in doc_type.lower():
+            preferred_order = ["employer", "employee_name", "position", "salary", "joining_date"]
+        else:
+            preferred_order = list(extracted.keys())
+
+        seen_keys = set()
+        for k in preferred_order:
+            val = extracted.get(k)
+            if val and str(val).strip() and str(val).strip().lower() != "none":
+                label = field_labels.get(k, k.replace("_", " ").title())
+                lines.append(f"• **{label}**: {val}")
+                seen_keys.add(k)
+
+        for k, val in extracted.items():
+            if k not in seen_keys and val and str(val).strip() and str(val).strip().lower() != "none":
+                label = field_labels.get(k, k.replace("_", " ").title())
+                lines.append(f"• **{label}**: {val}")
+
+        if len(lines) == 1:
+            raw_lines = [l.strip() for l in document_text.split("\n") if l.strip()]
+            for l in raw_lines[:4]:
+                lines.append(f"• {l}")
+
+        return "Key Information Extracted from Document:\n" + "\n".join(lines)
+
+    # 3. Quick Action: Find Dates (Real dates actually found)
+    is_list_dates_action = any(k in q for k in ["list all dates", "find dates", "all dates", "effective periods, deadlines"])
     if is_list_dates_action:
         date_matches = re.findall(
             r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})\b",
@@ -669,22 +538,25 @@ async def chat_with_document(
             for d in unique_dates:
                 ctx_line = next((l.strip() for l in document_text.split("\n") if d in l and len(l.strip()) > len(d)), "")
                 if "dob" in ctx_line.lower() or "birth" in ctx_line.lower():
-                    lines.append(f"• Date of Birth — {d}")
+                    lines.append(f"• Date of Birth — **{d}**")
+                elif "registration" in ctx_line.lower() or "liability" in ctx_line.lower():
+                    lines.append(f"• Registration / Effective Date — **{d}**")
                 elif "notice" in ctx_line.lower():
-                    lines.append(f"• Notice Date — {d}")
+                    lines.append(f"• Notice Date — **{d}**")
                 elif "deadline" in ctx_line.lower() or "submit" in ctx_line.lower():
-                    lines.append(f"• Deadline — {d}")
+                    lines.append(f"• Deadline — **{d}**")
                 elif "effective" in ctx_line.lower() or "joining" in ctx_line.lower():
-                    lines.append(f"• Effective / Joining Date — {d}")
+                    lines.append(f"• Effective / Joining Date — **{d}**")
                 elif ctx_line:
-                    lines.append(f"• {d} ({ctx_line})")
+                    lines.append(f"• **{d}** ({ctx_line})")
                 else:
-                    lines.append(f"• {d}")
+                    lines.append(f"• **{d}**")
             return "\n".join(lines)
         else:
             return "No clear dates were found in the document."
 
-    # Quick Action: Find Financial Information
+    # 4. Quick Action: Find Financial Information (Real monetary values found)
+    is_find_financials_action = any(k in q for k in ["identify all compensation", "find financial", "monetary values", "payment milestones", "salary details, payment milestones"])
     if is_find_financials_action:
         amount_matches = re.findall(
             r"(?:[$₹€£]\s*[0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?|[0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?\s*(?:usd|inr|rs\.?|per annum|per month))",
@@ -705,28 +577,95 @@ async def chat_with_document(
         else:
             return "No financial information was found in this document."
 
-    # Guard 1: Employee name on non-employment documents
-    if ("employee name" in q or ("employee" in q and "name" in q)) and not any(k in q for k in ["extract all key", "key entities"]):
-        if doc_type != "Employment Contract":
+    # 5. Anti-Hallucination Guards
+    if ("employee name" in q or ("employee" in q and "name" in q)):
+        if "employment" not in doc_type.lower() and "employee_name" not in extracted:
             return "I could not find an employee name in this document."
         elif "employee_name" in extracted:
             return f"According to {filename}, the employee named is: **{extracted['employee_name']}**."
 
-    # Guard 2: Joining date
     if ("joining date" in q or "effective date" in q):
-        if doc_type in ["PAN Card", "Aadhaar Card", "Bank Statement"]:
+        if doc_type in ["PAN Card", "Aadhaar Card", "Bank Statement", "GST Registration Certificate"]:
             return "I could not find a joining date in this document."
         elif "joining_date" in extracted:
             return f"According to {filename}, the effective/joining date is: **{extracted['joining_date']}**."
 
-    # Guard 3: Salary / compensation
     if any(k in q for k in ["what is the salary", "what is the compensation", "how much is the salary", "what is salary", "salary?"]):
-        if doc_type in ["PAN Card", "Aadhaar Card"]:
+        if doc_type in ["PAN Card", "Aadhaar Card", "GST Registration Certificate", "Bank Statement"]:
             return "I could not find salary information in this document."
         elif "salary" in extracted:
             return f"According to {filename}, the stated compensation is: **{extracted['salary']}**."
 
-    # Try local Ollama chat first if available
+    # 6. Suggested Questions for GST Registration Certificate
+    if "gstin" in q or ("gst" in q and "number" in q):
+        if extracted.get("gstin"):
+            return f"The GSTIN identified in this document is: **{extracted['gstin']}**."
+        gstin_m = re.search(r"\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b", document_text)
+        if gstin_m:
+            return f"The GSTIN identified in this document is: **{gstin_m.group(1)}**."
+        return "I could not find a GSTIN in this document."
+
+    if ("legal" in q and "name" in q) or ("legal business name" in q):
+        if extracted.get("legal_name"):
+            return f"The legal business name is: **{extracted['legal_name']}**."
+        return "I could not find a legal business name in this document."
+
+    if "trade name" in q or ("trade" in q and "name" in q):
+        if extracted.get("trade_name"):
+            return f"The trade name is: **{extracted['trade_name']}**."
+        return "I could not find a trade name in this document."
+
+    if "constitution" in q:
+        if extracted.get("constitution_of_business"):
+            return f"The constitution of business is: **{extracted['constitution_of_business']}**."
+        return "I could not find the constitution of business in this document."
+
+    if "principal place" in q or "place of business" in q or ("gst" in doc_type.lower() and "address" in q):
+        if extracted.get("principal_place_of_business"):
+            return f"The principal place of business is: **{extracted['principal_place_of_business']}**."
+        return "I could not find the principal place of business in this document."
+
+    # 7. Suggested Questions for PAN Card
+    if "pan" in q and ("number" in q or "what is" in q or len(q) < 15):
+        if extracted.get("pan_number"):
+            return f"The PAN number identified in this document is: **{extracted['pan_number']}**."
+        pan_search = re.search(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b", document_text)
+        if pan_search:
+            return f"The PAN number identified in this document is: **{pan_search.group(1)}**."
+        return "I could not find a PAN number in this document."
+
+    if ("holder" in q and "name" in q) or ("cardholder" in q) or ("name of the individual" in q) or (doc_type == "PAN Card" and "name" in q and "business" not in q and "employee" not in q and "father" not in q):
+        val = extracted.get("cardholder_name") or extracted.get("name")
+        if val:
+            return f"According to {filename}, the individual named on this PAN card is: **{val}**."
+        return "I could not find an individual's name in this document."
+
+    if "date of birth" in q or "dob" in q or ("birth" in q and "date" in q):
+        val = extracted.get("date_of_birth") or extracted.get("dob")
+        if val:
+            return f"The date of birth identified in this document is: **{val}**."
+        dob_m = re.search(r"\b(\d{2}[/-]\d{2}[/-]\d{4})\b", document_text)
+        if dob_m:
+            return f"The date of birth identified in this document is: **{dob_m.group(1)}**."
+        return "I could not find a date of birth in this document."
+
+    # 8. Suggested Questions for Bank Statement
+    if "account number" in q or ("account" in q and "number" in q):
+        if extracted.get("account_number"):
+            return f"The account number identified in this document is: **{extracted['account_number']}**."
+        return "I could not find an account number in this document."
+
+    if "statement period" in q or "statement duration" in q or ("period" in q and "statement" in q):
+        if extracted.get("statement_period"):
+            return f"The statement period is: **{extracted['statement_period']}**."
+        return "I could not find a statement period in this document."
+
+    if "bank name" in q or ("what is the bank" in q):
+        if extracted.get("bank_name"):
+            return f"The bank name identified in this document is: **{extracted['bank_name']}**."
+        return "I could not find the bank name in this document."
+
+    # 9. Local Ollama Chat (if running)
     health = ollama_ai.check_ollama_health()
     if health.get("reachable") and health.get("model_installed"):
         try:
@@ -735,18 +674,19 @@ async def chat_with_document(
                 filename=filename,
                 message=message,
                 history=history,
+                stored_analysis=stored_analysis,
             )
-            # Ensure Ollama didn't hallucinate employee name or raw OCR labels
-            if "employee" in q and doc_type != "Employment Contract":
+            # Guard against edge-case hallucinations in Ollama reply
+            if "employee" in q and "employment" not in doc_type.lower() and "employee_name" not in extracted:
                 if any(k in ollama_reply.lower() for k in ["employee is", "employee named", "employee name:"]):
                     return "I could not find an employee name in this document."
 
-            ollama_reply = ollama_reply.replace("***/Name", "the cardholder's name").replace("*/Name", "")
+            ollama_reply = ollama_reply.replace("***/Name", "the cardholder's name").replace("*/Name", "").replace("\u5dde/Name", "")
             return ollama_reply
         except Exception as ex:
             logger.warning("Ollama chat failed: %s; falling back to grounded response engine", ex)
 
-    # Try Cloud LLM if configured
+    # 10. Cloud LLM (if configured)
     cfg = get_ai_config()
     if cfg["configured"]:
         try:
@@ -754,11 +694,12 @@ async def chat_with_document(
                 f"You are an AI Document Assistant analyzing the document '{filename}'.\n"
                 f"Document Type: {doc_type}\n"
                 f"Extracted Document Text:\n---\n{document_text[:12000]}\n---\n\n"
+                f"Verified Stored Fields:\n{json.dumps(extracted, indent=2)}\n\n"
                 "CRITICAL GROUNDING RULES:\n"
-                "1. Answer strictly based on the facts present in the extracted text above.\n"
+                "1. Answer strictly based on the facts present in the extracted text and verified fields above.\n"
                 "2. NEVER invent, assume, or hallucinate facts, numbers, dates, or names.\n"
                 "3. If the user asks for a field that does NOT exist in this document "
-                "(e.g., asking for 'employee name' on a PAN card, ID card, tax notice, or invoice; "
+                "(e.g., asking for 'employee name' on a PAN card, GST cert, tax notice, or invoice; "
                 "or asking for 'salary' or 'joining date' when none is stated), you MUST state clearly:\n"
                 "   'I could not find [field name] in this document.'\n"
                 "4. NEVER output raw OCR placeholder artifacts or label fragments such as '***/Name', 'Name', or fake values.\n"
@@ -779,124 +720,7 @@ async def chat_with_document(
         except Exception as ex:
             logger.warning("Cloud LLM chat failed: %s; falling back to local grounded engine", ex)
 
-    # --------------------------------------------------------------------------
-    # Local Grounded Response Engine (Zero Hallucination Guarantee)
-    # --------------------------------------------------------------------------
-
-    # 1. Quick Action: Summarize
-    if "summarize" in q or "summary" in q:
-        return doc_info["summary"]
-
-    # 2. Quick Action: Extract Key Information
-    if "extract" in q and ("key" in q or "information" in q or "entities" in q):
-        lines = [f"**Document Type**: {doc_type}"]
-        if doc_type == "PAN Card":
-            if "pan_number" in extracted:
-                lines.append(f"**PAN Number**: {extracted['pan_number']}")
-            if "cardholder_name" in extracted:
-                lines.append(f"**Cardholder Name**: {extracted['cardholder_name']}")
-            if "date_of_birth" in extracted:
-                lines.append(f"**Date of Birth**: {extracted['date_of_birth']}")
-        elif doc_type == "Employment Contract":
-            if "employer" in extracted:
-                lines.append(f"**Employer**: {extracted['employer']}")
-            if "employee_name" in extracted:
-                lines.append(f"**Employee Name**: {extracted['employee_name']}")
-            if "salary" in extracted:
-                lines.append(f"**Salary**: {extracted['salary']}")
-            if "joining_date" in extracted:
-                lines.append(f"**Joining Date**: {extracted['joining_date']}")
-        elif doc_type == "Income Tax Notice":
-            lines.append("**Issuing Department**: Income Tax Department")
-            if "section" in extracted:
-                lines.append(f"**Notice Section**: Section {extracted['section']}")
-            if "assessment_year" in extracted:
-                lines.append(f"**Assessment Year**: {extracted['assessment_year']}")
-            if "din" in extracted:
-                lines.append(f"**DIN**: {extracted['din']}")
-
-        if len(lines) == 1:
-            raw_lines = [l for l in document_text.split("\n") if l.strip()]
-            for l in raw_lines[:4]:
-                lines.append(f"• {l}")
-
-        return "Key Information Extracted from Document:\n" + "\n".join(lines)
-
-    # 3. Quick Action: Find Dates
-    if "date" in q:
-        date_matches = re.findall(
-            r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})\b",
-            document_text,
-            re.IGNORECASE,
-        )
-        # Deduplicate while preserving order
-        seen = set()
-        unique_dates = [d for d in date_matches if not (d in seen or seen.add(d))]
-
-        if unique_dates:
-            lines = ["Dates found in this document:"]
-            for d in unique_dates:
-                # Find context line
-                ctx_line = next((l.strip() for l in document_text.split("\n") if d in l and len(l.strip()) > len(d)), None)
-                if ctx_line:
-                    lines.append(f"• **{d}** ({ctx_line})")
-                else:
-                    lines.append(f"• **{d}**")
-            return "\n".join(lines)
-        else:
-            return "No clear dates were found in the document."
-
-    # 4. Quick Action: Find Financial Information
-    if any(k in q for k in ["financial", "monetary", "salary", "compensation", "fee", "cost", "amount", "price"]):
-        amount_matches = re.findall(
-            r"(?:[$₹€£]\s*[0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?|[0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?\s*(?:usd|inr|rs\.?|per annum|per month))",
-            document_text,
-            re.IGNORECASE,
-        )
-        seen = set()
-        unique_amounts = [a for a in amount_matches if not (a in seen or seen.add(a))]
-
-        if unique_amounts:
-            lines = ["Financial information found in this document:"]
-            for a in unique_amounts:
-                ctx_line = next((l.strip() for l in document_text.split("\n") if a in l and len(l.strip()) > len(a)), None)
-                if ctx_line:
-                    lines.append(f"• **{a}** ({ctx_line})")
-                else:
-                    lines.append(f"• **{a}**")
-            return "\n".join(lines)
-        else:
-            return "No financial information was found in this document."
-
-    # 5. PAN number query
-    if "pan" in q:
-        if "pan_number" in extracted:
-            return f"The PAN number identified in this document is: **{extracted['pan_number']}**."
-        pan_search = re.search(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b", document_text)
-        if pan_search:
-            return f"The PAN number identified in this document is: **{pan_search.group(1)}**."
-        return "I could not find a PAN number in this document."
-
-    # 6. Aadhaar number query
-    if "aadhaar" in q or "aadhar" in q:
-        if "aadhaar_number" in extracted:
-            return f"The Aadhaar number identified in this document is: **{extracted['aadhaar_number']}**."
-        return "I could not find an Aadhaar number in this document."
-
-    # 7. Name query
-    if "name" in q or "individual" in q or "who" in q:
-        if doc_type == "PAN Card" and "cardholder_name" in extracted:
-            return f"According to {filename}, the individual named on this PAN card is: **{extracted['cardholder_name']}**."
-        elif doc_type == "Employment Contract" and "employee_name" in extracted:
-            return f"According to {filename}, the employee named is: **{extracted['employee_name']}**."
-        elif "cardholder_name" in extracted:
-            return f"The individual named in this document is: **{extracted['cardholder_name']}**."
-        elif "employee_name" in extracted:
-            return f"The individual named in this document is: **{extracted['employee_name']}**."
-        else:
-            return "I could not find an individual's name in this document."
-
-    # General grounded search
+    # 11. General Grounded Line Search
     doc_lines = [l.strip() for l in document_text.split("\n") if l.strip()]
     matching = [l for l in doc_lines if any(w in l.lower() for w in q.split() if len(w) > 3)]
     if matching:

@@ -95,6 +95,7 @@ export interface AiAnalysisResult {
   confidence: 'high' | 'medium' | 'low' | string;
   summary: string;
   reasoning: string[];
+  evidence?: string[];
   extracted_fields?: Record<string, any>;
   file_url: string;
   preview_url?: string | null;

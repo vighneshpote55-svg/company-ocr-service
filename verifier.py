@@ -281,10 +281,11 @@ DOC_SIGNATURES = {
     ],
     "aadhaar": [
         r"UNIQUE IDENTIFICATION AUTHORITY OF INDIA|UIDAI",
+        r"UNIQUE IDENTIFICATION.*GOVERNMENT OF INDIA|GOVERNMENT OF INDIA.*UNIQUE IDENTIFICATION",
         r"AADHAAR|AADHAR|माझे\s*आधार|मेरा\s*आधार",
         r"MERA AADHAAR|MERA AADHAR",
         r"GOVERNMENT OF INDIA.*AADHAAR|GOVT OF INDIA.*AADHAAR|भारतीय\s*विशिष्ट\s*(?:ओळख|पहचान)\s*प्राधिकरण",
-        r"\bXXXX\s+XXXX\s+[0-9]{4}\b|\b[2-9][0-9]{3}\s+[0-9]{4}\s+[0-9]{4}\b",
+        r"\bXXXX\s+XXXX\s+[0-9]{4}\b|\b[0-9]{4}\s+[0-9]{4}\s+[0-9]{4}\b",
     ],
     "cancelled_cheque": [
         r"CANCELLED",
@@ -336,6 +337,8 @@ DOC_SIGNATURES = {
         r"ACCOUNT STATEMENT",
         r"STATEMENT OF ACCOUNT",
         r"CLOSING BALANCE",
+        r"OPENING BALANCE",
+        r"ACCOUNT NUMBER",
         r"TRANSACTION DETAILS|TRANSACTION DATE",
         r"WITHDRAWAL.*DEPOSIT.*BALANCE",
     ],
@@ -361,7 +364,7 @@ DOC_SIGNATURES = {
     "gst_certificate": [
         r"GOODS AND SERVICES TAX",
         r"FORM GST REG-06|FORM GST REG-02|FORM GST REG",
-        r"REGISTRATION CERTIFICATE.*GST|GST.*REGISTRATION CERTIFICATE",
+        r"REGISTRATION CERTIFICATE.*GST|GST.*REGISTRATION CERTIFICATE|REGISTRATION CERTIFICATE",
         r"GOVERNMENT OF INDIA.*GOODS AND SERVICES|GOODS AND SERVICES.*GOVERNMENT OF INDIA",
         r"\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b",
         r"CONSTITUTION OF BUSINESS",
@@ -415,11 +418,32 @@ DOC_SIGNATURES = {
         r"ANNUAL INCOME|TOTAL INCOME.*CERTIFIED|मिळालेले\s*वार्षिक\s*उत्पन्न|वार्षिक\s*उत्पन्न|एकूण\s*वार्षिक\s*उत्पन्न|उत्पन्न\s*खालीलप्रमाणे|जलनखालीलपमाणे",
         r"THIS IS TO CERTIFY THAT|CERTIFIED THAT|प्रमाणित\s*करण्यात\s*येते\s*की|अमाणतकरणयात|अमािणतकरण|सदरचा\s*दाखला",
     ],
+    "employment_contract": [
+        r"EMPLOYMENT AGREEMENT|EMPLOYMENT CONTRACT|CONTRACT OF EMPLOYMENT",
+        r"OFFER OF EMPLOYMENT|TERMS OF EMPLOYMENT|APPOINTMENT LETTER",
+        r"EMPLOYER.*EMPLOYEE|EMPLOYEE.*EMPLOYER",
+        r"BASE SALARY|COMPENSATION|REMUNERATION",
+        r"JOINING DATE|COMMENCEMENT DATE|EFFECTIVE DATE",
+    ],
+    "income_tax_notice": [
+        r"NOTICE UNDER SECTION\s*(?:143|142|148|156)|INTIMATION UNDER SECTION\s*(?:143|142|148)",
+        r"INCOME TAX DEPARTMENT.*NOTICE|NOTICE.*INCOME TAX DEPARTMENT",
+        r"ASSESSMENT YEAR\s*[:\-]?\s*[0-9]{4}[\s\-–][0-9]{2,4}",
+        r"DOCUMENT IDENTIFICATION NUMBER|DIN\s*[:\-]",
+        r"DEMAND NOTICE|TAX DEMAND",
+    ],
+    "commercial_invoice": [
+        r"TAX INVOICE|COMMERCIAL INVOICE|INVOICE",
+        r"BILL TO|SHIP TO|INVOICE TO",
+        r"INVOICE NO|INVOICE NUMBER|INVOICE DATE",
+        r"TOTAL AMOUNT|TOTAL AMOUNT DUE|NET PAYABLE|GRAND TOTAL",
+        r"SUBTOTAL.*TOTAL|CGST.*SGST|GSTIN.*INVOICE",
+    ],
 }
 
 
 
-# Metadata mapping for all 22 supported document types: canonical ID -> display name & issuing authority
+# Metadata mapping for all supported document types: canonical ID -> display name & issuing authority
 DOC_TYPE_METADATA: Dict[str, Dict[str, Optional[str]]] = {
     "pan": {"name": "PAN Card", "issuer": "Income Tax Department"},
     "aadhaar": {"name": "Aadhaar Card", "issuer": "UIDAI"},
@@ -434,7 +458,7 @@ DOC_TYPE_METADATA: Dict[str, Dict[str, Optional[str]]] = {
     "voter_id": {"name": "Voter ID", "issuer": "Election Commission of India"},
     "driving_licence": {"name": "Driving Licence", "issuer": "Transport Department"},
     "itr": {"name": "ITR Ack", "issuer": "Income Tax Department"},
-    "gst_certificate": {"name": "GST Certificate", "issuer": "Government of India - GST"},
+    "gst_certificate": {"name": "GST Registration Certificate", "issuer": "Government of India - GST"},
     "certificate_of_incorporation": {"name": "Certificate of Incorporation", "issuer": "Ministry of Corporate Affairs"},
     "partnership_deed": {"name": "Partnership Deed", "issuer": "Registrar of Firms"},
     "rent_agreement": {"name": "Rent Agreement", "issuer": "Landlord / Lessor"},
@@ -443,6 +467,9 @@ DOC_TYPE_METADATA: Dict[str, Dict[str, Optional[str]]] = {
     "property_tax_receipt": {"name": "Property Tax Receipt", "issuer": "Municipal Corporation"},
     "iec_certificate": {"name": "IEC Certificate", "issuer": "Directorate General of Foreign Trade"},
     "income_certificate": {"name": "Income Certificate", "issuer": "Revenue Department / Tahsildar"},
+    "employment_contract": {"name": "Employment Contract", "issuer": "Employer"},
+    "income_tax_notice": {"name": "Income Tax Notice", "issuer": "Income Tax Department"},
+    "commercial_invoice": {"name": "Commercial Invoice", "issuer": "Vendor / Supplier"},
 }
 
 
@@ -576,13 +603,21 @@ def classify_document_content(
         {"name": top_type.replace("_", " ").title(), "issuer": None},
     )
 
-    if top_score >= min_score and has_margin:
+    if top_score >= 1 and has_margin:
         conf_level = "high" if top_score >= 3 else "medium"
-        if top_type == "pan" and any(re.search(r"^[A-Z]{5}[0-9]{4}[A-Z]$", ev) for ev in top_evidence):
+        if top_type == "pan" and (any(re.search(r"^[A-Z]{5}[0-9]{4}[A-Z]$", ev) for ev in top_evidence) or any("PERMANENT ACCOUNT" in ev.upper() for ev in top_evidence)):
             conf_level = "high"
-        elif top_type == "gst_certificate" and any(re.search(r"^[0-9]{2}[A-Z]{5}", ev) for ev in top_evidence):
+        elif top_type == "aadhaar" and any(k in ev.upper() for ev in top_evidence for k in ["UNIQUE IDENTIFICATION", "UIDAI", "AADHAAR"]):
+            conf_level = "high"
+        elif top_type == "bank_statement" and any(k in ev.upper() for ev in top_evidence for k in ["STATEMENT OF ACCOUNT", "ACCOUNT STATEMENT"]):
+            conf_level = "high"
+        elif top_type == "employment_contract" and any(k in ev.upper() for ev in top_evidence for k in ["EMPLOYMENT AGREEMENT", "EMPLOYMENT CONTRACT", "OFFER OF EMPLOYMENT"]):
+            conf_level = "high"
+        elif top_type == "gst_certificate" and (any(re.search(r"^[0-9]{2}[A-Z]{5}", ev) for ev in top_evidence) or any("GOODS AND SERVICES TAX" in ev.upper() for ev in top_evidence)):
             conf_level = "high"
         elif top_type == "udyam" and any("UDYAM-" in ev for ev in top_evidence):
+            conf_level = "high"
+        elif top_type == "passport" and any("PASSPORT" in ev.upper() for ev in top_evidence):
             conf_level = "high"
 
         return {
@@ -592,23 +627,6 @@ def classify_document_content(
             "evidence": top_evidence,
             "issuer": meta.get("issuer"),
         }
-
-    # If top_score is 1, check for undeniable signature
-    if top_score >= 1:
-        ev0 = top_evidence[0] if top_evidence else ""
-        if (
-            re.search(r"\bUDYAM-[A-Z]{2}-[0-9]{2}-[0-9]+\b", ev0)
-            or re.search(r"\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b", ev0)
-            or re.search(r"FORM GST REG-06", ev0)
-            or re.search(r"FORM NO\.?\s*16\b", ev0)
-        ):
-            return {
-                "doc_type": top_type,
-                "document_type": meta["name"],
-                "confidence": "medium",
-                "evidence": top_evidence,
-                "issuer": meta.get("issuer"),
-            }
 
     return {
         "doc_type": "unknown",

@@ -129,6 +129,12 @@ def save_document(
         "preview_url": f"/api/documents/{doc_id}/preview" if preview_filename else None,
         "file_url": f"/api/documents/{doc_id}/file",
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "ai_analysis": {
+            **(result_data.get("ai_analysis") or {}),
+            "document_id": doc_id,
+        } if result_data.get("ai_analysis") else None,
+        "summary": result_data.get("summary") or (result_data.get("ai_analysis") or {}).get("summary"),
+        "evidence": result_data.get("evidence") or (result_data.get("ai_analysis") or {}).get("evidence"),
     }
 
     # 4. Save result JSON

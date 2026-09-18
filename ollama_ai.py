@@ -186,88 +186,30 @@ def _normalize_extracted_fields(raw_fields: Any) -> Dict[str, Any]:
 
 def normalize_document_type(raw_type: str, text_content: str = "") -> str:
     """
-    Map raw model classification to canonical, clean document types.
+    Map raw model classification to canonical, clean document types using
+    the unified classify_document_content() engine.
     Ensures that raw strings like 'Incometaxdepartment' are NEVER used.
     """
-    t = (raw_type or "").strip().lower()
-    combined = (t + " " + (text_content or "").lower()).strip()
+    import verifier
 
-    # 1. PAN Card
-    if any(k in t for k in ["pan card", "permanent account number"]) or (
-        ("permanent account" in combined or re.search(r"\b[a-z]{5}[0-9]{4}[a-z]\b", combined))
-        and not ("notice" in combined or "assessment year" in combined)
-    ):
-        return "PAN Card"
+    # 1. First check actual extracted document text
+    if text_content and text_content.strip():
+        cls = verifier.classify_document_content(text_content)
+        if cls.get("doc_type") != "unknown":
+            return cls["document_type"]
 
-    # 2. Aadhaar Card
-    if any(k in t for k in ["aadhaar", "uidai", "aadhar"]) or (
-        "unique identification authority" in combined or "mera aadhaar" in combined or "enrolment no" in combined
-    ):
-        return "Aadhaar Card"
+    # 2. Next check raw_type text against unified signatures
+    if raw_type and raw_type.strip():
+        cls = verifier.classify_document_content(raw_type)
+        if cls.get("doc_type") != "unknown":
+            return cls["document_type"]
 
-    # 3. Income Tax Notice
-    if any(k in t for k in ["income tax notice", "tax notice", "demand notice", "intimation"]) or (
-        "income tax" in combined and any(k in combined for k in ["notice", "u/s", "section 143", "section 142", "section 148", "assessment year", "intimation", "din:"])
-    ):
-        return "Income Tax Notice"
-
-    # 4. Employment Contract / Agreement
-    if any(k in t for k in ["employment contract", "employment agreement", "appointment letter", "offer letter"]) or (
-        "employ" in combined and ("contract" in combined or "agreement" in combined or "letter" in combined)
-    ):
-        return "Employment Contract"
-
-    # 5. Bank Statement
-    if any(k in t for k in ["bank statement", "account statement"]) or (
-        "statement of account" in combined or ("bank" in combined and "account number" in combined and ("balance" in combined or "transaction" in combined))
-    ):
-        return "Bank Statement"
-
-    # 6. Commercial Invoice
-    if any(k in t for k in ["invoice", "tax invoice", "bill"]) or (
-        "invoice" in combined and any(k in combined for k in ["total", "bill to", "amount due", "gstin"])
-    ):
-        return "Commercial Invoice"
-
-    # 7. Salary Slip
-    if any(k in t for k in ["salary slip", "payslip", "pay slip"]) or (
-        "salary slip" in combined or "payslip" in combined or ("pay slip" in combined and "earnings" in combined)
-    ):
-        return "Salary Slip"
-
-    # 8. Passport
-    if "passport" in t or ("passport" in combined and ("republic of india" in combined or "nationality" in combined)):
-        return "Passport"
-
-    # 9. Driving License
-    if "driving licen" in t or "driver licen" in t or "driving licence" in combined or "dl no" in combined:
-        return "Driving License"
-
-    # 10. Voter ID
-    if "voter" in t or "election commission" in combined or "epic" in combined:
-        return "Voter ID"
-
-    # 11. Rental Agreement
-    if "rental" in t or "lease agreement" in t or ("lease" in combined and "tenant" in combined):
-        return "Rental Agreement"
-
-    # 12. Catch incomplete/distorted "incometax..."
-    if "incometax" in t or "income tax" in t:
-        if "permanent account" in combined or re.search(r"\b[a-z]{5}[0-9]{4}[a-z]\b", combined):
-            return "PAN Card"
-        elif "notice" in combined or "assessment" in combined:
-            return "Income Tax Notice"
-        else:
-            return "Income Tax Notice"
-
-    # Recognized generic types
-    if t in ["legal contract", "non-disclosure agreement", "nda", "power of attorney", "certificate"]:
-        return raw_type.title()
-
-    if "unknown" in t or len(t) > 35 or not t:
+    clean = (raw_type or "").strip()
+    if not clean or "unknown" in clean.lower() or len(clean) > 35:
         return "Unknown Document"
 
-    return raw_type.title()
+    return clean.title()
+
 
 
 def analyze_document(
@@ -279,7 +221,7 @@ def analyze_document(
     Analyze document with local Ollama + Qwen2.5-VL:3B:
     - Combines vision image + OCR extracted text
     - Extracts every visible field as structured key-value pairs
-    - Classifies document into canonical types (e.g. 'PAN Card', 'Aadhaar Card', 'Employment Contract')
+    - Classifies document into canonical types (e.g. 'GST Registration Certificate', 'PAN Card', 'Aadhaar Card', 'Employment Contract')
     - Returns structured JSON with meaningful confidence, summary, and evidence points.
     """
     logger.info("AI Mode Ollama analysis starting for file: %s", file_path)
@@ -309,6 +251,7 @@ def analyze_document(
     prompt += (
         "TASK:\n"
         "1. Classify the document based on its actual content into one of these canonical types:\n"
+        "   - 'GST Registration Certificate' (Form GST REG-06, Registration Certificate under Goods and Services Tax Act)\n"
         "   - 'PAN Card' (Permanent Account Number Card issued by Income Tax Dept)\n"
         "   - 'Aadhaar Card' (UIDAI identity card)\n"
         "   - 'Income Tax Notice' (Formal tax notice/demand/intimation under Income Tax Act)\n"
@@ -361,21 +304,31 @@ def analyze_document(
 
         raw_content = response.get("message", {}).get("content", "")
         cleaned_json = _clean_json_response(raw_content)
-        parsed = json.loads(cleaned_json)
+        try:
+            parsed = json.loads(cleaned_json)
+        except Exception:
+            try:
+                parsed = json.loads(cleaned_json, strict=False)
+            except Exception:
+                parsed = {}
 
-        # Normalize document type
-        raw_doc_type = parsed.get("document_type") or "Unknown Document"
-        normalized_type = normalize_document_type(raw_doc_type, text_content=ocr_text)
-
-        confidence = str(parsed.get("confidence", "high")).lower()
-        if confidence not in ("high", "medium", "low"):
-            confidence = "high" if normalized_type != "Unknown Document" else "low"
+        # Normalize document type using unified classify_document_content
+        import verifier
+        combined_text = ((ocr_text or "") + "\n" + raw_content).strip()
+        cls = verifier.classify_document_content(combined_text)
+        if cls.get("doc_type") != "unknown":
+            normalized_type = cls["document_type"]
+            confidence = cls.get("confidence", "high")
+            evidence = cls.get("evidence", [])
+        else:
+            raw_doc_type = parsed.get("document_type") or "Unknown Document"
+            normalized_type = normalize_document_type(raw_doc_type, text_content=ocr_text)
+            confidence = str(parsed.get("confidence", "low")).lower()
+            if confidence not in ("high", "medium", "low"):
+                confidence = "high" if normalized_type != "Unknown Document" else "low"
+            evidence = parsed.get("evidence") or parsed.get("reasoning") or []
 
         summary = parsed.get("summary") or f"This document was analyzed and identified as a {normalized_type}."
-        
-        evidence = parsed.get("evidence") or parsed.get("reasoning") or []
-        if isinstance(evidence, str):
-            evidence = [evidence]
         if not evidence:
             evidence = [
                 f"Document structure matches {normalized_type}",
@@ -410,21 +363,31 @@ def chat_with_document(
     filename: str,
     message: str,
     history: Optional[List[Dict[str, str]]] = None,
+    stored_analysis: Optional[Dict[str, Any]] = None,
 ) -> str:
     """
     Document-grounded conversational chat using local Ollama model.
     Strictly answers ONLY from document context and explicitly rejects hallucinating missing fields.
+    Reuses stored document analysis (document_type and verified fields).
     """
     health = check_ollama_health()
     if not health.get("reachable"):
         raise RuntimeError("Ollama server is not running.")
 
+    verified_type = (stored_analysis or {}).get("document_type", "")
+    verified_fields = (stored_analysis or {}).get("extracted_fields", {})
+
+    doc_type_header = f"Verified Document Type: {verified_type}\n" if verified_type else ""
+    fields_ctx = f"\nVerified Key Extracted Fields:\n{json.dumps(verified_fields, indent=2)}\n" if verified_fields else ""
+
     system_prompt = (
         f"You are an expert AI Document Assistant analyzing the document '{filename}'.\n"
+        f"{doc_type_header}"
         "Here is the verified context and extracted content from this document:\n"
         "-----------------------------------------\n"
         f"{document_context[:10000]}\n"
         "-----------------------------------------\n"
+        f"{fields_ctx}"
         "CRITICAL GROUNDING RULES:\n"
         "1. Answer strictly based on the facts present in the document context above.\n"
         "2. NEVER invent, assume, or hallucinate facts, numbers, dates, or names.\n"

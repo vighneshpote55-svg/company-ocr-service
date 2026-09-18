@@ -1484,7 +1484,15 @@ async def process_ai_analyze_endpoint(
             "extracted_fields": ai_res.get("extracted_fields", {}),
             "field_confidences": {},
             "extracted_text": extracted_text,
-            "ai_analysis": ai_res,
+            "summary": ai_res.get("summary", ""),
+            "evidence": evidence_list,
+            "ai_analysis": {
+                "document_type": ai_res.get("document_type", "Unknown Document"),
+                "confidence": ai_res.get("confidence", "high"),
+                "summary": ai_res.get("summary", ""),
+                "evidence": evidence_list,
+                "extracted_fields": ai_res.get("extracted_fields", {}),
+            },
         }
 
         saved_record = document_store.save_document(
@@ -1493,6 +1501,8 @@ async def process_ai_analyze_endpoint(
             result_data=result_payload,
             thumbnail_bytes=thumb_bytes,
         )
+        if saved_record.get("ai_analysis"):
+            saved_record["ai_analysis"]["document_id"] = saved_record["id"]
 
         return {
             "document_id": saved_record["id"],
@@ -1527,8 +1537,8 @@ async def process_ai_chat_endpoint(
     """
     AI Mode Interactive Chat Endpoint:
     - Receives user query and document_id.
-    - Answers using the uploaded document's extracted text as context.
-    - Maintains conversational continuity while keeping documents isolated.
+    - Answers using the uploaded document's canonical analysis object and extracted text.
+    - Maintains conversational continuity while keeping documents isolated and grounded.
     """
     if not payload.document_id:
         raise HTTPException(
@@ -1556,13 +1566,34 @@ async def process_ai_chat_endpoint(
         )
 
     filename = doc.get("filename", "document")
+    stored_analysis = doc.get("ai_analysis") or {
+        "document_id": payload.document_id,
+        "document_type": doc.get("document_type") or "Unknown Document",
+        "confidence": "high" if (doc.get("confidence", 0) > 0.8) else ("medium" if doc.get("confidence", 0) > 0.5 else "low"),
+        "summary": doc.get("summary", ""),
+        "evidence": doc.get("evidence", []),
+        "extracted_fields": doc.get("extracted_fields", {}),
+    }
+
     try:
-        reply = await ai_service.chat_with_document(
-            document_text=doc_text,
-            filename=filename,
-            message=payload.message,
-            history=payload.history,
-        )
+        try:
+            reply = await ai_service.chat_with_document(
+                document_text=doc_text,
+                filename=filename,
+                message=payload.message,
+                history=payload.history,
+                stored_analysis=stored_analysis,
+            )
+        except TypeError as te:
+            if "stored_analysis" in str(te):
+                reply = await ai_service.chat_with_document(
+                    document_text=doc_text,
+                    filename=filename,
+                    message=payload.message,
+                    history=payload.history,
+                )
+            else:
+                raise
         return {"response": reply}
     except RuntimeError as ai_err:
         raise HTTPException(

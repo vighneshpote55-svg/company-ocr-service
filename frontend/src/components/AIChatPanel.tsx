@@ -20,13 +20,53 @@ interface AIChatPanelProps {
   onNotify: (message: string, type?: 'success' | 'error' | 'info') => void;
 }
 
-const SUGGESTED_PROMPTS = [
-  'What is the employee name?',
-  'What is the joining date?',
-  'What is the salary?',
-  'Summarize this document.',
-  'What are the important clauses?',
-];
+const getSuggestedPrompts = (documentType: string): string[] => {
+  const docType = (documentType || '').toLowerCase();
+  if (docType.includes('gst') || docType.includes('registration certificate')) {
+    return [
+      'What is the GSTIN?',
+      'What is the legal business name?',
+      'What is the trade name?',
+      'What is the constitution of business?',
+      'What is the principal place of business?',
+    ];
+  }
+  if (docType.includes('pan')) {
+    return [
+      'What is the PAN number?',
+      "What is the holder's name?",
+      'What is the date of birth?',
+    ];
+  }
+  if (docType.includes('bank') || docType.includes('statement')) {
+    return [
+      'What is the account number?',
+      'What is the statement period?',
+      'What is the bank name?',
+    ];
+  }
+  if (docType.includes('employment') || docType.includes('offer') || docType.includes('appointment')) {
+    return [
+      'What is the employee name?',
+      'What is the employer?',
+      'What is the salary?',
+      'What is the joining date?',
+    ];
+  }
+  if (docType.includes('invoice') || docType.includes('bill')) {
+    return [
+      'What is the invoice number?',
+      'What is the total amount?',
+      'What is the invoice date?',
+    ];
+  }
+  return [
+    'Summarize this document.',
+    'Extract all key entities.',
+    'List all dates in this document.',
+    'What is the purpose of this document?',
+  ];
+};
 
 export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   document,
@@ -186,7 +226,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
           <span>Suggested:</span>
         </div>
         <div className="ai-suggested-scroll">
-          {SUGGESTED_PROMPTS.map((prompt, idx) => (
+          {getSuggestedPrompts(document.document_type).map((prompt, idx) => (
             <button
               key={idx}
               type="button"

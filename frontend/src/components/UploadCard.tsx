@@ -92,19 +92,19 @@ export const UploadCard: React.FC<UploadCardProps> = ({
     setCompletedDoc(null);
     setActiveFile({ name: file.name, size: file.size });
     setIsProcessing(true);
-    setProgress({ step: 'uploading', percent: 25, message: 'Transferring file payload...' });
+    setProgress({ step: 'uploading', percent: 25, message: 'Uploading document...' });
 
     try {
       setTimeout(() => {
-        setProgress({ step: 'analyzing', percent: 50, message: 'Detecting text layer and PDF streams...' });
+        setProgress({ step: 'analyzing', percent: 50, message: 'Analyzing document...' });
       }, 300);
 
       setTimeout(() => {
-        setProgress({ step: 'extracting', percent: 75, message: 'Applying local neural OCR model...' });
+        setProgress({ step: 'extracting', percent: 75, message: 'Extracting content...' });
       }, 700);
 
       setTimeout(() => {
-        setProgress({ step: 'verifying', percent: 90, message: 'Validating checksums and masking sensitive PII...' });
+        setProgress({ step: 'verifying', percent: 90, message: 'Classifying & verifying document...' });
       }, 1050);
 
       const doc = await api.uploadOfflineDocument(file, selectedType, expectedData || undefined);
@@ -112,14 +112,16 @@ export const UploadCard: React.FC<UploadCardProps> = ({
       if (doc.supported === false) {
         setIsProcessing(false);
         setActiveFile(null);
+        setCompletedDoc(null);
         const rejectionMsg =
           doc.message ||
-          'This document type is unsupported in Offline Mode. Switch to AI Mode for universal classification.';
+          'This document is not one of the 22 supported Offline document types. Switch to AI Mode.';
         setUnsupportedError(rejectionMsg);
         onError(rejectionMsg);
         return;
       }
 
+      setUnsupportedError(null);
       setProgress({ step: 'done', percent: 100, message: 'Document successfully processed!' });
       const completedDocItem = doc as unknown as DocumentItem;
       setCompletedDoc(completedDocItem);
@@ -127,6 +129,8 @@ export const UploadCard: React.FC<UploadCardProps> = ({
     } catch (err: any) {
       setIsProcessing(false);
       setActiveFile(null);
+      setCompletedDoc(null);
+      setUnsupportedError(null);
       setProgress({ step: 'error', percent: 0, message: err.message || 'Processing failed' });
       onError(err.message || 'Upload and processing failed');
     } finally {
@@ -139,6 +143,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   const handleResetForNewUpload = () => {
     setCompletedDoc(null);
     setActiveFile(null);
+    setUnsupportedError(null);
     setProgress({ step: 'idle', percent: 0, message: '' });
   };
 
@@ -158,8 +163,8 @@ export const UploadCard: React.FC<UploadCardProps> = ({
         </p>
       </div>
 
-      {/* Visually Attractive Unsupported Document Banner */}
-      {unsupportedError && (
+      {/* Visually Attractive Unsupported Document Banner (shown strictly when classification completes and document is unsupported) */}
+      {!isProcessing && !completedDoc && unsupportedError && (
         <div className="unsupported-document-banner-attractive" role="alert">
           <div className="unsupported-banner-glow" aria-hidden="true" />
           <div className="unsupported-banner-content">

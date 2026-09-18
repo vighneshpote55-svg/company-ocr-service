@@ -216,8 +216,9 @@ def clean_field_value(val: Any, field_name: Optional[str] = None, doc_type: Opti
             doc_type or "unknown",
         )
 
-    # Suspicious leftover check (contains newline or unusually long > 80 chars)
-    if "\n" in res or len(res) > 80:
+    # Suspicious leftover check (contains newline or unusually long > 80 chars, excluding addresses)
+    is_address_field = field_name in ("address", "principal_place_of_business", "property_address", "premises")
+    if "\n" in res or (len(res) > 80 and not is_address_field):
         logger.warning(
             "clean_field_value output suspicious (length=%d, has_newline=%s): field=%s doc_type=%s",
             len(res),
@@ -259,25 +260,25 @@ def extract_pan(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, f
 
     # Father's Name with label (same line or next line(s), English or Devanagari)
     father_match = re.search(
-        r"(?:Father['’]?s?\s*Name|पिता\s*का\s*नाम)[\s:\/\u0900-\u097F]*(?:\r?\n\s*)*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Purpose|DOB|Date|Name|Permanent|PAN|जन्म)\b))",
+        r"(?:(?:पिता\s*(?:का\s*नाम)?\s*[\/|\\]?\s*Father['’]?s?\s*Name)|Father['’]?s?\s*Name|पिता\s*का\s*नाम)[\s:\/\u0900-\u097F]*(?:\r?\n\s*)*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Purpose|DOB|Date|Name|Permanent|PAN|जन्म)\b))",
         text,
         re.IGNORECASE,
     )
     if father_match:
         cand = clean_field_value(father_match.group(1))
-        if not re.search(r"^(?:Purpose|DOB|Date|Name|Permanent|PAN|जन्म)\b", cand, re.I):
+        if cand.lower() not in ("name", "father", "father's name") and not re.search(r"^(?:Purpose|DOB|Date|Name|Permanent|PAN|जन्म)\b", cand, re.I):
             fields["father_name"] = cand
             confidences["father_name"] = find_line_confidence(fields["father_name"], all_lines)
 
-    # Name with label (same line or next line(s), English or Devanagari)
+    # Name with label (same line or next line(s), English or Devanagari, handle bilingual नाम/Name)
     name_match = re.search(
-        r"(?:Name|NAME|नाम)[\s:\/\u0900-\u097F]*(?:\r?\n\s*)*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Father|DOB|Date|Permanent|PAN|Purpose|पिता|जन्म)\b))",
+        r"(?:(?:नाम\s*[\/|\\]?\s*Name)|Name|NAME|नाम)[\s:\/\u0900-\u097F]*(?:\r?\n\s*)*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Father|DOB|Date|Permanent|PAN|Purpose|पिता|जन्म)\b))",
         text,
         re.IGNORECASE,
     )
     if name_match:
         cand = clean_field_value(name_match.group(1))
-        if not re.search(r"^(?:Father|DOB|Date|Permanent|PAN|Purpose|पिता|जन्म)\b", cand, re.I):
+        if cand.lower() not in ("name", "father") and not re.search(r"^(?:Father|DOB|Date|Permanent|PAN|Purpose|पिता|जन्म)\b", cand, re.I):
             fields["name"] = cand
             confidences["name"] = find_line_confidence(fields["name"], all_lines)
 
@@ -1808,7 +1809,19 @@ def extract_gst_certificate(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any],
         fields["constitution_of_business"] = clean_field_value(const_match.group(1), "constitution_of_business", "gst_certificate")
         confidences["constitution_of_business"] = find_line_confidence(fields["constitution_of_business"], all_lines)
 
-    cleaned_fields = {k: clean_field_value(v) for k, v in fields.items()}
+    # Principal Place of Business
+    addr_match = re.search(
+        r"(?:Address\s*of\s*Principal\s*Place\s*of\s*Business)[\s:]*([\s\S]{10,600}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z])))(?:(?:6\.|Date\s*of\s*Liability|Period\s*of\s*Validity|Type\s*of\s*Registration)\b))",
+        text,
+        re.IGNORECASE,
+    )
+    if addr_match:
+        addr_clean = ", ".join(l.strip() for l in addr_match.group(1).splitlines() if l.strip())
+        addr_clean = re.sub(r"(?:,\s*|\s+)(?:6\.|Date\s*of\s*Liability).*$", "", addr_clean, flags=re.I).strip(" ,")
+        fields["principal_place_of_business"] = clean_field_value(addr_clean, "principal_place_of_business", "gst_certificate")
+        confidences["principal_place_of_business"] = find_line_confidence("Principal Place of Business", all_lines)
+
+    cleaned_fields = {k: clean_field_value(v, field_name=k, doc_type="gst_certificate") for k, v in fields.items()}
     return cleaned_fields, confidences
 
 
