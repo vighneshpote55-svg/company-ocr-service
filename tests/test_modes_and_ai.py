@@ -445,7 +445,7 @@ async def test_ai_mode_bank_statement_chat_grounding():
     # 4. Statement period (NEVER raw dict)
     r_period = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the statement period?", stored_analysis=stored_analysis)
     assert "{'from_date'" not in r_period
-    assert "30/07/2025" in r_period and "30/07/2026" in r_period
+    assert "30 July 2025" in r_period and "30 July 2026" in r_period
 
     # 5. Customer Number
     r_cust = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the Customer No?", stored_analysis=stored_analysis)
@@ -472,5 +472,413 @@ async def test_ai_mode_bank_statement_chat_grounding():
     # 9. Total transactions
     r_txns = await ai_service.chat_with_document(bank_text, "statement.pdf", "What is the total transactions amount?", stored_analysis=stored_analysis)
     assert "₹" in r_txns and "Credits" in r_txns
+
+
+def test_active_document_session_and_cross_document_isolation(client):
+    """
+    Tasks 1, 2, 3, 4, 5, 6:
+    - Verifies single active document per session.
+    - Verifies cross-document isolation (PAN number does not leak to Bank Statement).
+    - Verifies direct field-aware lookup.
+    - Verifies follow-up 'Why?' references Customer Number without mentioning employee name.
+    """
+    # 1. Upload Document A (PAN Card)
+    pan_doc = document_store.save_document(
+        file_bytes=b"%PDF-1.4 PAN Mock",
+        filename="Sneha_PAN.pdf",
+        result_data={
+            "doc_type": "pan",
+            "document_type": "PAN Card",
+            "extracted_text": "INCOME TAX DEPARTMENT GOVT OF INDIA Permanent Account Number ABCDE1234F Name SNEHA GUPTA DOB 15/08/1992",
+            "extracted_fields": {
+                "pan_number": "ABCDE1234F",
+                "name": "SNEHA GUPTA",
+                "date_of_birth": "15/08/1992",
+            },
+        },
+    )
+    pan_id = pan_doc["id"]
+    assert document_store.get_active_document_id() == pan_id
+
+    # Query active document for PAN
+    res_pan = client.post(
+        "/api/mode/ai/chat",
+        json={"document_id": pan_id, "message": "What is the PAN number?"},
+    )
+    assert res_pan.status_code == 200
+    assert "ABCDE1234F" in res_pan.json()["response"]
+
+    # Query active document for GSTIN (does not exist on PAN)
+    res_gst_on_pan = client.post(
+        "/api/mode/ai/chat",
+        json={"document_id": pan_id, "message": "What is the GSTIN?"},
+    )
+    assert res_gst_on_pan.status_code == 200
+    assert "could not find a gstin" in res_gst_on_pan.json()["response"].lower()
+
+    # 2. Upload Document B (Bank Statement)
+    bs_doc = document_store.save_document(
+        file_bytes=b"%PDF-1.4 Bank Mock",
+        filename="Axis_Statement.pdf",
+        result_data={
+            "doc_type": "bank_statement",
+            "document_type": "Bank Statement",
+            "extracted_text": "AXIS BANK LIMITED Account Statement Account Holder: SNEHA GUPTA Account Number: 918010023456789 IFSC Code: UTIB0001435 Branch: PIMPRI PUNE",
+            "extracted_fields": {
+                "bank_name": "Axis Bank",
+                "account_holder": "SNEHA GUPTA",
+                "account_number": "XXXXXXXXXXX6789",
+                "ifsc": "UTIB0001435",
+                "branch": "PIMPRI PUNE",
+            },
+        },
+    )
+    bs_id = bs_doc["id"]
+    # Session now points to Bank Statement
+    assert document_store.get_active_document_id() == bs_id
+
+    # 3. Cross-Document Leakage Check:
+    # Asking for PAN number on Bank Statement MUST NOT leak the PAN from Document A!
+    res_pan_on_bs = client.post(
+        "/api/mode/ai/chat",
+        json={"document_id": bs_id, "message": "What is the PAN number?"},
+    )
+    assert res_pan_on_bs.status_code == 200
+    pan_reply = res_pan_on_bs.json()["response"]
+    assert "ABCDE1234F" not in pan_reply
+    assert "could not find a pan number" in pan_reply.lower()
+
+    # 4. Field-Aware Lookup: Account Holder
+    res_holder = client.post(
+        "/api/mode/ai/chat",
+        json={"document_id": bs_id, "message": "What is the account holder?"},
+    )
+    assert res_holder.status_code == 200
+    assert "SNEHA GUPTA" in res_holder.json()["response"]
+
+    # 5. Field-Aware Lookup: Missing Customer Number
+    res_cust = client.post(
+        "/api/mode/ai/chat",
+        json={"document_id": bs_id, "message": "Customer No?"},
+    )
+    assert res_cust.status_code == 200
+    cust_reply = res_cust.json()["response"]
+    assert "could not find a customer number" in cust_reply.lower()
+
+    # 6. Follow-up: Why?
+    history = [
+        {"role": "user", "content": "Customer No?"},
+        {"role": "assistant", "content": cust_reply},
+    ]
+    res_why = client.post(
+        "/api/mode/ai/chat",
+        json={"document_id": bs_id, "message": "Why?", "history": history},
+    )
+    assert res_why.status_code == 200
+    why_reply = res_why.json()["response"]
+    assert "customer number" in why_reply.lower()
+    assert "employee" not in why_reply.lower()
+    assert "searched the extracted fields" in why_reply.lower()
+
+    # 7. Active session endpoint
+    active_res = client.get("/api/mode/ai/active")
+    assert active_res.status_code == 200
+    assert active_res.json()["active"] is True
+    assert active_res.json()["document_id"] == bs_id
+
+    # 8. Clear active session endpoint
+    clear_res = client.post("/api/mode/ai/active/clear")
+    assert clear_res.status_code == 200
+    assert clear_res.json()["success"] is True
+    assert document_store.get_active_document_id() is None
+
+    # Clean up
+    document_store.delete_document(pan_id)
+    document_store.delete_document(bs_id)
+
+
+def test_exact_acceptance_criteria_flow(client):
+    """
+    Test exact flow from acceptance criteria:
+    1. PAN: What is the PAN number? -> Correct PAN
+    2. PAN: What is the GSTIN? -> Not found
+    3. Bank Statement: What is the account holder? -> Correct holder
+    4. Bank Statement: Why? -> References previous question
+    5. GST: What is the GSTIN? -> Correct GSTIN
+    6. Upload PAN after GST: What is the GSTIN? -> Not found
+    """
+    # Step 1: PAN Card
+    pan_doc = document_store.save_document(
+        file_bytes=b"%PDF-1.4 PAN1",
+        filename="PAN_Vighnesh.pdf",
+        result_data={
+            "doc_type": "pan",
+            "document_type": "PAN Card",
+            "extracted_text": "INCOME TAX DEPARTMENT GOVT OF INDIA ABCDE1234F VIGHNESH POTE",
+            "extracted_fields": {
+                "pan_number": "ABCDE1234F",
+                "name": "VIGHNESH POTE",
+            },
+        },
+    )
+    pan_id = pan_doc["id"]
+    assert document_store.get_active_document_id() == pan_id
+
+    # 1. What is the PAN number?
+    r1 = client.post("/api/mode/ai/chat", json={"message": "What is the PAN number?"})
+    assert r1.status_code == 200
+    assert "ABCDE1234F" in r1.json()["response"]
+
+    # 2. What is the GSTIN? (On PAN)
+    r2 = client.post("/api/mode/ai/chat", json={"message": "What is the GSTIN?"})
+    assert r2.status_code == 200
+    assert "could not find a gstin in this document" in r2.json()["response"].lower()
+
+    # Step 2: Bank Statement
+    bs_doc = document_store.save_document(
+        file_bytes=b"%PDF-1.4 BS",
+        filename="Sneha_Bank.pdf",
+        result_data={
+            "doc_type": "bank_statement",
+            "document_type": "Bank Statement",
+            "extracted_text": "AXIS BANK LIMITED Account Holder: SNEHA GUPTA Statement Period: 01/04/2025 to 31/03/2026",
+            "extracted_fields": {
+                "bank_name": "Axis Bank",
+                "account_holder": "SNEHA GUPTA",
+            },
+        },
+    )
+    bs_id = bs_doc["id"]
+    assert document_store.get_active_document_id() == bs_id
+
+    # 3. What is the account holder?
+    r3 = client.post("/api/mode/ai/chat", json={"message": "What is the account holder?"})
+    assert r3.status_code == 200
+    assert "SNEHA GUPTA" in r3.json()["response"]
+
+    # Ask for missing Customer Number then Why?
+    r_cust = client.post("/api/mode/ai/chat", json={"message": "Customer Number?"})
+    assert r_cust.status_code == 200
+    assert "could not find a customer number" in r_cust.json()["response"].lower()
+
+    # 4. Why?
+    r4 = client.post(
+        "/api/mode/ai/chat",
+        json={
+            "message": "Why?",
+            "history": [
+                {"role": "user", "content": "Customer Number?"},
+                {"role": "assistant", "content": r_cust.json()["response"]},
+            ],
+        },
+    )
+    assert r4.status_code == 200
+    assert "customer number" in r4.json()["response"].lower()
+    assert "searched the extracted fields, ocr text, and visible document content" in r4.json()["response"].lower()
+    assert "employee" not in r4.json()["response"].lower()
+
+    # Step 3: GST Certificate
+    gst_doc = document_store.save_document(
+        file_bytes=b"%PDF-1.4 GST",
+        filename="Acme_GST.pdf",
+        result_data={
+            "doc_type": "gst_certificate",
+            "document_type": "GST Registration Certificate",
+            "extracted_text": "FORM GST REG-06 27AABCT3518Q1ZS ACME ENTERPRISES",
+            "extracted_fields": {
+                "gstin": "27AABCT3518Q1ZS",
+                "legal_name": "ACME ENTERPRISES",
+            },
+        },
+    )
+    gst_id = gst_doc["id"]
+    assert document_store.get_active_document_id() == gst_id
+
+    # 5. What is the GSTIN?
+    r5 = client.post("/api/mode/ai/chat", json={"message": "What is the GSTIN?"})
+    assert r5.status_code == 200
+    assert "27AABCT3518Q1ZS" in r5.json()["response"]
+
+    # Step 4: Upload PAN after GST
+    pan2_doc = document_store.save_document(
+        file_bytes=b"%PDF-1.4 PAN2",
+        filename="PAN_Priya.pdf",
+        result_data={
+            "doc_type": "pan",
+            "document_type": "PAN Card",
+            "extracted_text": "INCOME TAX DEPARTMENT GOVT OF INDIA XYZAB9876C PRIYA SHARMA",
+            "extracted_fields": {
+                "pan_number": "XYZAB9876C",
+                "name": "PRIYA SHARMA",
+            },
+        },
+    )
+    pan2_id = pan2_doc["id"]
+    assert document_store.get_active_document_id() == pan2_id
+
+    # 6. What is the GSTIN? (Must be NOT found, no leakage from previous GST document)
+    r6 = client.post("/api/mode/ai/chat", json={"message": "What is the GSTIN?"})
+    assert r6.status_code == 200
+    assert "27AABCT3518Q1ZS" not in r6.json()["response"]
+    assert "could not find a gstin in this document" in r6.json()["response"].lower()
+
+    # Cleanup
+    for did in [pan_id, bs_id, gst_id, pan2_id]:
+        document_store.delete_document(did)
+
+
+# ==============================================================================
+# Field Registry & Accuracy Unit Tests
+# ==============================================================================
+
+def test_field_registry_intent_detection():
+    """Task 1 & Task 2: Test intent detection for field variations."""
+    import field_registry
+
+    # Customer number variations
+    for q in ["What is the Customer No?", "Customer Number", "cif number", "cust id", "What is the CIF?"]:
+        fdef = field_registry.detect_field_intent(q, doc_type="Bank Statement")
+        assert fdef is not None, f"Failed on query: {q}"
+        assert fdef.canonical_key == "customer_number"
+
+    # IFSC variations
+    for q in ["IFSC Code", "what is the ifsc", "rtgs/neft", "IFS code"]:
+        fdef = field_registry.detect_field_intent(q, doc_type="Bank Statement")
+        assert fdef is not None, f"Failed on query: {q}"
+        assert fdef.canonical_key == "ifsc"
+
+    # Statement period variations
+    for q in ["What is the statement period?", "statement duration", "period of the statement"]:
+        fdef = field_registry.detect_field_intent(q, doc_type="Bank Statement")
+        assert fdef is not None, f"Failed on query: {q}"
+        assert fdef.canonical_key == "statement_period"
+
+    # PAN variations
+    for q in ["What is the PAN number?", "PAN", "pan no"]:
+        fdef = field_registry.detect_field_intent(q, doc_type="PAN Card")
+        assert fdef is not None, f"Failed on query: {q}"
+        assert fdef.canonical_key == "pan_number"
+
+    # GSTIN variations
+    for q in ["What is the GSTIN?", "GST number", "gstin"]:
+        fdef = field_registry.detect_field_intent(q, doc_type="GST Registration Certificate")
+        assert fdef is not None, f"Failed on query: {q}"
+        assert fdef.canonical_key == "gstin"
+
+
+def test_field_registry_formatting():
+    """Task 4: Test human-friendly date and statement period formatting."""
+    import field_registry
+
+    # Dates
+    assert field_registry.format_date_human("22/06/2007") == "22 June 2007"
+    assert field_registry.format_date_human("01-04-2025") == "01 April 2025"
+    assert field_registry.format_date_human("2026-12-31") == "31 December 2026"
+
+    # Statement periods
+    raw_dict = {"from_date": "30/07/2025", "to_date": "30/07/2026"}
+    assert field_registry.format_statement_period_human(raw_dict) == "30 July 2025 – 30 July 2026"
+
+    stringified_dict = "{'from_date': '30/07/2025', 'to_date': '30/07/2026'}"
+    assert field_registry.format_statement_period_human(stringified_dict) == "30 July 2025 – 30 July 2026"
+
+    text_range = "From : 01/01/2024 To : 31/12/2024"
+    assert field_registry.format_statement_period_human(text_range) == "01 January 2024 – 31 December 2024"
+
+
+def test_field_registry_anti_substitution():
+    """Task 10: Anti-substitution guards."""
+    import field_registry
+
+    ifsc_def = field_registry.FIELD_REGISTRY["ifsc"]
+    cust_def = field_registry.FIELD_REGISTRY["customer_number"]
+    pan_def = field_registry.FIELD_REGISTRY["pan_number"]
+
+    # IFSC must not be bank name
+    val, source = field_registry.lookup_field_value(
+        ifsc_def,
+        extracted_fields={"ifsc": "STATE BANK OF INDIA"},
+        ocr_text="STATE BANK OF INDIA",
+    )
+    assert source == "prohibited"
+    assert val is None
+
+    # Customer Number must not be Account Number
+    val, source = field_registry.lookup_field_value(
+        cust_def,
+        extracted_fields={"customer_number": "1234567890", "account_number": "1234567890"},
+        ocr_text="A/C: 1234567890",
+    )
+    assert source == "prohibited"
+    assert val is None
+
+    # PAN must not be GSTIN (15 chars)
+    val, source = field_registry.lookup_field_value(
+        pan_def,
+        extracted_fields={"pan_number": "27AABCT3518Q1ZS"},
+        ocr_text="GSTIN: 27AABCT3518Q1ZS",
+    )
+    assert source == "prohibited"
+    assert val is None
+
+
+@pytest.mark.asyncio
+async def test_pan_and_gst_absent_field_lookups():
+    """Task 6 & Task 7: Asking for GSTIN on PAN or absent fields returns explicit not found."""
+    pan_analysis = {
+        "document_type": "PAN Card",
+        "confidence": "high",
+        "summary": "Permanent Account Number card for Priya Sharma.",
+        "evidence": ["INCOME TAX DEPARTMENT", "ABCDE1234F"],
+        "extracted_fields": {
+            "pan_number": "ABCDE1234F",
+            "name": "PRIYA SHARMA",
+            "date_of_birth": "22/06/2007",
+        },
+    }
+    pan_text = "INCOME TAX DEPARTMENT GOVT OF INDIA ABCDE1234F PRIYA SHARMA 22/06/2007"
+
+    # 1. PAN Number
+    r_pan = await ai_service.chat_with_document(pan_text, "pan.jpg", "What is the PAN number?", stored_analysis=pan_analysis)
+    assert "ABCDE1234F" in r_pan
+
+    # 2. DOB formatted
+    r_dob = await ai_service.chat_with_document(pan_text, "pan.jpg", "What is the date of birth?", stored_analysis=pan_analysis)
+    assert "22 June 2007" in r_dob
+
+    # 3. GSTIN on PAN must be not found
+    r_gst = await ai_service.chat_with_document(pan_text, "pan.jpg", "What is the GSTIN?", stored_analysis=pan_analysis)
+    assert "could not find a gstin in this document" in r_gst.lower()
+
+    # 4. Follow-up Why?
+    history = [
+        {"role": "user", "content": "What is the GSTIN?"},
+        {"role": "assistant", "content": r_gst}
+    ]
+    r_why = await ai_service.chat_with_document(pan_text, "pan.jpg", "Why?", history=history, stored_analysis=pan_analysis)
+    assert "gstin" in r_why.lower()
+    assert "could not find" in r_why.lower()
+
+
+@pytest.mark.asyncio
+async def test_unknown_document_no_hallucinations():
+    """Task 8: Unknown document never fabricates structured fields."""
+    unknown_analysis = {
+        "document_type": "Unknown Document",
+        "confidence": "low",
+        "summary": "Unrecognized miscellaneous document.",
+        "evidence": [],
+        "extracted_fields": {},
+    }
+    unknown_text = "Sample random text without any structured financial or identity credentials."
+
+    r_pan = await ai_service.chat_with_document(unknown_text, "doc.pdf", "What is the PAN number?", stored_analysis=unknown_analysis)
+    assert "could not find a pan number" in r_pan.lower()
+
+    r_ifsc = await ai_service.chat_with_document(unknown_text, "doc.pdf", "What is the IFSC Code?", stored_analysis=unknown_analysis)
+    assert "could not find an ifsc code" in r_ifsc.lower()
+
+
+
 
 

@@ -21,7 +21,10 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 import logging
 from typing import Any, Dict, List, Optional
+import io
 import uuid
+import fitz
+from pypdf import PdfReader
 
 from dotenv import load_dotenv
 
@@ -48,12 +51,14 @@ from fastapi import (
     status,
 )
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from PIL import Image
 
 from audit_logger import log_audit_event
 import document_store
+import encryption
+from encryption import DocumentDecryptionError, DocumentEncryptionKeyMissingError
 from extractors import (
     EXTRACTOR_REGISTRY,
     PII_ALLOWLIST,
@@ -191,6 +196,201 @@ async def enforce_startup_security_check(request: Request, call_next):
             },
         )
     return await call_next(request)
+
+
+@app.exception_handler(HTTPException)
+async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    detail = exc.detail
+    content = {"detail": detail}
+    if isinstance(detail, str):
+        content["error"] = detail
+    elif isinstance(detail, dict):
+        content.update(detail)
+    return JSONResponse(status_code=exc.status_code, content=content)
+
+
+@app.exception_handler(DocumentEncryptionKeyMissingError)
+async def encryption_key_missing_handler(request: Request, exc: DocumentEncryptionKeyMissingError):
+    msg = "Encryption service unavailable: server encryption key is not configured."
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": msg, "error": msg})
+
+
+@app.exception_handler(DocumentDecryptionError)
+async def decryption_error_handler(request: Request, exc: DocumentDecryptionError):
+    msg = "Document decryption failed."
+    return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": msg, "error": msg})
+
+
+MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20 MB
+MAX_PDF_SIZE = 50 * 1024 * 1024    # 50 MB
+ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
+
+
+def validate_upload_security(file: UploadFile, file_bytes: bytes) -> tuple[str, str]:
+    """
+    Validate uploaded file security:
+    1. Reject path traversal attempts in filename (Task 2)
+    2. Validate file extension and MIME type against allowed list (Task 3)
+    3. Enforce maximum file size limits (Task 4)
+    4. Validate magic bytes to prevent masqueraded files (Task 3)
+    5. Detect password-protected encrypted PDFs (Task 6)
+    6. Detect corrupted or unreadable images/PDFs before OCR (Task 5)
+    Returns (clean_filename, extension).
+    """
+    raw_filename = file.filename or "document.bin"
+
+    # 1. Path Traversal Check (Task 2)
+    if ".." in raw_filename or "/" in raw_filename or "\\" in raw_filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid filename: path traversal characters detected.",
+        )
+
+    clean_filename = document_store.sanitize_filename(raw_filename)
+    ext = os.path.splitext(clean_filename)[1].lower()
+
+    # 2. File Extension Validation (Task 3)
+    if ext not in ALLOWED_EXTENSIONS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Unsupported file type.",
+        )
+
+    content_type = (file.content_type or "").lower().strip()
+
+    # 3. File Size Limits (Task 4)
+    if len(file_bytes) == 0:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploaded file is empty",
+        )
+
+    if ext in (".png", ".jpg", ".jpeg", ".webp") and len(file_bytes) > MAX_IMAGE_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="This file exceeds the maximum upload size.",
+        )
+
+    if ext == ".pdf" and len(file_bytes) > MAX_PDF_SIZE:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="This file exceeds the maximum upload size.",
+        )
+
+    # 4. Magic Bytes & MIME Type Check (Task 3)
+    if ext == ".pdf":
+        if b"%PDF-" not in file_bytes[:1024]:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type.",
+            )
+        if content_type and content_type not in (
+            "application/pdf",
+            "application/x-pdf",
+            "application/octet-stream",
+            "binary/octet-stream",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type.",
+            )
+    elif ext == ".png":
+        if not file_bytes.startswith(b"\x89PNG\r\n\x1a\n"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type.",
+            )
+        if content_type and content_type not in (
+            "image/png",
+            "application/octet-stream",
+            "binary/octet-stream",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type.",
+            )
+    elif ext in (".jpg", ".jpeg"):
+        if not file_bytes.startswith(b"\xff\xd8\xff"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type.",
+            )
+        if content_type and content_type not in (
+            "image/jpeg",
+            "image/jpg",
+            "image/pjpeg",
+            "application/octet-stream",
+            "binary/octet-stream",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type.",
+            )
+    elif ext == ".webp":
+        if not (file_bytes.startswith(b"RIFF") and len(file_bytes) >= 12 and file_bytes[8:12] == b"WEBP"):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type.",
+            )
+        if content_type and content_type not in (
+            "image/webp",
+            "application/octet-stream",
+            "binary/octet-stream",
+        ):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Unsupported file type.",
+            )
+
+    # 5. Encrypted PDF Detection (Task 6)
+    if ext == ".pdf":
+        try:
+            reader = PdfReader(io.BytesIO(file_bytes))
+            if reader.is_encrypted:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="This PDF is encrypted. Please upload an unlocked copy.",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+
+    # 6. Corrupted File Detection (Task 5)
+    if ext in (".png", ".jpg", ".jpeg", ".webp"):
+        try:
+            with Image.open(io.BytesIO(file_bytes)) as img:
+                img.verify()
+            with Image.open(io.BytesIO(file_bytes)) as img:
+                img.load()
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="This file appears to be corrupted.",
+            )
+    elif ext == ".pdf":
+        try:
+            reader = PdfReader(io.BytesIO(file_bytes))
+            if len(reader.pages) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="This file appears to be corrupted.",
+                )
+            doc = fitz.open(stream=file_bytes, filetype="pdf")
+            if doc.page_count == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="This file appears to be corrupted.",
+                )
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail="This file appears to be corrupted.",
+            )
+
+    return clean_filename, ext
 
 
 # ==============================================================================
@@ -480,21 +680,14 @@ async def process_ocr_endpoint(
                 detail="Expected data must be a valid JSON string",
             )
 
-    # Save uploaded file to temp directory
-    suffix = os.path.splitext(file.filename or "")[1] or ".bin"
-    temp_file = tempfile.NamedTemporaryFile(delete=False, dir=TEMP_DIR, suffix=suffix)
-    temp_path = temp_file.name
+    # Validate upload security (Path traversal, allowed MIME/types, file size, corruption, encryption)
+    file_bytes = await file.read()
+    clean_filename, ext = validate_upload_security(file, file_bytes)
 
-    try:
-        shutil.copyfileobj(file.file, temp_file)
-        temp_file.close()
-    except Exception as ex:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process uploaded file: {str(ex)}",
-        )
+    # Save uploaded file to temp directory using randomized UUID filename
+    temp_path = os.path.join(TEMP_DIR, f"ocr_{uuid.uuid4()}{ext}")
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes)
 
     # If synchronous mode requested
     if sync:
@@ -736,15 +929,34 @@ async def get_document_file_endpoint(
     download: bool = Query(False),
     auth: dict = Depends(authenticate_request),
 ):
-    """Serve the original uploaded document for in-browser PDF or image preview (inline) or download."""
-    file_path = document_store.get_document_file_path(doc_id)
-    if not file_path or not os.path.exists(file_path):
+    """Serve the transparently decrypted document for in-browser PDF or image preview (inline) or download."""
+    doc = document_store.get_document(doc_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{doc_id}' not found",
+        )
+
+    try:
+        decrypted_bytes = document_store.get_document_bytes(doc_id)
+    except FileNotFoundError:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"File for document '{doc_id}' not found",
         )
+    except DocumentEncryptionKeyMissingError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Encryption service unavailable: server encryption key is not configured.",
+        )
+    except DocumentDecryptionError:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Document decryption failed.",
+        )
 
-    ext = os.path.splitext(file_path)[1].lower()
+    filename = doc.get("filename") or doc.get("original_filename") or "document.bin"
+    ext = os.path.splitext(filename)[1].lower() or doc.get("file_type", "").lower()
     media_types = {
         ".pdf": "application/pdf",
         ".png": "image/png",
@@ -753,14 +965,13 @@ async def get_document_file_endpoint(
         ".webp": "image/webp",
     }
     media_type = media_types.get(ext, "application/octet-stream")
-    doc = document_store.get_document(doc_id)
-    filename = doc.get("filename") if doc else os.path.basename(file_path)
     disposition = "attachment" if download else "inline"
-    return FileResponse(
-        file_path,
+    return Response(
+        content=decrypted_bytes,
         media_type=media_type,
-        filename=filename,
-        content_disposition_type=disposition,
+        headers={
+            "Content-Disposition": f'{disposition}; filename="{filename}"'
+        },
     )
 
 
@@ -820,26 +1031,9 @@ async def upload_document_endpoint(
     - If mode == "ai": passes document to local Ollama (qwen2.5vl:3b) for visual reasoning and structured field extraction.
     - If mode == "offline": executes the existing RapidOCR / text layer pipeline for predefined document types.
     """
-    filename = file.filename or "document.bin"
-    ext = os.path.splitext(filename)[1].lower()
-    allowed_exts = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
-    if ext not in allowed_exts:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file format '{ext}'. Allowed: PDF, PNG, JPG, JPEG, WEBP",
-        )
-
     file_bytes = await file.read()
-    if len(file_bytes) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty",
-        )
-    if len(file_bytes) > 25 * 1024 * 1024:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File size exceeds 25 MB limit",
-        )
+    clean_filename, ext = validate_upload_security(file, file_bytes)
+    filename = clean_filename
 
     temp_path = os.path.join(TEMP_DIR, f"web_upload_{uuid.uuid4()}{ext}")
     with open(temp_path, "wb") as f:
@@ -1146,9 +1340,36 @@ async def upload_document_endpoint(
 # ==============================================================================
 
 class AiChatPayload(BaseModel):
-    document_id: str
+    document_id: Optional[str] = None
     message: str
     history: Optional[List[Dict[str, str]]] = None
+
+
+@app.get("/api/mode/ai/active")
+async def get_active_document_endpoint(
+    auth: dict = Depends(authenticate_request),
+):
+    """Returns metadata for the currently active document in the session."""
+    active_doc = document_store.get_active_document()
+    if not active_doc:
+        return {"active": False, "document": None}
+    return {
+        "active": True,
+        "document_id": active_doc["id"],
+        "filename": active_doc.get("filename"),
+        "document_type": active_doc.get("document_type"),
+        "summary": active_doc.get("summary") or (active_doc.get("ai_analysis") or {}).get("summary"),
+        "confidence": active_doc.get("confidence"),
+    }
+
+
+@app.post("/api/mode/ai/active/clear")
+async def clear_active_document_endpoint(
+    auth: dict = Depends(authenticate_request),
+):
+    """Explicitly clears the active document session."""
+    document_store.clear_active_document()
+    return {"success": True, "message": "Active document session cleared."}
 
 
 @app.get("/api/ollama/status")
@@ -1185,26 +1406,9 @@ async def process_offline_mode_endpoint(
       "This document type is not supported in Offline Mode. Please use AI Mode for unknown documents."
     - If supported: extracts fields, validates checksums, sanitizes PII, and stores in vault.
     """
-    filename = file.filename or "document.bin"
-    ext = os.path.splitext(filename)[1].lower()
-    allowed_exts = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
-    if ext not in allowed_exts:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file format '{ext}'. Allowed: PDF, PNG, JPG, JPEG, WEBP",
-        )
-
     file_bytes = await file.read()
-    if len(file_bytes) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty",
-        )
-    if len(file_bytes) > 25 * 1024 * 1024:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File size exceeds 25 MB limit",
-        )
+    clean_filename, ext = validate_upload_security(file, file_bytes)
+    filename = clean_filename
 
     temp_path = os.path.join(TEMP_DIR, f"offline_upload_{uuid.uuid4()}{ext}")
     with open(temp_path, "wb") as f:
@@ -1445,26 +1649,9 @@ async def process_ai_analyze_endpoint(
     - AI analyzes document structure to determine document type, confidence, and reasoning.
     - Persists document in vault and returns structured AI classification result.
     """
-    filename = file.filename or "document.bin"
-    ext = os.path.splitext(filename)[1].lower()
-    allowed_exts = {".pdf", ".png", ".jpg", ".jpeg", ".webp", ".bmp", ".tiff"}
-    if ext not in allowed_exts:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Unsupported file format '{ext}'. Allowed: PDF, PNG, JPG, JPEG, WEBP",
-        )
-
     file_bytes = await file.read()
-    if len(file_bytes) == 0:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploaded file is empty",
-        )
-    if len(file_bytes) > 25 * 1024 * 1024:
-        raise HTTPException(
-            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-            detail="File size exceeds 25 MB limit",
-        )
+    clean_filename, ext = validate_upload_security(file, file_bytes)
+    filename = clean_filename
 
     temp_path = os.path.join(TEMP_DIR, f"ai_upload_{uuid.uuid4()}{ext}")
     with open(temp_path, "wb") as f:
@@ -1572,7 +1759,8 @@ async def process_ai_chat_endpoint(
     - Answers using the uploaded document's canonical analysis object and extracted text.
     - Maintains conversational continuity while keeping documents isolated and grounded.
     """
-    if not payload.document_id:
+    target_id = payload.document_id or document_store.get_active_document_id()
+    if not target_id:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="document_id is required",
@@ -1583,11 +1771,13 @@ async def process_ai_chat_endpoint(
             detail="message cannot be empty",
         )
 
-    doc = document_store.get_document(payload.document_id)
+    # Set as active session document
+    document_store.set_active_document(target_id)
+    doc = document_store.get_document(target_id)
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{payload.document_id}' not found in vault",
+            detail=f"Document '{target_id}' not found in vault",
         )
 
     doc_text = doc.get("extracted_text") or ""
@@ -1598,14 +1788,9 @@ async def process_ai_chat_endpoint(
         )
 
     filename = doc.get("filename", "document")
-    stored_analysis = doc.get("ai_analysis") or {
-        "document_id": payload.document_id,
-        "document_type": doc.get("document_type") or "Unknown Document",
-        "confidence": "high" if (doc.get("confidence", 0) > 0.8) else ("medium" if doc.get("confidence", 0) > 0.5 else "low"),
-        "summary": doc.get("summary", ""),
-        "evidence": doc.get("evidence", []),
-        "extracted_fields": doc.get("extracted_fields", {}),
-    }
+    # Load canonical analysis object (single source of truth for AI chat)
+    canonical_analysis = document_store.get_canonical_analysis(target_id)
+    doc_text = (canonical_analysis.get("ocr_text") if canonical_analysis else None) or doc_text
 
     try:
         try:
@@ -1614,7 +1799,7 @@ async def process_ai_chat_endpoint(
                 filename=filename,
                 message=payload.message,
                 history=payload.history,
-                stored_analysis=stored_analysis,
+                stored_analysis=canonical_analysis,
             )
         except TypeError as te:
             if "stored_analysis" in str(te):

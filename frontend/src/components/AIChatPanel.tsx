@@ -107,6 +107,15 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
+  const getDynamicPlaceholder = () => {
+    const docType = (document.document_type || '').toLowerCase();
+    if (docType.includes('pan')) return 'e.g. "What is the PAN number?"';
+    if (docType.includes('gst') || docType.includes('registration')) return 'e.g. "What is the GSTIN?"';
+    if (docType.includes('bank') || docType.includes('statement')) return 'e.g. "What is the account holder?"';
+    if (docType.includes('employment') || docType.includes('salary')) return 'e.g. "What is the employee name?"';
+    return 'e.g. "Summarize key details"';
+  };
+
   return (
     <div className="ai-chat-assistant-card">
       {/* Header Bar */}
@@ -247,7 +256,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
             ref={inputRef}
             type="text"
             className="ai-chat-input"
-            placeholder={`Ask any question about ${document.filename}... (e.g. "What is the employee name?")`}
+            placeholder={`Ask any question about ${document.filename}... (${getDynamicPlaceholder()})`}
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             disabled={isAiThinking}

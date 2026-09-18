@@ -14,6 +14,7 @@ import re
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 
+import field_registry
 import ollama_ai
 
 logger = logging.getLogger("company_ocr.ai_service")
@@ -414,26 +415,10 @@ async def analyze_document(
 # ==============================================================================
 
 def format_statement_period(sp: Any) -> str:
-    """Format statement period into clean bullet points without exposing Python dicts."""
-    if isinstance(sp, dict):
-        f = sp.get("from_date") or sp.get("from") or ""
-        t = sp.get("to_date") or sp.get("to") or ""
-        if f and t:
-            return f"Statement Period:\n\n• From: {f}\n\n• To: {t}"
-        elif f:
-            return f"Statement Period:\n\n• From: {f}"
-        elif t:
-            return f"Statement Period:\n\n• To: {t}"
-    elif isinstance(sp, str) and sp.strip():
-        # Check if it's stringified dict like "{'from_date': '30/07/2025', 'to_date': '30/07/2026'}"
-        m_f = re.search(r"['\"](?:from_date|from)['\"]\s*:\s*['\"]([^'\"]+)['\"]", sp)
-        m_t = re.search(r"['\"](?:to_date|to)['\"]\s*:\s*['\"]([^'\"]+)['\"]", sp)
-        if m_f and m_t:
-            return f"Statement Period:\n\n• From: {m_f.group(1)}\n\n• To: {m_t.group(1)}"
-        m_rng = re.search(r"([0-9A-Za-z\/\-\.]+)\s*(?:to|-|To)\s*([0-9A-Za-z\/\-\.]+)", sp)
-        if m_rng:
-            return f"Statement Period:\n\n• From: {m_rng.group(1)}\n\n• To: {m_rng.group(2)}"
-        return f"Statement Period:\n\n• {sp}"
+    """Format statement period into clean human-readable text e.g. 30 July 2025 – 30 July 2026."""
+    formatted = field_registry.format_statement_period_human(sp)
+    if formatted:
+        return f"The statement period is {formatted}."
     return "I could not find a statement period in this document."
 
 
@@ -536,10 +521,8 @@ async def chat_with_document(
             val = extracted.get(k)
             if val and str(val).strip() and str(val).strip().lower() != "none":
                 label = field_labels.get(k, k.replace("_", " ").title())
-                if k == "statement_period" and isinstance(val, dict):
-                    f_d = val.get("from_date") or val.get("from") or ""
-                    t_d = val.get("to_date") or val.get("to") or ""
-                    lines.append(f"• **{label}**: {f_d} to {t_d}")
+                if k == "statement_period" and (isinstance(val, dict) or isinstance(val, str)):
+                    lines.append(f"• **{label}**: {field_registry.format_statement_period_human(val)}")
                 else:
                     lines.append(f"• **{label}**: {val}")
                 seen_keys.add(k)
@@ -547,10 +530,8 @@ async def chat_with_document(
         for k, val in extracted.items():
             if k not in seen_keys and val and str(val).strip() and str(val).strip().lower() != "none":
                 label = field_labels.get(k, k.replace("_", " ").title())
-                if k == "statement_period" and isinstance(val, dict):
-                    f_d = val.get("from_date") or val.get("from") or ""
-                    t_d = val.get("to_date") or val.get("to") or ""
-                    lines.append(f"• **{label}**: {f_d} to {t_d}")
+                if k == "statement_period" and (isinstance(val, dict) or isinstance(val, str)):
+                    lines.append(f"• **{label}**: {field_registry.format_statement_period_human(val)}")
                 elif not isinstance(val, (dict, list)):
                     lines.append(f"• **{label}**: {val}")
 
@@ -625,239 +606,32 @@ async def chat_with_document(
             content = (turn.get("content") or "").strip()
             if not last_asst_reply and role == "assistant":
                 last_asst_reply = content
-            elif not last_user_q and role == "user" and content.lower() not in ["why", "why?", "why not", "why not?"]:
+            elif not last_user_q and role == "user" and content.lower() not in ["why", "why?", "why not", "why not?", "how?", "how come?", "can you explain?", "can you explain"]:
                 last_user_q = content
             if last_user_q and last_asst_reply:
                 break
 
         prev_text = (last_user_q + " " + last_asst_reply).lower()
 
-        if "customer" in prev_text or "cif" in prev_text or "cust id" in prev_text or "cust no" in prev_text:
-            if "could not find" in last_asst_reply.lower() or "not found" in last_asst_reply.lower():
-                return "I couldn't find a Customer Number because I searched the extracted fields, OCR text, and visible document content, but no Customer Number was detected with enough confidence."
+        # Check intent of last user question using field_registry
+        prev_field_def = field_registry.detect_field_intent(last_user_q, doc_type=doc_type)
+        if prev_field_def:
+            if "could not find" in last_asst_reply.lower() or "not found" in last_asst_reply.lower() or "could not confidently" in last_asst_reply.lower():
+                return f"I searched the extracted fields, OCR text, and visible document content, but I could not find a {prev_field_def.display_name}."
             else:
-                cust_val = extracted.get("customer_number") or extracted.get("customer_id")
-                return f"I found the Customer Number {cust_val} directly from the verified Customer No label and structured content in this document."
+                val, _ = field_registry.lookup_field_value(prev_field_def, extracted, document_text, doc_type=doc_type)
+                if val:
+                    return f"I found the {prev_field_def.display_name} {val} directly from the verified {prev_field_def.display_name} section and structured content in this document."
+                return f"The {prev_field_def.display_name} was identified directly from the verified fields in this document."
 
-        elif "ifsc" in prev_text:
-            if "could not find" in last_asst_reply.lower() or "not found" in last_asst_reply.lower():
-                return "I couldn't find an IFSC Code because I searched the extracted fields, OCR text, and visible document content, but no valid 11-character IFSC code was detected."
-            else:
-                ifsc_val = extracted.get("ifsc") or extracted.get("ifsc_code")
-                return f"The IFSC Code {ifsc_val} was identified directly from the verified IFSC Code field in this document."
-
-        elif "holder" in prev_text or "account held" in prev_text:
-            if "could not find" in last_asst_reply.lower() or "not found" in last_asst_reply.lower():
-                return "I couldn't find an account holder name because I searched the structured fields and document text, but no account holder name was identified with sufficient confidence."
-            else:
-                holder_val = extracted.get("account_holder") or extracted.get("account_holder_name")
-                return f"The account holder {holder_val} was extracted directly from the verified account holder fields in this document."
-
-        elif "period" in prev_text or "statement duration" in prev_text:
-            return "The statement period was retrieved directly from the transaction date range printed on this bank statement."
-
-        elif "branch" in prev_text:
-            return "The branch information was retrieved from the branch label and transaction SOL details present in this document."
-
-        elif "bank" in prev_text and "name" in prev_text:
-            return "The bank name was identified from the institution header and banking details present in this document."
-
-        elif "account" in prev_text and "number" in prev_text:
-            return "The account number was identified directly from the account number section of this document."
-
-        elif "could not find" in last_asst_reply.lower():
-            return "I couldn't find that information because I searched the extracted fields, OCR text, and visible document content, but it was not detected with enough confidence."
+        if "could not find" in last_asst_reply.lower():
+            m_entity = re.search(r"could not find (?:an?|the)?\s*([^.]+?)\s*(?:in this document|because|\.)", last_asst_reply, re.I)
+            entity_name = m_entity.group(1).strip() if m_entity else "matching information"
+            return f"I searched the extracted fields, OCR text, and visible document content, but I could not find a {entity_name}."
         else:
             return f"My previous answer was determined directly from the verified extracted fields and OCR text in this {doc_type}."
 
-    # 6. Field-Aware Intent: Account Holder
-    is_account_holder_q = any(
-        k in q for k in [
-            "account holder", "acc holder", "account held by", "who holds the account",
-            "name of the account holder", "name of account holder", "account name",
-            "who is the account holder", "account holder name"
-        ]
-    ) or (
-        ("holder" in q and "name" in q and "card" not in q)
-        or ("holder" in q and "who" in q)
-        or ("bank" in doc_type.lower() and "holder" in q)
-    )
-    if is_account_holder_q:
-        val = extracted.get("account_holder") or extracted.get("account_holder_name")
-        if not val and ("holder" in q or "bank" in doc_type.lower()):
-            h_m = re.search(
-                r"(?:Account\s*Holder(?:\s*Name)?|Customer\s*Name|खातेदाराचे\s*नाव|खाताधारक\s*का\s*नाम)[\s:]*([A-Za-z][A-Za-z\s.'-]{2,40}?)(?=[ \t]*(?:\r?\n|$|Account\s*No|A/C|Address|Joint|Customer\s*ID|CIF|Nominee|IFSC|Branch))",
-                document_text,
-                re.IGNORECASE,
-            )
-            if not h_m:
-                h_m = re.search(
-                    r"(?:(?:Mr\.|Mrs\.|Ms\.|Shri|Smt\.)\s+([A-Za-z][A-Za-z\s.'-]{2,40}?))(?=[ \t]*(?:\r?\n|$|Account|A/C|Address|Branch|IFSC))",
-                    document_text,
-                    re.IGNORECASE,
-                )
-            if h_m:
-                cand = h_m.group(1).strip()
-                if not re.search(r"\b(Statement|Account|Balance|Branch|Bank|Customer|Number)\b", cand, re.I):
-                    val = cand
-        if val:
-            return f"The account holder is {val}."
-        return "I could not find an account holder in this document."
-
-    # 7. Field-Aware Intent: Customer Number
-    is_customer_no_q = any(
-        k in q for k in [
-            "customer no", "customer number", "customer id", "cust id", "cust no",
-            "cif number", "cif no", "cif", "customer identification"
-        ]
-    )
-    if is_customer_no_q:
-        val = extracted.get("customer_number") or extracted.get("customer_id") or extracted.get("cif") or extracted.get("cif_no")
-        if not val:
-            c_m = re.search(
-                r"(?:Customer\s*(?:No\.?|Number|ID)|Cust\s*ID|CIF\s*(?:No\.?|Number)?)[\s:]*([A-Za-z0-9]+)",
-                document_text,
-                re.IGNORECASE,
-            )
-            if c_m:
-                val = c_m.group(1).strip()
-        if val:
-            return f"The Customer Number is {val}."
-        return "I could not find a Customer Number in this document."
-
-    # 8. Field-Aware Intent: IFSC Code (STRICT: Never hallucinate Bank/Branch name)
-    is_ifsc_q = any(k in q for k in ["ifsc", "ifsc code", "rtgs/neft", "neft/ifsc", "ifs code", "rtgs code", "neft code"])
-    if is_ifsc_q:
-        val = extracted.get("ifsc") or extracted.get("ifsc_code")
-        # Validate strict IFSC pattern: 4 letters, 0, then 6 alphanumeric characters
-        if val and not re.match(r"^[A-Z]{4}0[A-Z0-9]{6}$", str(val).strip().upper()):
-            val = None
-        if not val:
-            ifsc_m = re.search(r"\b([A-Z]{4}0[A-Z0-9]{6})\b", document_text)
-            if ifsc_m:
-                val = ifsc_m.group(1).upper()
-        if val:
-            return f"The IFSC Code is {val}."
-        return "I could not find an IFSC Code in this document."
-
-    # 9. Field-Aware Intent: Branch
-    is_branch_q = any(k in q for k in ["branch", "branch name", "branch office", "sol branch", "which branch", "what is the branch"])
-    if is_branch_q:
-        val = extracted.get("branch") or extracted.get("branch_name")
-        if not val:
-            b_m = re.search(
-                r"(?:Branch\s*(?:Office|Name)?\s*[:\-]\s*)([A-Za-z0-9\s,\[\]\(\)\.\/-]+?)(?=[ \t]*(?:\r?\n\r?\n|\r?\n[A-Z0-9\s]+:|$|Account|IFSC|MICR|Tel|Scheme|Opening|Joint|\bS\.NO\b))",
-                document_text,
-                re.IGNORECASE,
-            )
-            if b_m:
-                cand = re.sub(r"\s+", " ", b_m.group(1).replace("\n", " ")).strip()
-                if cand and not re.search(r"^(?:Statement|Account|Balance|Customer|Period|Number|Name\(SOL\))$", cand, re.I):
-                    val = cand
-            if not val:
-                m_sol_header = re.search(r"Branch\s*Name(?:\(SOL\))?", document_text, re.I)
-                if m_sol_header:
-                    after_header = document_text[m_sol_header.end():]
-                    m_row_branch = re.search(r"(?:CR|DR)\s+[\d,.]+\s*(?:\d+)?\s+([A-Z][A-Z\s,\n]+?)(?:\[|\n\d+\s+\d{2}[/\-\.]|\r?\n\r?\n|$)", after_header)
-                    if m_row_branch:
-                        cand = re.sub(r"\s+", " ", m_row_branch.group(1).replace("\n", " ")).strip().rstrip(",")
-                        if cand and len(cand) > 2:
-                            val = cand
-        if val:
-            return f"The branch is {val}."
-        return "I could not find the branch in this document."
-
-    # 10. Field-Aware Intent: Account Number
-    is_account_no_q = any(k in q for k in ["account number", "account no", "a/c no", "a/c number", "acc no", "acc number"])
-    if is_account_no_q:
-        val = extracted.get("account_number") or extracted.get("account_number_masked")
-        if not val:
-            acc_m = re.search(r"(?:Account\s*(?:Number|No\.?)|A/C\s*(?:Number|No\.?))[\s:]*([X\d]{6,18})", document_text, re.IGNORECASE)
-            if acc_m:
-                raw_acc = acc_m.group(1)
-                import extractors
-                val = extractors.mask_account_number(raw_acc) if len(raw_acc) > 4 else raw_acc
-        if val:
-            return f"The account number is {val}."
-        return "I could not find an account number in this document."
-
-    # 11. Field-Aware Intent: Statement Period (Clean formatted dates, NEVER Python dict)
-    is_period_q = any(k in q for k in ["statement period", "statement duration", "period of statement", "duration of statement", "period of the statement"]) or (
-        ("statement" in q or "bank" in doc_type.lower()) and ("period" in q or "duration" in q)
-    )
-    if is_period_q:
-        val = extracted.get("statement_period")
-        if not val:
-            period_m = re.search(
-                r"(?:Transaction\s*Period|Statement\s*Period|Period)[\s:]*(?:\(\s*)?(?:From\s*[:]\s*)?([A-Za-z0-9\/\-\.]+)\s*(?:to|-|To\s*[:])\s*([A-Za-z0-9\/\-\.]+)",
-                document_text,
-                re.IGNORECASE,
-            )
-            if period_m:
-                val = {
-                    "from": period_m.group(1).strip(),
-                    "to": period_m.group(2).strip(),
-                }
-        if val:
-            return format_statement_period(val)
-        return "I could not find a statement period in this document."
-
-    # 12. Field-Aware Intent: Bank Name
-    is_bank_name_q = any(k in q for k in ["bank name", "what is the bank", "which bank", "name of the bank", "name of bank"])
-    if is_bank_name_q:
-        val = extracted.get("bank_name")
-        if not val:
-            b_m = re.search(
-                r"(?:Statement\s+(?:of\s+)?|Account\s+Statement\s+(?:of\s+)?|Bank\s*Name)[\s:]*([A-Za-z][A-Za-z \t.&'-]+?\b(?:BANK(?:\s+OF\s+[A-Za-z]+)?|PAYMENTS\s+BANK)|BANK\s+OF\s+[A-Za-z]+)\b",
-                document_text,
-                re.IGNORECASE,
-            )
-            if b_m:
-                val = b_m.group(1).strip()
-        if val:
-            return f"The bank name is {val}."
-        return "I could not find the bank name in this document."
-
-    # 13. Field-Aware Intent: Total Transactions / Transactions Volume
-    is_transactions_q = any(k in q for k in [
-        "total transaction", "total transactions", "transaction amount", "transactions amount",
-        "total amount of transaction", "total amount of all transaction", "sum of transactions",
-        "how many transactions", "total credits", "total debits", "transaction summary"
-    ])
-    if is_transactions_q:
-        txns = extracted.get("transactions")
-        if isinstance(txns, list) and txns:
-            tot_amt = 0.0
-            cr_amt = 0.0
-            dr_amt = 0.0
-            cr_count = 0
-            dr_count = 0
-            for t in txns:
-                try:
-                    amt = float(str(t.get("amount", "0")).replace(",", ""))
-                    tot_amt += amt
-                    ttype = str(t.get("type", "")).upper()
-                    if "CR" in ttype:
-                        cr_amt += amt
-                        cr_count += 1
-                    elif "DR" in ttype:
-                        dr_amt += amt
-                        dr_count += 1
-                except (ValueError, TypeError):
-                    pass
-
-            return (
-                f"I found a total transaction amount of ₹{tot_amt:,.2f} across the {len(txns)} transactions visible in this statement.\n\n"
-                f"• Credits / Deposits: ₹{cr_amt:,.2f} ({cr_count} transactions)\n"
-                f"• Debits / Withdrawals: ₹{dr_amt:,.2f} ({dr_count} transactions)"
-            )
-        else:
-            m_summary = re.search(r"TOTAL\s*WITHDRAWALS[\s:]*([\d,.]+)\s*TOTAL\s*DEPOSITS[\s:]*([\d,.]+)", document_text, re.I)
-            if m_summary:
-                return f"According to the statement summary:\n\n• Total Withdrawals: ₹{m_summary.group(1)}\n• Total Deposits: ₹{m_summary.group(2)}"
-            return "No transaction records were identified in this document."
-
-    # 14. Anti-Hallucination Guards
+    # 6. Anti-Hallucination Guards for Employment/Salary fields
     if ("employee name" in q or ("employee" in q and "name" in q)):
         if "employment" not in doc_type.lower() and "employee_name" not in extracted:
             return "I could not find an employee name in this document."
@@ -876,58 +650,101 @@ async def chat_with_document(
         elif "salary" in extracted:
             return f"According to {filename}, the stated compensation is: **{extracted['salary']}**."
 
-    # 15. GST Registration Certificate Fields
-    if "gstin" in q or ("gst" in q and "number" in q):
-        if extracted.get("gstin"):
-            return f"The GSTIN identified in this document is: **{extracted['gstin']}**."
-        gstin_m = re.search(r"\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b", document_text)
-        if gstin_m:
-            return f"The GSTIN identified in this document is: **{gstin_m.group(1)}**."
-        return "I could not find a GSTIN in this document."
+    # 7. Field-Aware Intent Mapping via Central FIELD_REGISTRY
+    field_def = field_registry.detect_field_intent(message, doc_type=doc_type)
+    if field_def:
+        resolved_val, source = field_registry.lookup_field_value(field_def, extracted, document_text, doc_type=doc_type)
+        if source == "prohibited":
+            return "I could not confidently identify that information in this document."
 
-    if ("legal" in q and "name" in q) or ("legal business name" in q):
-        if extracted.get("legal_name"):
-            return f"The legal business name is: **{extracted['legal_name']}**."
-        return "I could not find a legal business name in this document."
-
-    if "trade name" in q or ("trade" in q and "name" in q):
-        if extracted.get("trade_name"):
-            return f"The trade name is: **{extracted['trade_name']}**."
-        return "I could not find a trade name in this document."
-
-    if "constitution" in q:
-        if extracted.get("constitution_of_business"):
-            return f"The constitution of business is: **{extracted['constitution_of_business']}**."
-        return "I could not find the constitution of business in this document."
-
-    if "principal place" in q or "place of business" in q or ("gst" in doc_type.lower() and "address" in q):
-        if extracted.get("principal_place_of_business"):
-            return f"The principal place of business is: **{extracted['principal_place_of_business']}**."
-        return "I could not find the principal place of business in this document."
-
-    # 16. PAN Card Fields
-    if "pan" in q and ("number" in q or "what is" in q or len(q) < 15):
-        if extracted.get("pan_number"):
-            return f"The PAN number identified in this document is: **{extracted['pan_number']}**."
-        pan_search = re.search(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b", document_text)
-        if pan_search:
-            return f"The PAN number identified in this document is: **{pan_search.group(1)}**."
-        return "I could not find a PAN number in this document."
-
-    if ("cardholder" in q) or ("name of the individual" in q) or (doc_type == "PAN Card" and "name" in q and "business" not in q and "employee" not in q and "father" not in q):
-        val = extracted.get("cardholder_name") or extracted.get("name")
-        if val:
-            return f"According to {filename}, the individual named on this PAN card is: **{val}**."
-        return "I could not find an individual's name in this document."
-
-    if "date of birth" in q or "dob" in q or ("birth" in q and "date" in q):
-        val = extracted.get("date_of_birth") or extracted.get("dob")
-        if val:
-            return f"The date of birth identified in this document is: **{val}**."
-        dob_m = re.search(r"\b(\d{2}[/-]\d{2}[/-]\d{4})\b", document_text)
-        if dob_m:
-            return f"The date of birth identified in this document is: **{dob_m.group(1)}**."
-        return "I could not find a date of birth in this document."
+        if resolved_val:
+            key = field_def.canonical_key
+            if key == "pan_number":
+                return f"The PAN number identified in this document is: **{resolved_val}**."
+            elif key == "gstin":
+                return f"The GSTIN identified in this document is: **{resolved_val}**."
+            elif key == "account_holder":
+                if "pan" in doc_type.lower():
+                    return f"According to {filename}, the individual named on this PAN card is: **{resolved_val}**."
+                return f"The account holder is {resolved_val}."
+            elif key == "account_number":
+                import extractors
+                masked_val = extractors.mask_account_number(resolved_val) if len(str(resolved_val)) > 4 else resolved_val
+                return f"The account number is {masked_val}."
+            elif key == "customer_number":
+                return f"The Customer Number is {resolved_val}."
+            elif key == "ifsc":
+                return f"The IFSC Code is {resolved_val}."
+            elif key == "branch":
+                return f"The branch is {resolved_val}."
+            elif key == "bank_name":
+                return f"The bank name is {resolved_val}."
+            elif key == "statement_period":
+                return f"The statement period is {resolved_val}."
+            elif key == "date_of_birth":
+                return f"The date of birth identified in this document is: **{resolved_val}**."
+            elif key == "father_name":
+                return f"The father's name is: **{resolved_val}**."
+            elif key == "legal_name":
+                return f"The legal business name is: **{resolved_val}**."
+            elif key == "trade_name":
+                return f"The trade name is: **{resolved_val}**."
+            elif key == "constitution_of_business":
+                return f"The constitution of business is: **{resolved_val}**."
+            elif key == "principal_place_of_business":
+                return f"The principal place of business is: **{resolved_val}**."
+            elif key == "registration_date":
+                return f"The registration date is: **{resolved_val}**."
+            elif key == "opening_balance":
+                return f"The opening balance is: **{resolved_val}**."
+            elif key == "closing_balance":
+                return f"The closing balance is: **{resolved_val}**."
+            elif key == "total_transactions":
+                return resolved_val
+            else:
+                return f"The {field_def.display_name} is: **{resolved_val}**."
+        else:
+            # Field not found
+            if field_def.canonical_key == "gstin":
+                return "I could not find a GSTIN in this document."
+            elif field_def.canonical_key == "pan_number":
+                return "I could not find a PAN number in this document."
+            elif field_def.canonical_key == "customer_number":
+                return "I could not find a Customer Number in this document."
+            elif field_def.canonical_key == "ifsc":
+                return "I could not find an IFSC Code in this document."
+            elif field_def.canonical_key == "branch":
+                return "I could not find the branch in this document."
+            elif field_def.canonical_key == "bank_name":
+                return "I could not find the bank name in this document."
+            elif field_def.canonical_key == "account_number":
+                return "I could not find an account number in this document."
+            elif field_def.canonical_key == "account_holder":
+                return "I could not find an account holder in this document."
+            elif field_def.canonical_key == "statement_period":
+                return "I could not find a statement period in this document."
+            elif field_def.canonical_key == "date_of_birth":
+                return "I could not find a date of birth in this document."
+            elif field_def.canonical_key == "father_name":
+                return "I could not find a father's name in this document."
+            elif field_def.canonical_key == "legal_name":
+                return "I could not find a legal business name in this document."
+            elif field_def.canonical_key == "trade_name":
+                return "I could not find a trade name in this document."
+            elif field_def.canonical_key == "constitution_of_business":
+                return "I could not find the constitution of business in this document."
+            elif field_def.canonical_key == "principal_place_of_business":
+                return "I could not find the principal place of business in this document."
+            elif field_def.canonical_key == "registration_date":
+                return "I could not find a registration date in this document."
+            elif field_def.canonical_key == "opening_balance":
+                return "I could not find an opening balance in this document."
+            elif field_def.canonical_key == "closing_balance":
+                return "I could not find a closing balance in this document."
+            elif field_def.canonical_key == "total_transactions":
+                return "No transaction records were identified in this document."
+            else:
+                return f"I could not find a {field_def.display_name} in this document."
 
     # 17. Local Ollama Chat (if running)
     health = ollama_ai.check_ollama_health()
@@ -963,15 +780,18 @@ async def chat_with_document(
                 f"Extracted Document Text:\n---\n{document_text[:12000]}\n---\n\n"
                 f"Verified Stored Fields:\n{json.dumps(extracted, indent=2)}\n\n"
                 "CRITICAL GROUNDING RULES:\n"
-                "1. Answer strictly based on the facts present in the extracted text and verified fields above.\n"
-                "2. NEVER invent, assume, or hallucinate facts, numbers, dates, or names.\n"
-                "3. If the user asks for a field that does NOT exist in this document "
-                "(e.g., asking for 'employee name' on a PAN card, GST cert, bank statement, tax notice, or invoice; "
-                "or asking for 'salary' or 'joining date' when none is stated), you MUST state clearly:\n"
-                "   'I could not find [field name] in this document.'\n"
-                "4. NEVER output raw OCR placeholder artifacts or label fragments such as '***/Name', 'Name', or fake values.\n"
-                "5. Never substitute Bank Name or Branch when asked for IFSC.\n"
-                "6. Maintain a concise, direct, helpful, and professional tone."
+                "1. Answer only from the provided document text and verified fields above.\n"
+                "2. Use OCR text and extracted fields as primary evidence.\n"
+                "3. Do not invent values, assume, or hallucinate facts, numbers, dates, or names.\n"
+                "4. If information is absent, explicitly say it was not found (e.g. 'I could not find [field name] in this document.').\n"
+                "5. Never use previous conversation unless it refers to the current document.\n"
+                "6. Do not expose chain-of-thought, internal reasoning, or thinking tags.\n"
+                "7. Return concise grounded answers.\n"
+                "8. NEVER output raw OCR placeholder artifacts or label fragments such as '***/Name', 'Name', or fake values.\n"
+                "9. Never substitute Bank Name or Branch when asked for IFSC.\n"
+                "10. Never substitute Account Number when asked for Customer Number, or GSTIN when asked for PAN.\n"
+                "11. Never output Python dictionary syntax for dates or statement periods.\n"
+                "12. Maintain a concise, direct, helpful, and professional tone."
             )
             messages = [{"role": "system", "content": system_prompt}]
             if history:

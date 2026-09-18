@@ -1790,6 +1790,14 @@ def extract_gst_certificate(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any],
     if gstin_match:
         fields["gstin"] = gstin_match.group(1).upper()
         confidences["gstin"] = find_line_confidence(gstin_match.group(1), all_lines)
+    else:
+        for l in text.splitlines():
+            no_space = re.sub(r"[ \t]+", "", l)
+            m = re.search(r"([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])", no_space)
+            if m:
+                fields["gstin"] = m.group(1).upper()
+                confidences["gstin"] = 0.90
+                break
 
     # Legal Name
     legal_match = re.search(

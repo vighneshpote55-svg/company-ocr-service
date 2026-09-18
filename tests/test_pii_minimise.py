@@ -515,9 +515,16 @@ def test_raw_unmasked_fields_never_leak_pipeline_e2e_new_types(monkeypatch):
     assert "lessee_name_masked" in rent_fields
 
     # HTTP sync endpoint check
+    from pypdf import PdfWriter
+    _pw = PdfWriter()
+    _pw.add_blank_page(width=200, height=200)
+    _pbuf = io.BytesIO()
+    _pw.write(_pbuf)
+    valid_pdf_bytes = _pbuf.getvalue()
+
     http_rent = client.post(
         "/ocr/rent_agreement?sync=true",
-        files={"file": ("rent.pdf", b"%PDF-1.4 mock", "application/pdf")},
+        files={"file": ("rent.pdf", valid_pdf_bytes, "application/pdf")},
         data={"expected": json.dumps({"name": "KAVITA RAJESH DESAI"})},
         headers=headers,
     )
@@ -560,7 +567,7 @@ def test_raw_unmasked_fields_never_leak_pipeline_e2e_new_types(monkeypatch):
     # HTTP sync endpoint check
     http_f16 = client.post(
         "/ocr/form_16?sync=true",
-        files={"file": ("f16.pdf", b"%PDF-1.4 mock", "application/pdf")},
+        files={"file": ("f16.pdf", valid_pdf_bytes, "application/pdf")},
         data={"expected": json.dumps({"name": "SURESH KUMAR GUPTA"})},
         headers=headers,
     )
@@ -604,7 +611,7 @@ def test_raw_unmasked_fields_never_leak_pipeline_e2e_new_types(monkeypatch):
     # HTTP sync endpoint check
     http_pb = client.post(
         "/ocr/bank_passbook?sync=true",
-        files={"file": ("pb.pdf", b"%PDF-1.4 mock", "application/pdf")},
+        files={"file": ("pb.pdf", valid_pdf_bytes, "application/pdf")},
         data={"expected": json.dumps({"name": "ANITA SHARMA"})},
         headers=headers,
     )
@@ -644,7 +651,7 @@ def test_raw_unmasked_fields_never_leak_pipeline_e2e_new_types(monkeypatch):
     # HTTP sync endpoint check
     http_tax = client.post(
         "/ocr/property_tax_receipt?sync=true",
-        files={"file": ("tax.pdf", b"%PDF-1.4 mock", "application/pdf")},
+        files={"file": ("tax.pdf", valid_pdf_bytes, "application/pdf")},
         data={"expected": json.dumps({"name": "MAHESH BABU VERMA"})},
         headers=headers,
     )
@@ -844,9 +851,16 @@ def test_persisted_records_never_contain_raw_pii_or_unmasked_values(monkeypatch)
 
             # 2. Read back persisted result JSON file directly from disk
             disk_result_path = os.path.join(document_store.RESULTS_DIR, f"{doc_id}.json")
+            if not os.path.exists(disk_result_path) and os.path.exists(disk_result_path + ".enc"):
+                disk_result_path = disk_result_path + ".enc"
             assert os.path.exists(disk_result_path), f"Persisted result file missing at {disk_result_path}"
-            with open(disk_result_path, "r", encoding="utf-8") as f:
-                disk_record = json.load(f)
+            if disk_result_path.endswith(".enc"):
+                import encryption
+                with open(disk_result_path, "rb") as f:
+                    disk_record = json.loads(encryption.decrypt_bytes(f.read()).decode("utf-8"))
+            else:
+                with open(disk_result_path, "r", encoding="utf-8") as f:
+                    disk_record = json.load(f)
 
             # 3. Read back from index via list_documents
             index_records = document_store.list_documents()
@@ -999,9 +1013,16 @@ def test_marathi_salary_slip_and_passbook_persisted_records_never_contain_raw_pi
             assert persisted is not None
 
             disk_result_path = os.path.join(document_store.RESULTS_DIR, f"{doc_id}.json")
+            if not os.path.exists(disk_result_path) and os.path.exists(disk_result_path + ".enc"):
+                disk_result_path = disk_result_path + ".enc"
             assert os.path.exists(disk_result_path)
-            with open(disk_result_path, "r", encoding="utf-8") as f:
-                disk_record = json.load(f)
+            if disk_result_path.endswith(".enc"):
+                import encryption
+                with open(disk_result_path, "rb") as f:
+                    disk_record = json.loads(encryption.decrypt_bytes(f.read()).decode("utf-8"))
+            else:
+                with open(disk_result_path, "r", encoding="utf-8") as f:
+                    disk_record = json.load(f)
 
             index_records = document_store.list_documents()
             matched_index = next((item for item in index_records if item.get("id") == doc_id), None)
