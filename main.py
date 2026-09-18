@@ -84,11 +84,14 @@ from security import (
 )
 from verifier import (
     check_doc_type_mismatch,
+    classify_document_content,
     detect_document_type,
     determine_document_status,
     load_valid_bank_codes,
+    normalize_ocr_text,
     perform_cross_check,
     validate_document_checksums,
+    DOC_TYPE_METADATA,
 )
 
 # Configuration & Constants
@@ -956,16 +959,18 @@ async def upload_document_endpoint(
         cross_check_results = None
 
         if has_engine_error or not has_text or doc_res.average_confidence == 0.0 or not has_lines:
-            failure_detail = getattr(doc_res, "engine_error", None) or "OCR engine returned no text or zero confidence: document image may be blank, corrupt, or unreadable"
+            failure_detail = getattr(doc_res, "engine_error", None) or "OCR engine returned no text or zero confidence: I couldn't extract enough text to identify this document."
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=failure_detail,
             )
 
-        # 2. Document Type Classification
+        # 2. Text Normalization & Shared Content Classification
+        doc_res.full_text = normalize_ocr_text(doc_res.full_text)
+        classification = classify_document_content(doc_res.full_text)
+
         if not requested_type or requested_type == "auto":
-            detected = detect_document_type(doc_res.full_text)
-            resolved_type = detected if detected else "unknown"
+            resolved_type = classification.get("doc_type", "unknown")
             # If resolved_type uses Devanagari passes and the initial pass was English-only,
             # and OCR was actually required, execute the bilingual pass now
             auto_langs = get_languages_for_doc_type(resolved_type)
@@ -977,6 +982,9 @@ async def upload_document_endpoint(
                             doc_res = ocr_engine.process_pdf(temp_path, languages=auto_langs)
                         else:
                             doc_res = ocr_engine.process_file(temp_path, languages=auto_langs)
+                        doc_res.full_text = normalize_ocr_text(doc_res.full_text)
+                        classification = classify_document_content(doc_res.full_text)
+                        resolved_type = classification.get("doc_type", resolved_type)
                     except Exception as ex:
                         logger.warning("Secondary Devanagari pass in /api/upload failed: %s", ex)
             elif resolved_type == "unknown" and doc_res.ocr_required:
@@ -986,16 +994,24 @@ async def upload_document_endpoint(
                         retry_res = ocr_engine.process_pdf(temp_path, languages=fallback_langs)
                     else:
                         retry_res = ocr_engine.process_file(temp_path, languages=fallback_langs)
-                    retry_detected = detect_document_type(retry_res.full_text)
-                    if retry_detected:
+                    retry_res.full_text = normalize_ocr_text(retry_res.full_text)
+                    retry_classification = classify_document_content(retry_res.full_text)
+                    if retry_classification["doc_type"] != "unknown":
                         doc_res = retry_res
-                        resolved_type = retry_detected
+                        classification = retry_classification
+                        resolved_type = retry_classification["doc_type"]
                     elif len(re.findall(r"[\u0900-\u097F]", retry_res.full_text)) > len(re.findall(r"[\u0900-\u097F]", doc_res.full_text)):
                         doc_res = retry_res
                 except Exception as ex:
                     logger.warning("Regional fallback pass in /api/upload failed: %s", ex)
         else:
             resolved_type = requested_type
+
+        meta = DOC_TYPE_METADATA.get(resolved_type, {})
+        detected_doc_title = classification.get("document_type") or meta.get("name") or (
+            resolved_type.replace("_", " ").title() if resolved_type != "unknown" else "Unknown Document"
+        )
+        detected_issuer = classification.get("issuer") or meta.get("issuer")
 
         first_page_img: Optional[Image.Image] = None
         if doc_res.pages and doc_res.pages[0].image:
@@ -1050,11 +1066,21 @@ async def upload_document_endpoint(
                     except Exception:
                         pass
                 sanitized_fields, field_confs = sanitize_extracted_fields(resolved_type, raw_fields, field_confs)
+
+                # Context-specific issuer detection
+                if resolved_type == "bank_statement" and sanitized_fields.get("bank_name"):
+                    detected_issuer = sanitized_fields["bank_name"]
+                elif resolved_type == "salary_slip" and sanitized_fields.get("employer_name"):
+                    detected_issuer = sanitized_fields["employer_name"]
+                elif resolved_type == "utility_bill" and sanitized_fields.get("utility_provider"):
+                    detected_issuer = sanitized_fields["utility_provider"]
+                elif resolved_type == "income_certificate" and sanitized_fields.get("issuing_authority"):
+                    detected_issuer = sanitized_fields["issuing_authority"]
             except Exception as ex:
                 checksum_valid = False
                 checksum_reason = f"Extraction error: {str(ex)}"
         else:
-            sanitized_fields = {"document_type": "Unknown / Unclassified"}
+            sanitized_fields = {"document_type": "Unknown Document"}
 
         # 5. Determine Overall Status
         doc_status = determine_document_status(
@@ -1069,6 +1095,10 @@ async def upload_document_endpoint(
         # 7. Package Result Data (Strictly sanitized fields, no raw PII)
         result_payload = {
             "doc_type": resolved_type,
+            "document_type": detected_doc_title,
+            "issuer": detected_issuer,
+            "classification": classification,
+            "evidence": classification.get("evidence", []),
             "ocr_required": ocr_required,
             "text_source": text_source,
             "status": doc_status,
@@ -1198,16 +1228,18 @@ async def process_offline_mode_endpoint(
         has_engine_error = bool(getattr(doc_res, "engine_error", None))
 
         if has_engine_error or not has_text or doc_res.average_confidence == 0.0 or not has_lines:
-            failure_detail = getattr(doc_res, "engine_error", None) or "OCR engine returned no text or zero confidence: document image may be blank, corrupt, or unreadable"
+            failure_detail = getattr(doc_res, "engine_error", None) or "OCR engine returned no text or zero confidence: I couldn't extract enough text to identify this document."
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=failure_detail,
             )
 
-        # 2. Document Classification
+        # 2. Text Normalization & Shared Content Classification
+        doc_res.full_text = normalize_ocr_text(doc_res.full_text)
+        classification = classify_document_content(doc_res.full_text)
+
         if not requested_type or requested_type == "auto":
-            detected = detect_document_type(doc_res.full_text)
-            resolved_type = detected if detected else "unknown"
+            resolved_type = classification.get("doc_type", "unknown")
             if resolved_type == "unknown" and doc_res.ocr_required:
                 try:
                     fallback_langs = ["en", "hi", "mr"]
@@ -1215,10 +1247,14 @@ async def process_offline_mode_endpoint(
                         retry_res = ocr_engine.process_pdf(temp_path, languages=fallback_langs)
                     else:
                         retry_res = ocr_engine.process_file(temp_path, languages=fallback_langs)
-                    retry_detected = detect_document_type(retry_res.full_text)
-                    if retry_detected:
+                    retry_res.full_text = normalize_ocr_text(retry_res.full_text)
+                    retry_classification = classify_document_content(retry_res.full_text)
+                    if retry_classification["doc_type"] != "unknown":
                         doc_res = retry_res
-                        resolved_type = retry_detected
+                        classification = retry_classification
+                        resolved_type = retry_classification["doc_type"]
+                    elif len(re.findall(r"[\u0900-\u097F]", retry_res.full_text)) > len(re.findall(r"[\u0900-\u097F]", doc_res.full_text)):
+                        doc_res = retry_res
                 except Exception as ex:
                     logger.warning("Regional fallback pass in /api/mode/offline failed: %s", ex)
         else:
@@ -1233,13 +1269,20 @@ async def process_offline_mode_endpoint(
                     "status": "unsupported",
                     "message": "This document type is not supported in Offline Mode. Please use AI Mode for unknown documents.",
                     "doc_type": "unknown",
-                    "document_type": "Unsupported Document",
-                    "confidence": round(doc_res.average_confidence, 4),
+                    "document_type": "Unknown Document",
+                    "confidence": "low",
                     "ocr_required": ocr_required,
                     "text_source": text_source,
                     "extracted_text": doc_res.full_text[:500] if doc_res.full_text else "",
+                    "evidence": classification.get("evidence", []),
                 },
             )
+
+        meta = DOC_TYPE_METADATA.get(resolved_type, {})
+        detected_doc_title = classification.get("document_type") or meta.get("name") or (
+            resolved_type.replace("_", " ").title() if resolved_type != "unknown" else "Unknown Document"
+        )
+        detected_issuer = classification.get("issuer") or meta.get("issuer")
 
         # 4. Processing for supported document
         first_page_img: Optional[Image.Image] = None
@@ -1299,6 +1342,16 @@ async def process_offline_mode_endpoint(
                 except Exception:
                     pass
             sanitized_fields, field_confs = sanitize_extracted_fields(resolved_type, raw_fields, field_confs)
+
+            # Context-specific issuer detection
+            if resolved_type == "bank_statement" and sanitized_fields.get("bank_name"):
+                detected_issuer = sanitized_fields["bank_name"]
+            elif resolved_type == "salary_slip" and sanitized_fields.get("employer_name"):
+                detected_issuer = sanitized_fields["employer_name"]
+            elif resolved_type == "utility_bill" and sanitized_fields.get("utility_provider"):
+                detected_issuer = sanitized_fields["utility_provider"]
+            elif resolved_type == "income_certificate" and sanitized_fields.get("issuing_authority"):
+                detected_issuer = sanitized_fields["issuing_authority"]
         except Exception as ex:
             checksum_valid = False
             checksum_reason = f"Extraction error: {str(ex)}"
@@ -1313,6 +1366,10 @@ async def process_offline_mode_endpoint(
 
         result_payload = {
             "doc_type": resolved_type,
+            "document_type": detected_doc_title,
+            "issuer": detected_issuer,
+            "classification": classification,
+            "evidence": classification.get("evidence", []),
             "ocr_required": ocr_required,
             "text_source": text_source,
             "status": doc_status,

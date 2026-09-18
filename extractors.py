@@ -239,41 +239,92 @@ def extract_pan(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dict[str, f
     fields: Dict[str, Any] = {}
     confidences: Dict[str, float] = {}
 
-    # PAN Number pattern: 5 letters, 4 digits, 1 letter
-    pan_match = re.search(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b", text)
+    # PAN Number pattern: 5 letters, 4 digits, 1 letter (handle possible OCR space/typo)
+    pan_match = re.search(r"\b([A-Z]{5}\s*[0-9]{4}\s*[A-Z])\b", text)
     if pan_match:
-        fields["pan_number"] = pan_match.group(1)
+        pan_clean = re.sub(r"\s+", "", pan_match.group(1).upper())
+        fields["pan_number"] = pan_clean
         confidences["pan_number"] = find_line_confidence(pan_match.group(1), all_lines)
 
-    # DOB pattern: DD/MM/YYYY
-    dob_match = re.search(r"\b(\d{2}[/\-\.]\d{2}[/\-\.]\d{4})\b", text)
-    if dob_match:
-        fields["dob"] = dob_match.group(1).replace("-", "/").replace(".", "/")
-        confidences["dob"] = find_line_confidence(r"\b\d{2}[/\-\.]\d{2}[/\-\.]\d{4}\b", all_lines)
-
-    # Name extraction
-    name_match = re.search(
-        r"(?:Name|NAME)[\s:]*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Father|DOB|Date|Permanent|PAN|Purpose)\b))",
+    # DOB pattern: DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+    dob_match = re.search(
+        r"(?:(?:Date\s*of\s*Birth|DOB|जन्म\s*(?:की\s*)?तारीख)[\s:]*)?(\b\d{2}[/\-\.]\d{2}[/\-\.]\d{4}\b)",
         text,
         re.IGNORECASE,
     )
-    if name_match:
-        cand = clean_field_value(name_match.group(1))
-        if not re.search(r"^(?:Father|DOB|Date|Permanent|PAN|Purpose|Demo Value|Field)\b", cand, re.I):
-            fields["name"] = cand
-            confidences["name"] = find_line_confidence(fields["name"], all_lines)
+    if dob_match:
+        raw_dob = dob_match.group(1) if dob_match.lastindex else dob_match.group(0)
+        fields["dob"] = raw_dob.replace("-", "/").replace(".", "/")
+        confidences["dob"] = find_line_confidence(r"\b\d{2}[/\-\.]\d{2}[/\-\.]\d{4}\b", all_lines)
 
-    # Father's Name
+    # Father's Name with label (same line or next line(s), English or Devanagari)
     father_match = re.search(
-        r"(?:Father['’]?s?\s*Name)[\s:]*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Purpose|DOB|Date|Name|Permanent|PAN)\b))",
+        r"(?:Father['’]?s?\s*Name|पिता\s*का\s*नाम)[\s:\/\u0900-\u097F]*(?:\r?\n\s*)*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Purpose|DOB|Date|Name|Permanent|PAN|जन्म)\b))",
         text,
         re.IGNORECASE,
     )
     if father_match:
         cand = clean_field_value(father_match.group(1))
-        if not re.search(r"^(?:Purpose|DOB|Date|Name|Permanent|PAN)\b", cand, re.I):
+        if not re.search(r"^(?:Purpose|DOB|Date|Name|Permanent|PAN|जन्म)\b", cand, re.I):
             fields["father_name"] = cand
             confidences["father_name"] = find_line_confidence(fields["father_name"], all_lines)
+
+    # Name with label (same line or next line(s), English or Devanagari)
+    name_match = re.search(
+        r"(?:Name|NAME|नाम)[\s:\/\u0900-\u097F]*(?:\r?\n\s*)*([A-Za-z][A-Za-z \t.'-]{1,35}?)(?=[ \t]*(?:\r?\n|$|(?:\b|(?<=[a-z0-9A-Z]))(?:Father|DOB|Date|Permanent|PAN|Purpose|पिता|जन्म)\b))",
+        text,
+        re.IGNORECASE,
+    )
+    if name_match:
+        cand = clean_field_value(name_match.group(1))
+        if not re.search(r"^(?:Father|DOB|Date|Permanent|PAN|Purpose|पिता|जन्म)\b", cand, re.I):
+            fields["name"] = cand
+            confidences["name"] = find_line_confidence(fields["name"], all_lines)
+
+    # Positional fallback for unlabeled PAN card images (common in WhatsApp photos and physical scans)
+    # Header lines contain statutory department names; cardholder name and father name follow sequentially
+    if not fields.get("name") or not fields.get("father_name"):
+        non_empty_lines = [l.text.strip() for l in all_lines if l.text and l.text.strip()]
+        if not non_empty_lines and text:
+            non_empty_lines = [l.strip() for l in text.splitlines() if l.strip()]
+
+        statutory_tokens = {
+            "INCOME", "TAX", "DEPARTMENT", "GOVT", "INDIA", "PERMANENT", "ACCOUNT",
+            "NUMBER", "CARD", "SIGNATURE", "FATHER", "FATHER'S", "NAME", "DOB",
+            "DATE", "BIRTH", "आयकर", "विभाग", "भारत", "सरकार", "हस्ताक्षर", "नाम", "पिता",
+            "FIELD", "VALUE", "TEST", "SAMPLE", "PURPOSE", "WORKFLOW", "TESTING", "DOCUMENT",
+        }
+
+        candidate_names: List[Tuple[str, float]] = []
+        for line_obj in all_lines:
+            line_str = line_obj.text.strip()
+            # Ignore lines with digits (DOB, PAN)
+            if re.search(r"\d", line_str):
+                continue
+            compact_upper = re.sub(r"[^A-Za-z]", "", line_str).upper()
+            if any(k in compact_upper for k in ("INCOMETAX", "TAXDEPARTMENT", "GOVTOFINDIA", "GOVERNMENTOFINDIA", "PERMANENTACCOUNT", "ACCOUNTNUMBER", "DEPARTMENT")):
+                continue
+            words = [w.strip() for w in re.split(r"[\s\.,:\-]+", line_str) if w.strip()]
+            if not words or len(words) > 5:
+                continue
+            # Check if line consists mostly of statutory keywords
+            upper_words = [w.upper() for w in words]
+            if any(w in statutory_tokens for w in upper_words):
+                continue
+            # Must look like a name (letters, spaces, dots, hyphens, min 3 chars)
+            if re.match(r"^[A-Za-z][A-Za-z\s.'-]{2,35}$", line_str):
+                cleaned_cand = clean_field_value(line_str)
+                if len(cleaned_cand) >= 3 and not re.search(r"\b(DEPARTMENT|INDIA|INCOME|TAX|CARD|SIGNATURE|VALUE|TEST|SAMPLE|FIELD|PURPOSE)\b", cleaned_cand, re.I):
+                    candidate_names.append((cleaned_cand, line_obj.confidence))
+
+        if candidate_names:
+            if not fields.get("name"):
+                fields["name"] = candidate_names[0][0]
+                confidences["name"] = round(candidate_names[0][1], 4)
+            if not fields.get("father_name") and len(candidate_names) > 1:
+                # Second candidate name before DOB is Father's Name
+                fields["father_name"] = candidate_names[1][0]
+                confidences["father_name"] = round(candidate_names[1][1], 4)
 
     cleaned_fields = {k: clean_field_value(v) for k, v in fields.items()}
     return cleaned_fields, confidences
@@ -770,7 +821,9 @@ def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
     if acc_match:
         raw_acc = acc_match.group(1)
         fields["account_number_masked"] = mask_account_number(raw_acc)
+        fields["account_number"] = fields["account_number_masked"]
         confidences["account_number_masked"] = find_line_confidence(raw_acc, all_lines)
+        confidences["account_number"] = confidences["account_number_masked"]
 
     # 2. Bank Name
     bank_match = re.search(
@@ -784,8 +837,65 @@ def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
         if cand_bank:
             fields["bank_name"] = clean_field_value(cand_bank)
             confidences["bank_name"] = find_line_confidence(cand_bank, all_lines)
+    else:
+        # Check for major Indian banks if explicit pattern didn't capture full name
+        common_banks = [
+            ("STATE BANK OF INDIA", "State Bank of India"),
+            ("HDFC BANK", "HDFC Bank"),
+            ("ICICI BANK", "ICICI Bank"),
+            ("AXIS BANK", "Axis Bank"),
+            ("KOTAK MAHINDRA BANK", "Kotak Mahindra Bank"),
+            ("PUNJAB NATIONAL BANK", "Punjab National Bank"),
+            ("BANK OF BARODA", "Bank of Baroda"),
+            ("CANARA BANK", "Canara Bank"),
+            ("UNION BANK OF INDIA", "Union Bank of India"),
+            ("INDIAN BANK", "Indian Bank"),
+            ("IDBI BANK", "IDBI Bank"),
+            ("INDUSIND BANK", "IndusInd Bank"),
+            ("YES BANK", "Yes Bank"),
+            ("FEDERAL BANK", "Federal Bank"),
+        ]
+        upper_text = full_text.upper()
+        for b_pat, b_disp in common_banks:
+            if b_pat in upper_text:
+                fields["bank_name"] = b_disp
+                confidences["bank_name"] = 0.95
+                break
 
-    # 3. Statement Period (supports numeric and alphanumeric month ranges e.g. '28-Mar-2026 to 27-Apr-2026' or '( From : 30/07/2025 To : 30/07/2026 )')
+    # 3. Account Holder Name
+    holder_match = re.search(
+        r"(?:Account\s*Holder(?:\s*Name)?|Customer\s*Name|Name\s*of\s*(?:the\s*)?Account\s*Holder|खातेदाराचे\s*नाव|खाताधारक\s*का\s*नाम|Account\s*Name)[\s:]*([A-Za-z][A-Za-z\s.'-]{2,40}?)(?=[ \t]*(?:\r?\n|$|Account\s*No|A/C|Address|Joint|Customer\s*ID|CIF|Nominee|IFSC|Branch))",
+        full_text,
+        re.IGNORECASE,
+    )
+    if not holder_match:
+        holder_match = re.search(
+            r"(?:(?:Mr\.|Mrs\.|Ms\.|Shri|Smt\.)\s+([A-Za-z][A-Za-z\s.'-]{2,40}?))(?=[ \t]*(?:\r?\n|$|Account|A/C|Address|Branch|IFSC))",
+            full_text,
+            re.IGNORECASE,
+        )
+    if holder_match:
+        cand_holder = clean_field_value(holder_match.group(1))
+        if cand_holder and not re.search(r"\b(Statement|Account|Balance|Branch|Bank|Customer|Number)\b", cand_holder, re.I):
+            fields["account_holder"] = cand_holder
+            fields["account_holder_name"] = cand_holder
+            confidences["account_holder"] = find_line_confidence(cand_holder, all_lines)
+            confidences["account_holder_name"] = confidences["account_holder"]
+
+    # 4. IFSC Code
+    ifsc_match = re.search(
+        r"(?:IFS\s*Code|IFSC(?:\s*Code)?|RTGS/NEFT/IFSC)[\s:]*([A-Z]{4}0[A-Z0-9]{6})|\b([A-Z]{4}0[A-Z0-9]{6})\b",
+        full_text,
+        re.IGNORECASE,
+    )
+    if ifsc_match:
+        cand_ifsc = (ifsc_match.group(1) or ifsc_match.group(2)).strip().upper()
+        fields["ifsc"] = cand_ifsc
+        fields["ifsc_code"] = cand_ifsc
+        confidences["ifsc"] = find_line_confidence(cand_ifsc, all_lines)
+        confidences["ifsc_code"] = confidences["ifsc"]
+
+    # 5. Statement Period (supports numeric and alphanumeric month ranges e.g. '28-Mar-2026 to 27-Apr-2026' or '( From : 30/07/2025 To : 30/07/2026 )')
     period_match = re.search(
         r"(?:Transaction\s*Period|Statement\s*Period|Period)[\s:]*(?:\(\s*)?(?:From\s*[:]\s*)?([A-Za-z0-9\/\-\.]+)\s*(?:to|-|To\s*[:])\s*([A-Za-z0-9\/\-\.]+)",
         full_text,
@@ -797,7 +907,7 @@ def extract_bank_statement(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], 
             "to_date": period_match.group(2).strip(),
         }
 
-    # 4. Opening Balance
+    # 6. Opening Balance
     opening_bal: Optional[str] = None
     op_match = re.search(
         r"Opening\s*Balance[\s:]+(?:Rs\.?|INR)?\s*([\d,]+\.?\d*)",
@@ -2765,7 +2875,21 @@ EXTRACTOR_REGISTRY = {
 
 # Strict PII allowlist: fields not in allowlist are strictly stripped before leaving the service
 PII_ALLOWLIST = {
-    "bank_statement": {"bank_name", "account_number_masked", "statement_period", "opening_balance", "closing_balance", "transactions"},
+    "bank_statement": {
+        "bank_name",
+        "account_number",
+        "account_number_masked",
+        "account_holder",
+        "account_holder_name",
+        "account_holder_masked",
+        "account_holder_name_masked",
+        "ifsc",
+        "ifsc_code",
+        "statement_period",
+        "opening_balance",
+        "closing_balance",
+        "transactions",
+    },
     "salary_slip": {"employer_name", "employee_name_masked", "net_pay", "pay_period"},
     "utility_bill": {"utility_provider", "consumer_number", "bill_date", "due_date", "bill_amount"},
     "rent_agreement": {"lessor_name_masked", "lessee_name_masked", "property_address_masked", "monthly_rent", "agreement_start_date", "agreement_end_date"},

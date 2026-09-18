@@ -98,9 +98,10 @@ def save_document(
     status = result_data.get("status", "completed")
     if status in ("error", "failed"):
         human_doc_type = "OCR Error" if status == "error" else "Processing Failed"
+    elif result_data.get("document_type"):
+        human_doc_type = result_data["document_type"]
     else:
         human_doc_type = doc_type_clean.replace("_", " ").title() if doc_type_clean != "unknown" else "Unknown Document"
-
 
     doc_record = {
         "id": doc_id,
@@ -110,6 +111,7 @@ def save_document(
         "file_type": ext,
         "doc_type": doc_type_clean,
         "document_type": human_doc_type,
+        "issuer": result_data.get("issuer"),
         "ocr_required": result_data.get("ocr_required", True),
         "text_source": result_data.get("text_source", "paddle_ocr"),
         "status": result_data.get("status", "completed"),

@@ -38,6 +38,8 @@ export interface DocumentItem {
   file_type: string;
   doc_type: string;
   document_type: string;
+  issuer?: string | null;
+  evidence?: string[];
   ocr_required: boolean;
   text_source: TextSource;
   status: DocumentStatus;

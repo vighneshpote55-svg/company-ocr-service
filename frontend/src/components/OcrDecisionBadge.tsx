@@ -18,6 +18,57 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
       ? 'PaddleOCR'
       : engineInfo?.display_name || 'OCR Engine';
 
+  // Resolve actual detected document type name
+  const docTypeTitle =
+    document.document_type &&
+    document.document_type !== 'Unsupported Document' &&
+    document.document_type !== 'Ai Analyzed' &&
+    document.document_type !== 'Unknown Document'
+      ? document.document_type
+      : document.doc_type &&
+        document.doc_type !== 'unknown' &&
+        document.doc_type !== 'ai_analyzed'
+      ? document.doc_type
+          .replace(/_/g, ' ')
+          .replace(/\b\w/g, (l) => l.toUpperCase())
+      : 'Scanned Document';
+
+  // Resolve issuing authority or bank name when available
+  const fields = document.extracted_fields || document.fields || {};
+  const issuer =
+    document.issuer ||
+    fields.bank_name ||
+    fields.employer_name ||
+    fields.utility_provider ||
+    fields.issuing_authority ||
+    (document.doc_type === 'pan' ? 'Income Tax Department' : null) ||
+    (document.doc_type === 'aadhaar' ? 'UIDAI' : null) ||
+    (document.doc_type === 'passport' ? 'Republic of India' : null);
+
+  const displayTitle =
+    docTypeTitle !== 'Scanned Document'
+      ? issuer
+        ? `${docTypeTitle} • ${issuer}`
+        : docTypeTitle
+      : null;
+
+  const bannerTitle = isError
+    ? '❌ OCR Extraction Failed — Document Unreadable'
+    : displayTitle
+    ? isBypassed
+      ? `⚡ ${displayTitle} — Text Layer Detected`
+      : `🔍 ${displayTitle} — ${engineName} Executed`
+    : isBypassed
+    ? '⚡ Text Layer Detected — OCR Pass Bypassed'
+    : `🔍 Scanned Document — ${engineName} Executed`;
+
+  const bannerDesc = isError
+    ? (document.reason ||
+        'The engine returned empty text or zero confidence. Please ensure the document is clear, correctly rotated, and high contrast.')
+    : isBypassed
+    ? 'PDF contains a clean digital text layer (≥ 50 characters). Extracted directly with zero character distortion.'
+    : `Raster image or scanned document processed via ${engineName} neural OCR pass with line confidence scoring.`;
+
   return (
     <div
       className={`ocr-decision-banner ${
@@ -53,18 +104,10 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
               color: isError ? '#ef4444' : isBypassed ? '#34d399' : '#a5b4fc',
             }}
           >
-            {isError
-              ? '❌ OCR Extraction Failed — Document Unreadable'
-              : isBypassed
-              ? '⚡ Text Layer Detected — OCR Pass Bypassed'
-              : `🔍 Scanned Document — ${engineName} Executed`}
+            {bannerTitle}
           </div>
           <div className="decision-desc">
-            {isError
-              ? (document.reason || 'The engine returned empty text or zero confidence. Please ensure the document is clear, correctly rotated, and high contrast.')
-              : isBypassed
-              ? 'PDF contains a clean digital text layer (≥ 50 characters). Extracted directly via Poppler pdftotext with zero character distortion.'
-              : `Raster image or scanned document without embedded text (< 50 characters). Deep learning OCR pass executed via ${engineName} with line confidence scoring.`}
+            {bannerDesc}
           </div>
         </div>
       </div>

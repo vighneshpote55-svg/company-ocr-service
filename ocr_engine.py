@@ -458,11 +458,43 @@ def merge_ocr_lines(lines_en: List[OCRLine], lines_dev: List[OCRLine]) -> List[O
 
 
 
-def extract_text_from_pdf_pdftotext(pdf_path: str) -> List[str]:
-    """Extract text page-by-page using pdftotext utility if available."""
-    pages_text = []
+def extract_text_from_pdf(pdf_path: str) -> List[str]:
+    """
+    Multi-tiered PDF text layer extraction:
+    1. PyMuPDF (fitz) - high accuracy, fast, layout-preserving
+    2. pypdf - pure Python fallback
+    3. pdftotext CLI utility - fallback if installed on host system
+    """
+    pages_text: List[str] = []
+
+    # Tier 1: PyMuPDF (fitz)
     try:
-        # Check number of pages or extract with form feed separator
+        import fitz
+        doc = fitz.open(pdf_path)
+        for page in doc:
+            txt = page.get_text("text")
+            if txt and txt.strip():
+                pages_text.append(txt.strip())
+        if pages_text:
+            return pages_text
+    except Exception as ex:
+        logger.debug("PyMuPDF text extraction failed: %s", ex)
+
+    # Tier 2: pypdf
+    try:
+        import pypdf
+        reader = pypdf.PdfReader(pdf_path)
+        for page in reader.pages:
+            txt = page.extract_text() or ""
+            if txt.strip():
+                pages_text.append(txt.strip())
+        if pages_text:
+            return pages_text
+    except Exception as ex:
+        logger.debug("pypdf text extraction failed: %s", ex)
+
+    # Tier 3: Poppler pdftotext CLI
+    try:
         result = subprocess.run(
             ["pdftotext", "-layout", pdf_path, "-"],
             stdout=subprocess.PIPE,
@@ -471,14 +503,19 @@ def extract_text_from_pdf_pdftotext(pdf_path: str) -> List[str]:
             check=True,
         )
         raw_output = result.stdout
-        # Form feed (\x0c) separates pages in pdftotext
         pages = raw_output.split("\x0c")
         pages_text = [p.strip() for p in pages if p.strip()]
         if not pages_text and raw_output.strip():
             pages_text = [raw_output.strip()]
     except Exception:
         pass
+
     return pages_text
+
+
+def extract_text_from_pdf_pdftotext(pdf_path: str) -> List[str]:
+    """Backward-compatible alias for PDF text layer extraction."""
+    return extract_text_from_pdf(pdf_path)
 
 
 def parse_text_into_ocr_lines(text: str, default_conf: float = 0.96) -> List[OCRLine]:
@@ -495,7 +532,7 @@ def parse_text_into_ocr_lines(text: str, default_conf: float = 0.96) -> List[OCR
 def check_pdf_text_layer(pdf_path_or_bytes: Union[str, bytes], min_char_threshold: int = 50) -> Tuple[bool, str, List[str]]:
     """
     Determines if a PDF has an existing text layer.
-    Extracts text using pdftotext.
+    Extracts text using PyMuPDF / pypdf / pdftotext.
     Returns:
         (has_text_layer: bool, full_text: str, pages_text: List[str])
     If len(full_text.strip()) >= min_char_threshold (default 50 chars),
@@ -511,7 +548,7 @@ def check_pdf_text_layer(pdf_path_or_bytes: Union[str, bytes], min_char_threshol
         else:
             path_to_read = pdf_path_or_bytes
 
-        pages_text = extract_text_from_pdf_pdftotext(path_to_read)
+        pages_text = extract_text_from_pdf(path_to_read)
         full_text = "\n\n".join(pages_text).strip()
         has_text_layer = len(full_text) >= min_char_threshold
         return has_text_layer, full_text, pages_text
@@ -523,12 +560,29 @@ def check_pdf_text_layer(pdf_path_or_bytes: Union[str, bytes], min_char_threshol
                 pass
 
 
-def render_pdf_pages_to_images(pdf_path: str, dpi: int = 150) -> List[Image.Image]:
+def render_pdf_pages_to_images(pdf_path: str, dpi: int = 150, max_pages: Optional[int] = None) -> List[Image.Image]:
     """
-    Render all pages of a PDF to PIL Images using Poppler's pdftoppm.
-    Falls back to PyMuPDF (fitz) if available.
+    Render all pages of a PDF to PIL Images.
+    Uses PyMuPDF (fitz) primarily, falling back to Poppler's pdftoppm.
     """
-    images = []
+    images: List[Image.Image] = []
+
+    # Tier 1: PyMuPDF (fitz) - in-memory rendering, no temporary files or external binaries
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        pages_to_render = range(len(doc)) if max_pages is None else range(min(len(doc), max_pages))
+        for p_idx in pages_to_render:
+            page = doc[p_idx]
+            pix = page.get_pixmap(dpi=dpi)
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            images.append(img)
+        if images:
+            return images
+    except Exception as ex:
+        logger.debug("PyMuPDF page rendering failed: %s", ex)
+
+    # Tier 2: Poppler pdftoppm
     with tempfile.TemporaryDirectory() as tmp_dir:
         out_prefix = os.path.join(tmp_dir, "page")
         cmd = ["pdftoppm", "-png", "-r", str(dpi), pdf_path, out_prefix]
@@ -544,17 +598,6 @@ def render_pdf_pages_to_images(pdf_path: str, dpi: int = 150) -> List[Image.Imag
         except Exception:
             pass
 
-    if not images:
-        try:
-            import fitz
-            doc = fitz.open(pdf_path)
-            for page in doc:
-                pix = page.get_pixmap(dpi=dpi)
-                img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
-                images.append(img)
-        except Exception:
-            pass
-
     return images
 
 
@@ -564,6 +607,25 @@ def render_thumbnail(file_path_or_bytes: Union[str, bytes], is_pdf: bool = False
     """
     try:
         if is_pdf:
+            # Tier 1: PyMuPDF (fitz)
+            try:
+                import fitz
+                if isinstance(file_path_or_bytes, bytes):
+                    doc = fitz.open(stream=file_path_or_bytes, filetype="pdf")
+                else:
+                    doc = fitz.open(file_path_or_bytes)
+                if len(doc) > 0:
+                    page = doc[0]
+                    pix = page.get_pixmap(dpi=100)
+                    img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+                    img.thumbnail(max_size, Image.Resampling.LANCZOS)
+                    buf = io.BytesIO()
+                    img.convert("RGB").save(buf, format="PNG", optimize=True)
+                    return buf.getvalue()
+            except Exception as ex:
+                logger.debug("PyMuPDF thumbnail rendering failed: %s", ex)
+
+            # Tier 2: pdftoppm CLI
             tmp_pdf = None
             try:
                 if isinstance(file_path_or_bytes, bytes):

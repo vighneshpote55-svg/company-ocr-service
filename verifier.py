@@ -419,33 +419,217 @@ DOC_SIGNATURES = {
 
 
 
+# Metadata mapping for all 22 supported document types: canonical ID -> display name & issuing authority
+DOC_TYPE_METADATA: Dict[str, Dict[str, Optional[str]]] = {
+    "pan": {"name": "PAN Card", "issuer": "Income Tax Department"},
+    "aadhaar": {"name": "Aadhaar Card", "issuer": "UIDAI"},
+    "cancelled_cheque": {"name": "Cancelled Cheque", "issuer": "Bank"},
+    "bank_statement": {"name": "Bank Statement", "issuer": "Bank"},
+    "salary_slip": {"name": "Salary Slip", "issuer": "Employer"},
+    "utility_bill": {"name": "Utility Bill", "issuer": "Utility Provider"},
+    "udyam": {"name": "Udyam Certificate", "issuer": "Ministry of MSME"},
+    "fssai": {"name": "FSSAI License", "issuer": "Food Safety and Standards Authority of India"},
+    "shop_establishment": {"name": "Shop & Establishment", "issuer": "Labour Department"},
+    "passport": {"name": "Passport", "issuer": "Republic of India"},
+    "voter_id": {"name": "Voter ID", "issuer": "Election Commission of India"},
+    "driving_licence": {"name": "Driving Licence", "issuer": "Transport Department"},
+    "itr": {"name": "ITR Ack", "issuer": "Income Tax Department"},
+    "gst_certificate": {"name": "GST Certificate", "issuer": "Government of India - GST"},
+    "certificate_of_incorporation": {"name": "Certificate of Incorporation", "issuer": "Ministry of Corporate Affairs"},
+    "partnership_deed": {"name": "Partnership Deed", "issuer": "Registrar of Firms"},
+    "rent_agreement": {"name": "Rent Agreement", "issuer": "Landlord / Lessor"},
+    "form_16": {"name": "Form 16", "issuer": "Income Tax Department"},
+    "bank_passbook": {"name": "Bank Passbook", "issuer": "Bank"},
+    "property_tax_receipt": {"name": "Property Tax Receipt", "issuer": "Municipal Corporation"},
+    "iec_certificate": {"name": "IEC Certificate", "issuer": "Directorate General of Foreign Trade"},
+    "income_certificate": {"name": "Income Certificate", "issuer": "Revenue Department / Tahsildar"},
+}
+
+
+def normalize_ocr_text(text: str) -> str:
+    """
+    Normalizes OCR artifacts, compressed/merged words, punctuation issues,
+    Devanagari numerals, and regional script anomalies without altering the underlying OCR engine.
+    """
+    if not text:
+        return ""
+
+    import unicodedata
+    # 1. Normalize unicode (NFKC)
+    norm = unicodedata.normalize("NFKC", text)
+
+    # 2. Replace zero-width spaces, special quotes and dashes
+    norm = norm.replace("\u200b", "").replace("\ufeff", "")
+    norm = norm.replace("“", '"').replace("”", '"').replace("‘", "'").replace("’", "'")
+    norm = norm.replace("—", " - ").replace("–", " - ")
+
+    # 3. Convert Devanagari numerals (०-९) to ASCII digits (0-9)
+    devanagari_digits = "०१२३४५६७८९"
+    trans = str.maketrans({char: str(i) for i, char in enumerate(devanagari_digits)})
+    norm = norm.translate(trans)
+
+    # 4. Insert spaces between punctuation and words where OCR merged them
+    norm = re.sub(r"(?<=[A-Za-z])\.(?=[A-Za-z]{2,})", ". ", norm)
+    norm = re.sub(r"(?<=[A-Za-z]):(?=[A-Za-z0-9])", ": ", norm)
+
+    # 5. Expand common unspaced uppercase OCR concatenated words
+    MERGED_REPLACEMENTS = [
+        (r"\bINCOMETAXDEPARTMENT\b", "INCOME TAX DEPARTMENT"),
+        (r"\bINCOMETAX\b", "INCOME TAX"),
+        (r"\bGOVT\.?OFINDIA\b", "GOVT. OF INDIA"),
+        (r"\bGOVTOFINDIA\b", "GOVT. OF INDIA"),
+        (r"\bPERMANENTACCOUNTNUMBER\b", "PERMANENT ACCOUNT NUMBER"),
+        (r"\bUNIQUEIDENTIFICATIONAUTHORITYOFINDIA\b", "UNIQUE IDENTIFICATION AUTHORITY OF INDIA"),
+        (r"\bELECTIONCOMMISSIONOFINDIA\b", "ELECTION COMMISSION OF INDIA"),
+        (r"\bACCOUNTSTATEMENT\b", "ACCOUNT STATEMENT"),
+        (r"\bSTATEMENTOFACCOUNT\b", "STATEMENT OF ACCOUNT"),
+        (r"\bCLOSINGBALANCE\b", "CLOSING BALANCE"),
+        (r"\bOPENINGBALANCE\b", "OPENING BALANCE"),
+        (r"\bTRANSACTIONDETAILS\b", "TRANSACTION DETAILS"),
+        (r"\bSALARYSLIP\b", "SALARY SLIP"),
+        (r"\bUTILITYBILL\b", "UTILITY BILL"),
+        (r"\bELECTRICITYBILL\b", "ELECTRICITY BILL"),
+        (r"\bWATERBILL\b", "WATER BILL"),
+        (r"\bGOODSANDSERVICESTAX\b", "GOODS AND SERVICES TAX"),
+        (r"\bCERTIFICATEOFINCORPORATION\b", "CERTIFICATE OF INCORPORATION"),
+        (r"\bPARTNERSHIPDEED\b", "PARTNERSHIP DEED"),
+        (r"\bRENTAGREEMENT\b", "RENT AGREEMENT"),
+        (r"\bBANKPASSBOOK\b", "BANK PASSBOOK"),
+        (r"\bPROPERTYTAXRECEIPT\b", "PROPERTY TAX RECEIPT"),
+        (r"\bIMPORTEXPORTCODE\b", "IMPORT EXPORT CODE"),
+        (r"\bINCOMECERTIFICATE\b", "INCOME CERTIFICATE"),
+        (r"\bFOODSAFETYANDSTANDARDS\b", "FOOD SAFETY AND STANDARDS"),
+        (r"\bFATHER['’]?SNAME\b", "FATHER'S NAME"),
+        (r"\bDATEOFBIRTH\b", "DATE OF BIRTH"),
+        (r"\bACCOUNTHOLDER\b", "ACCOUNT HOLDER"),
+        (r"\bACCOUNTNUMBER\b", "ACCOUNT NUMBER"),
+        (r"\bIFSCODE\b", "IFSC CODE"),
+        (r"\bREPUBLICOFINDIA\b", "REPUBLIC OF INDIA"),
+        # Regional common OCR artifacts
+        (r"महािवतरण", "महावितरण"),
+        (r"उलपञाचे\s*पमाणपऋ", "उत्पन्नाचे प्रमाणपत्र"),
+        (r"अमािणतकरणयात|अमाणतकरणयात", "प्रमाणित करण्यात येते"),
+        (r"आ\s*थापनेचे", "आस्थापनेचे"),
+    ]
+    for pat, rep in MERGED_REPLACEMENTS:
+        norm = re.sub(pat, rep, norm, flags=re.IGNORECASE)
+
+    return norm
+
+
+def classify_document_content(
+    text: str,
+    min_score: int = 2,
+    min_margin: int = 1,
+) -> Dict[str, Any]:
+    """
+    Shared content classifier for Offline Mode.
+    Never classifies using filename, metadata, first OCR line, or fallback names.
+    Uses normalized OCR/PDF text, layout signatures, and existing regexes.
+    Returns:
+    {
+      "doc_type": "...",
+      "document_type": "...",
+      "confidence": "high|medium|low",
+      "evidence": ["...", "..."],
+      "issuer": "..."
+    }
+    """
+    norm_text = normalize_ocr_text(text)
+    norm_upper = norm_text.upper()
+
+    scores: Dict[str, int] = {}
+    evidence_map: Dict[str, List[str]] = {}
+
+    for doc_type, patterns in DOC_SIGNATURES.items():
+        matched_ev: List[str] = []
+        for p in patterns:
+            m = re.search(p, norm_upper)
+            if m:
+                matched_ev.append(m.group(0).strip())
+        if matched_ev:
+            scores[doc_type] = len(matched_ev)
+            evidence_map[doc_type] = matched_ev
+
+    if not scores:
+        return {
+            "doc_type": "unknown",
+            "document_type": "Unknown Document",
+            "confidence": "low",
+            "evidence": [],
+            "issuer": None,
+        }
+
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    top_type, top_score = sorted_scores[0]
+    top_evidence = evidence_map.get(top_type, [])
+
+    # Check margin
+    has_margin = True
+    if len(sorted_scores) > 1:
+        second_type, second_score = sorted_scores[1]
+        if (top_score - second_score) < min_margin:
+            has_margin = False
+
+    meta = DOC_TYPE_METADATA.get(
+        top_type,
+        {"name": top_type.replace("_", " ").title(), "issuer": None},
+    )
+
+    if top_score >= min_score and has_margin:
+        conf_level = "high" if top_score >= 3 else "medium"
+        if top_type == "pan" and any(re.search(r"^[A-Z]{5}[0-9]{4}[A-Z]$", ev) for ev in top_evidence):
+            conf_level = "high"
+        elif top_type == "gst_certificate" and any(re.search(r"^[0-9]{2}[A-Z]{5}", ev) for ev in top_evidence):
+            conf_level = "high"
+        elif top_type == "udyam" and any("UDYAM-" in ev for ev in top_evidence):
+            conf_level = "high"
+
+        return {
+            "doc_type": top_type,
+            "document_type": meta["name"],
+            "confidence": conf_level,
+            "evidence": top_evidence,
+            "issuer": meta.get("issuer"),
+        }
+
+    # If top_score is 1, check for undeniable signature
+    if top_score >= 1:
+        ev0 = top_evidence[0] if top_evidence else ""
+        if (
+            re.search(r"\bUDYAM-[A-Z]{2}-[0-9]{2}-[0-9]+\b", ev0)
+            or re.search(r"\b[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z]\b", ev0)
+            or re.search(r"FORM GST REG-06", ev0)
+            or re.search(r"FORM NO\.?\s*16\b", ev0)
+        ):
+            return {
+                "doc_type": top_type,
+                "document_type": meta["name"],
+                "confidence": "medium",
+                "evidence": top_evidence,
+                "issuer": meta.get("issuer"),
+            }
+
+    return {
+        "doc_type": "unknown",
+        "document_type": "Unknown Document",
+        "confidence": "low",
+        "evidence": top_evidence if top_score > 0 else [],
+        "issuer": None,
+    }
+
+
 def detect_document_type(ocr_text: str, min_score: int = 2, min_margin: int = 1) -> Optional[str]:
     """
     Identify the likely document type based on signature keywords.
     Requires top score >= min_score and a margin >= min_margin over the second-highest score
     to prevent single ambiguous keyword hits from falsely identifying a document type.
     """
-    ocr_upper = ocr_text.upper()
-    scores = {}
-    for doc_type, patterns in DOC_SIGNATURES.items():
-        score = sum(1 for p in patterns if re.search(p, ocr_upper))
-        if score > 0:
-            scores[doc_type] = score
+    classification = classify_document_content(ocr_text, min_score=min_score, min_margin=min_margin)
+    if classification["doc_type"] != "unknown":
+        return classification["doc_type"]
+    return None
 
-    if not scores:
-        return None
-
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-    top_type, top_score = sorted_scores[0]
-    if top_score < min_score:
-        return None
-
-    if len(sorted_scores) > 1:
-        second_type, second_score = sorted_scores[1]
-        if (top_score - second_score) < min_margin:
-            return None
-
-    return top_type
 
 
 def check_doc_type_mismatch(
