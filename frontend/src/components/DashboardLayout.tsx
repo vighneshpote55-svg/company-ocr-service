@@ -165,11 +165,14 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                     onUploadSuccess={onDocumentUploaded}
                     onError={(msg) => onNotify(msg, 'error')}
                     onSwitchToAiMode={() => onSelectMode('ai')}
+                    onRefresh={onRefresh}
                   />
                 ) : (
                   <AIModeView
                     onNotify={onNotify}
                     onSwitchToOffline={() => onSelectMode('offline')}
+                    onRefresh={onRefresh}
+                    onDocumentUploaded={onDocumentUploaded}
                   />
                 )}
               </div>

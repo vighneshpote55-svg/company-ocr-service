@@ -22,6 +22,7 @@ interface UploadCardProps {
   onUploadSuccess: (doc: DocumentItem) => void;
   onError: (msg: string) => void;
   onSwitchToAiMode?: () => void;
+  onRefresh?: () => void;
 }
 
 export const UploadCard: React.FC<UploadCardProps> = ({
@@ -29,6 +30,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
   onUploadSuccess,
   onError,
   onSwitchToAiMode,
+  onRefresh,
 }) => {
   const [dragActive, setDragActive] = useState(false);
   const [selectedType, setSelectedType] = useState<string>('auto');
@@ -126,6 +128,7 @@ export const UploadCard: React.FC<UploadCardProps> = ({
       const completedDocItem = doc as unknown as DocumentItem;
       setCompletedDoc(completedDocItem);
       setIsProcessing(false);
+      if (onRefresh) onRefresh();
     } catch (err: any) {
       setIsProcessing(false);
       setActiveFile(null);

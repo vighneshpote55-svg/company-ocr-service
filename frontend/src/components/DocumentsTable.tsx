@@ -61,14 +61,38 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
   const filteredDocs = documents.filter((doc) => {
     if (searchTerm.trim()) {
       const q = searchTerm.toLowerCase();
-      const matchName = doc.filename.toLowerCase().includes(q);
-      const matchType = (doc.document_type || doc.doc_type || '').toLowerCase().includes(q);
+      const matchName = (doc.filename || '').toLowerCase().includes(q);
+      const matchType = `${doc.document_type || ''} ${doc.doc_type || ''}`.toLowerCase().includes(q);
       const matchText = (doc.extracted_text || '').toLowerCase().includes(q);
       if (!matchName && !matchType && !matchText) return false;
     }
 
-    if (typeFilter !== 'all' && (doc.doc_type || '').toLowerCase() !== typeFilter.toLowerCase()) {
-      return false;
+    if (typeFilter !== 'all') {
+      const target = typeFilter.toLowerCase();
+      const docType = (doc.doc_type || '').toLowerCase();
+      const docTypeName = (doc.document_type || '').toLowerCase();
+      const matchingSupported = supportedTypes.find((t) => t.id.toLowerCase() === target);
+      const supportedName = (matchingSupported?.name || '').toLowerCase();
+
+      const matchesDocType = docType === target;
+      const matchesDocTypeName =
+        Boolean(supportedName) &&
+        (docTypeName === supportedName ||
+          docTypeName.includes(supportedName) ||
+          supportedName.includes(docTypeName));
+
+      const targetSlug = target.replace(/_/g, ' ');
+      const matchesSlug = docTypeName.includes(targetSlug) || targetSlug.includes(docTypeName);
+
+      // Word token overlap between filter name/slug and docTypeName
+      const targetWords = (supportedName || targetSlug).split(/\s+/).filter((w) => w.length > 2);
+      const matchesWords = targetWords.length > 0 && targetWords.every((w) => docTypeName.includes(w));
+
+      const matchesAi = target === 'ai_analyzed' && (docType === 'ai_analyzed' || doc.doc_type === 'ai_analyzed');
+
+      if (!matchesDocType && !matchesDocTypeName && !matchesSlug && !matchesWords && !matchesAi) {
+        return false;
+      }
     }
 
     if (statusFilter !== 'all') {
@@ -289,7 +313,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                         {doc.filename}
                       </div>
                       <div className="vault-doc-meta">
-                        {(doc.file_size / 1024).toFixed(1)} KB • {doc.pages} {doc.pages === 1 ? 'page' : 'pages'}
+                        {((doc.file_size || 0) / 1024).toFixed(1)} KB • {doc.pages || 1} {(doc.pages || 1) === 1 ? 'page' : 'pages'}
                       </div>
                     </td>
 
@@ -319,7 +343,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
 
                     <td>
                       <span className="vault-confidence-text">
-                        {isFailed ? '0%' : `${Math.round(doc.confidence * 100)}%`}
+                        {isFailed ? '0%' : `${Math.round((typeof doc.confidence === 'number' ? doc.confidence : 1) * 100)}%`}
                       </span>
                     </td>
 

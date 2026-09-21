@@ -96,11 +96,13 @@ export const App: React.FC = () => {
           completed: 0,
           failed: 0,
         })),
-        api.getDocuments({ limit: 100 }).catch(() => ({ items: [], total: 0 })),
+        api.getDocuments({ limit: 200 }).catch(() => ({ items: [], total: 0 })),
       ]);
 
       setStats(statsData);
-      setDocuments(docsData.items);
+      if (docsData && Array.isArray(docsData.items)) {
+        setDocuments(docsData.items);
+      }
     } catch (err: any) {
       setIsBackendConnected(false);
       addToast('Cannot connect to FastAPI OCR server. Check settings or start backend.', 'error');
@@ -139,6 +141,11 @@ export const App: React.FC = () => {
     setSelectedDoc(doc);
     setInspectTab('fields');
     addToast(`Successfully processed "${doc.filename}"!`, 'success');
+    // Ensure new upload does not replace previous vault records with only the newest document
+    setDocuments((prev) => {
+      const exists = prev.some((d) => d.id === doc.id);
+      return exists ? prev : [doc, ...prev];
+    });
     loadData();
   };
 
@@ -314,11 +321,13 @@ export const App: React.FC = () => {
         onSelectMode={(mode) => {
           setAppMode(mode);
           setSelectedDoc(null);
+          loadData();
         }}
         currentTab={currentTab}
         onSelectTab={(tab) => {
           setCurrentTab(tab);
           setSelectedDoc(null);
+          loadData();
         }}
         isBackendConnected={isBackendConnected}
         isRefreshing={isRefreshing}

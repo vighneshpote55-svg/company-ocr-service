@@ -17,9 +17,16 @@ import { AIChatPanel } from './AIChatPanel';
 interface AIModeViewProps {
   onNotify: (message: string, type?: 'success' | 'error' | 'info') => void;
   onSwitchToOffline?: () => void;
+  onRefresh?: () => void;
+  onDocumentUploaded?: (doc: any) => void;
 }
 
-export const AIModeView: React.FC<AIModeViewProps> = ({ onNotify, onSwitchToOffline }) => {
+export const AIModeView: React.FC<AIModeViewProps> = ({
+  onNotify,
+  onSwitchToOffline,
+  onRefresh,
+  onDocumentUploaded,
+}) => {
   const [analyzedDoc, setAnalyzedDoc] = useState<AiAnalysisResult | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState<UploadProgress>({
@@ -102,6 +109,8 @@ export const AIModeView: React.FC<AIModeViewProps> = ({ onNotify, onSwitchToOffl
           },
         ]);
         onNotify(`Document "${result.filename}" analyzed successfully with AI!`, 'success');
+        if (onRefresh) onRefresh();
+        if (onDocumentUploaded) onDocumentUploaded(result);
       }, 400);
     } catch (err: any) {
       setIsProcessing(false);
