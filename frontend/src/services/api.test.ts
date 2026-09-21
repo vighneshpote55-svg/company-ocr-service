@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { ApiService } from './api.ts';
+import { ApiService, normalizeOpenRouterConfig } from './api.ts';
 
 test('ApiService handles authDisabled state correctly', async () => {
   const api = new ApiService();
@@ -292,6 +292,30 @@ test('API keys are NEVER persisted to localStorage or sessionStorage', () => {
     assert.notEqual(val, dummyKey);
     assert.ok(!String(k).toLowerCase().includes('ai_api_key'));
   }
+});
+
+test('normalizeOpenRouterConfig normalizes base URL, strips fragments, and sets model ID', () => {
+  const res = normalizeOpenRouterConfig(
+    'openrouter',
+    'NVIDIA: Nemotron 3 Ultra (free)',
+    'https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free#providers'
+  );
+
+  assert.equal(res.provider, 'openrouter');
+  assert.equal(res.baseUrl, 'https://openrouter.ai/api/v1');
+  assert.equal(res.model, 'nvidia/nemotron-3-ultra-550b-a55b:free');
+  assert.ok(!res.baseUrl.includes('#providers'));
+});
+
+test('normalizeOpenRouterConfig extracts model from openrouter webpage URL', () => {
+  const res = normalizeOpenRouterConfig(
+    'openrouter',
+    'https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free#providers',
+    'https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free#providers'
+  );
+
+  assert.equal(res.baseUrl, 'https://openrouter.ai/api/v1');
+  assert.equal(res.model, 'nvidia/nemotron-3-ultra-550b-a55b:free');
 });
 
 

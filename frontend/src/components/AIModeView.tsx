@@ -1,7 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   Sparkles,
-  AlertCircle,
   CheckCircle2,
   RefreshCw,
 } from 'lucide-react';
@@ -20,6 +19,8 @@ interface AIModeViewProps {
   onSwitchToOffline?: () => void;
   onRefresh?: () => void;
   onDocumentUploaded?: (doc: any) => void;
+  aiConfig?: AIProviderConfig | null;
+  onRefreshAiConfig?: () => Promise<AIProviderConfig | null | void>;
 }
 
 export const AIModeView: React.FC<AIModeViewProps> = ({
@@ -27,6 +28,8 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
   onSwitchToOffline,
   onRefresh,
   onDocumentUploaded,
+  aiConfig: propAiConfig,
+  onRefreshAiConfig,
 }) => {
   const [analyzedDoc, setAnalyzedDoc] = useState<AiAnalysisResult | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -37,33 +40,42 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
   });
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isAiThinking, setIsAiThinking] = useState(false);
-  const [aiConfig, setAiConfig] = useState<AIProviderConfig | null>(null);
+  const [aiConfig, setAiConfig] = useState<AIProviderConfig | null>(propAiConfig ?? null);
   const [isCheckingAiConfig, setIsCheckingAiConfig] = useState(false);
+
+  // Synchronize when prop changes
+  useEffect(() => {
+    if (propAiConfig) {
+      setAiConfig(propAiConfig);
+    }
+  }, [propAiConfig]);
 
   const fileInputHiddenRef = useRef<HTMLInputElement>(null);
 
   const fetchAiConfig = useCallback(async () => {
     setIsCheckingAiConfig(true);
     try {
+      if (onRefreshAiConfig) {
+        const res = await onRefreshAiConfig();
+        if (res) {
+          setAiConfig(res);
+          return;
+        }
+      }
       const cfg = await api.getAiConfig();
       setAiConfig(cfg);
-    } catch {
-      setAiConfig({
-        active_provider: 'local',
-        active_model: 'qwen2.5vl:3b',
-        mode: 'local',
-        api_key_configured: false,
-        ollama_available: false,
-        local_fallback_available: true,
-      });
+    } catch (e) {
+      console.warn('Failed to fetch AI configuration from /api/ai/config:', e);
     } finally {
       setIsCheckingAiConfig(false);
     }
-  }, []);
+  }, [onRefreshAiConfig]);
 
   useEffect(() => {
-    fetchAiConfig();
-  }, [fetchAiConfig]);
+    if (!propAiConfig) {
+      fetchAiConfig();
+    }
+  }, [fetchAiConfig, propAiConfig]);
 
   const handleFileUpload = async (file: File) => {
     const validExtensions = ['.pdf', '.png', '.jpg', '.jpeg', '.webp'];
@@ -255,7 +267,7 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
                 <div className="local-ai-status-title">
                   <strong>External AI Active</strong>
                   <span className="local-ai-model-pill" style={{ background: '#7c3aed', color: '#ffffff' }}>
-                    {aiConfig.active_provider.toUpperCase()} • {aiConfig.active_model}
+                    {aiConfig.active_provider === 'openrouter' ? 'OpenRouter' : aiConfig.active_provider.toUpperCase()} • {aiConfig.active_model}
                   </span>
                 </div>
                 <p className="local-ai-status-desc">
@@ -275,61 +287,32 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
             </button>
           </div>
         ) : (
-          aiConfig.ollama_available ? (
-            <div className="local-ai-status-banner banner-ready" data-testid="ai-provider-status-local">
-              <div className="local-ai-status-left">
-                <div className="local-ai-status-icon-wrap icon-success">
-                  <CheckCircle2 size={20} />
-                </div>
-                <div className="local-ai-status-content">
-                  <div className="local-ai-status-title">
-                    <strong>Local AI Active</strong>
-                    <span className="local-ai-model-pill">Ollama • Qwen2.5-VL 3B</span>
-                  </div>
-                  <p className="local-ai-status-desc">
-                    Ollama (Qwen2.5-VL 3B) is running locally. All AI document analysis is performed completely offline.
-                  </p>
-                </div>
+          <div className="local-ai-status-banner banner-ready" data-testid="ai-provider-status-local">
+            <div className="local-ai-status-left">
+              <div className="local-ai-status-icon-wrap icon-success">
+                <CheckCircle2 size={20} />
               </div>
-              <button
-                type="button"
-                className="btn btn-secondary local-ai-retry-btn"
-                onClick={fetchAiConfig}
-                disabled={isCheckingAiConfig}
-                title="Refresh provider status"
-              >
-                <RefreshCw size={14} className={isCheckingAiConfig ? 'spin-anim' : ''} />
-                <span>{isCheckingAiConfig ? 'Checking...' : 'Refresh'}</span>
-              </button>
-            </div>
-          ) : (
-            <div className="local-ai-status-banner banner-offline" data-testid="ai-provider-status-offline">
-              <div className="local-ai-status-left">
-                <div className="local-ai-status-icon-wrap icon-error">
-                  <AlertCircle size={20} />
+              <div className="local-ai-status-content">
+                <div className="local-ai-status-title">
+                  <strong>Local AI Active</strong>
+                  <span className="local-ai-model-pill">Ollama • qwen2.5vl:3b</span>
                 </div>
-                <div className="local-ai-status-content">
-                  <div className="local-ai-status-title">
-                    <strong>Local AI Active (Ollama Offline)</strong>
-                    <span className="local-ai-model-pill">Ollama • Qwen2.5-VL 3B</span>
-                  </div>
-                  <p className="local-ai-status-desc">
-                    Start local Ollama with Qwen2.5-VL 3B to enable local AI analysis, or configure an external provider in Settings.
-                  </p>
-                </div>
+                <p className="local-ai-status-desc">
+                  Ollama (qwen2.5vl:3b) is running locally. All AI document analysis is performed completely offline.
+                </p>
               </div>
-              <button
-                type="button"
-                className="btn btn-secondary local-ai-retry-btn"
-                onClick={fetchAiConfig}
-                disabled={isCheckingAiConfig}
-                title="Check Ollama status again"
-              >
-                <RefreshCw size={14} className={isCheckingAiConfig ? 'spin-anim' : ''} />
-                <span>{isCheckingAiConfig ? 'Checking...' : 'Retry'}</span>
-              </button>
             </div>
-          )
+            <button
+              type="button"
+              className="btn btn-secondary local-ai-retry-btn"
+              onClick={fetchAiConfig}
+              disabled={isCheckingAiConfig}
+              title="Refresh provider status"
+            >
+              <RefreshCw size={14} className={isCheckingAiConfig ? 'spin-anim' : ''} />
+              <span>{isCheckingAiConfig ? 'Checking...' : 'Refresh'}</span>
+            </button>
+          </div>
         )
       )}
 

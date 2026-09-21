@@ -7,7 +7,7 @@ import {
   Share2,
 } from 'lucide-react';
 
-import type { DocumentItem, SupportedType, DashboardStats as StatsType, EngineInfo, AppMode } from './types';
+import type { DocumentItem, SupportedType, DashboardStats as StatsType, EngineInfo, AppMode, AIProviderConfig } from './types';
 import { normalizeAiDocument } from './types';
 import { api } from './services/api';
 import { DashboardLayout } from './components/DashboardLayout';
@@ -34,6 +34,7 @@ export const App: React.FC = () => {
 
   const [supportedTypes, setSupportedTypes] = useState<SupportedType[]>([]);
   const [engineInfo, setEngineInfo] = useState<EngineInfo | null>(null);
+  const [aiConfig, setAiConfig] = useState<AIProviderConfig | null>(null);
   const [stats, setStats] = useState<StatsType>({
     total: 0,
     ocr_processed: 0,
@@ -50,6 +51,17 @@ export const App: React.FC = () => {
   const [isClearModalOpen, setIsClearModalOpen] = useState<boolean>(false);
   const [isClearingVault, setIsClearingVault] = useState<boolean>(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+
+  const refreshAiConfig = useCallback(async () => {
+    try {
+      const cfg = await api.getAiConfig();
+      setAiConfig(cfg);
+      return cfg;
+    } catch (err) {
+      console.warn('Could not load AI configuration:', err);
+      return null;
+    }
+  }, []);
 
   const addToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
     const id = String(Date.now());
@@ -70,10 +82,11 @@ export const App: React.FC = () => {
       await api.checkHealth();
       setIsBackendConnected(true);
 
-      const [authStatus, typesData, engineData] = await Promise.all([
+      const [authStatus, typesData, engineData, aiCfgData] = await Promise.all([
         api.checkAuthStatus().catch(() => ({ auth_enabled: false, auth_mode: 'disabled' })),
         api.getSupportedTypes().catch(() => []),
         api.getEngineInfo().catch(() => null),
+        api.getAiConfig().catch(() => null),
       ]);
 
       const isEnabled = Boolean(authStatus.auth_enabled);
@@ -83,6 +96,7 @@ export const App: React.FC = () => {
 
       setSupportedTypes(typesData);
       if (engineData) setEngineInfo(engineData);
+      if (aiCfgData) setAiConfig(aiCfgData);
 
       // Only fetch protected data if not gated by enabled auth
       if (isEnabled && !authed) {
@@ -333,16 +347,21 @@ export const App: React.FC = () => {
           setAppMode(mode);
           setSelectedDoc(null);
           loadData();
+          refreshAiConfig();
         }}
         currentTab={currentTab}
         onSelectTab={(tab) => {
           setCurrentTab(tab);
           setSelectedDoc(null);
           loadData();
+          refreshAiConfig();
         }}
         isBackendConnected={isBackendConnected}
         isRefreshing={isRefreshing}
-        onRefresh={loadData}
+        onRefresh={() => {
+          loadData();
+          refreshAiConfig();
+        }}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onLogout={
           authEnabled
@@ -357,6 +376,8 @@ export const App: React.FC = () => {
         supportedTypes={supportedTypes}
         stats={stats}
         documents={documents}
+        aiConfig={aiConfig}
+        onRefreshAiConfig={refreshAiConfig}
         onDocumentUploaded={handleDocumentUploaded}
         onDeleteDocument={handleDeleteDocument}
         onClearAll={() => setIsClearModalOpen(true)}
@@ -378,9 +399,12 @@ export const App: React.FC = () => {
       <SettingsModal
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
-        onSaved={() => {
+        onSaved={async () => {
           addToast('Settings saved. Refreshing data...', 'info');
-          loadData();
+          await Promise.all([
+            loadData(),
+            refreshAiConfig(),
+          ]);
         }}
       />
 

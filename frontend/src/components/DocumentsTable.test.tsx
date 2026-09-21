@@ -10,7 +10,8 @@ import { AISummaryCard } from './AISummaryCard.tsx';
 import { AIKeyFindingsCard } from './AIKeyFindingsCard.tsx';
 import { AIChatPanel } from './AIChatPanel.tsx';
 import { SettingsModal } from './SettingsModal.tsx';
-import type { DocumentItem, SupportedType } from '../types.ts';
+import { AIModeView } from './AIModeView.tsx';
+import type { DocumentItem, SupportedType, AIProviderConfig } from '../types.ts';
 import { normalizeAiDocument } from '../types.ts';
 
 const mockSupportedTypes: SupportedType[] = [
@@ -368,6 +369,54 @@ test('AI Mode Provider Status renders External active state correctly', () => {
 
   assert.ok(externalPillHtml.includes('External AI Active'), 'Should display External AI Active');
   assert.ok(externalPillHtml.includes('OPENROUTER • GOOGLE/GEMINI-2.5-FLASH'), 'Should display external provider and model');
+});
+
+test('AIModeView reflects external OpenRouter config and never shows stale Local Ollama badge', () => {
+  const openRouterConfig: AIProviderConfig = {
+    active_provider: 'openrouter',
+    active_model: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+    mode: 'external',
+    api_key_configured: true,
+    base_url: 'https://openrouter.ai/api/v1',
+    ollama_available: true, // Even if Ollama is available as fallback!
+    local_fallback_available: true,
+    fallback_on_error: false,
+  };
+
+  const html = renderToString(
+    React.createElement(AIModeView, {
+      onNotify: () => {},
+      aiConfig: openRouterConfig,
+    })
+  );
+
+  assert.ok(html.includes('External AI Active'), 'Must display External AI Active');
+  assert.ok(html.includes('OpenRouter'), 'Must display OpenRouter');
+  assert.ok(html.includes('nvidia/nemotron-3-ultra-550b-a55b:free'), 'Must display correct model ID');
+  assert.ok(!html.includes('data-testid="ai-provider-status-local"'), 'Must NOT render local provider banner');
+  assert.ok(!html.includes('Local AI Active'), 'Must NOT display Local AI Active when mode is external');
+});
+
+test('AIModeView reflects local config correctly when mode is local', () => {
+  const localConfig: AIProviderConfig = {
+    active_provider: 'local',
+    active_model: 'qwen2.5vl:3b',
+    mode: 'local',
+    api_key_configured: false,
+    ollama_available: true,
+    local_fallback_available: true,
+  };
+
+  const html = renderToString(
+    React.createElement(AIModeView, {
+      onNotify: () => {},
+      aiConfig: localConfig,
+    })
+  );
+
+  assert.ok(html.includes('Local AI Active'), 'Must display Local AI Active');
+  assert.ok(html.includes('qwen2.5vl:3b'), 'Must display qwen2.5vl:3b');
+  assert.ok(!html.includes('External AI Active'), 'Must NOT display External AI Active when mode is local');
 });
 
 

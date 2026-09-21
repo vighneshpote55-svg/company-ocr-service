@@ -16,12 +16,12 @@ import {
   Bot,
   Cpu,
 } from 'lucide-react';
-import { api } from '../services/api';
+import { api, normalizeOpenRouterConfig } from '../services/api';
 
 interface SettingsModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: () => void | Promise<void>;
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSaved }) => {
@@ -61,9 +61,11 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
         .then((aiCfg) => {
           const isExt = aiCfg.mode === 'external';
           setAiProvider(isExt ? 'external' : 'local');
-          setExternalProviderName(aiCfg.active_provider !== 'ollama' ? aiCfg.active_provider : 'openrouter');
-          setAiModel(aiCfg.active_model || (isExt ? 'google/gemini-2.5-flash' : 'qwen2.5vl:3b'));
-          setAiBaseUrl(aiCfg.base_url || '');
+          const prov = aiCfg.active_provider !== 'ollama' && aiCfg.active_provider !== 'local' ? aiCfg.active_provider : 'openrouter';
+          setExternalProviderName(prov);
+          const norm = normalizeOpenRouterConfig(prov, aiCfg.active_model, aiCfg.base_url);
+          setAiModel(norm.model || (isExt ? 'nvidia/nemotron-3-ultra-550b-a55b:free' : 'qwen2.5vl:3b'));
+          setAiBaseUrl(norm.baseUrl || (isExt ? 'https://openrouter.ai/api/v1' : ''));
           setIsAiKeyConfigured(Boolean(aiCfg.api_key_configured));
           setAiApiKey('');
           setAiTestResult(null);
@@ -136,17 +138,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     setIsTestingAi(true);
     setAiTestResult(null);
     try {
+      const norm = normalizeOpenRouterConfig(externalProviderName, aiModel, aiBaseUrl);
       const candidate = {
-        provider: aiProvider === 'local' ? 'local' : externalProviderName,
-        model: aiModel,
+        provider: aiProvider === 'local' ? 'local' : (norm.provider || externalProviderName),
+        model: aiProvider === 'local' ? 'qwen2.5vl:3b' : (norm.model || aiModel),
         api_key: aiApiKey || undefined,
-        base_url: aiBaseUrl || undefined,
+        base_url: aiProvider === 'local' ? undefined : (norm.baseUrl || aiBaseUrl || undefined),
       };
       const res = await api.testAiConnection(candidate);
       setAiTestResult({
         ok: res.success,
         message: res.message,
       });
+      if (aiProvider === 'external') {
+        if (norm.baseUrl && norm.baseUrl !== aiBaseUrl) setAiBaseUrl(norm.baseUrl);
+        if (norm.model && norm.model !== aiModel) setAiModel(norm.model);
+      }
     } catch (err: any) {
       setAiTestResult({
         ok: false,
@@ -157,7 +164,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     }
   };
 
-  const handleSave = () => {
+  const handleSave = async () => {
     api.updateConfig({
       baseUrl,
       clientId,
@@ -166,21 +173,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       apiKey: apiKey || undefined,
     });
 
-    if (aiProvider === 'local') {
-      api.updateAiConfig({
-        provider: 'local',
-        model: 'qwen2.5vl:3b',
-      }).catch(console.error);
-    } else {
-      api.updateAiConfig({
-        provider: externalProviderName,
-        model: aiModel,
-        api_key: aiApiKey || undefined,
-        base_url: aiBaseUrl || undefined,
-      }).catch(console.error);
+    try {
+      if (aiProvider === 'local') {
+        await api.updateAiConfig({
+          provider: 'local',
+          model: 'qwen2.5vl:3b',
+        });
+      } else {
+        const norm = normalizeOpenRouterConfig(externalProviderName, aiModel, aiBaseUrl);
+        await api.updateAiConfig({
+          provider: norm.provider || externalProviderName,
+          model: norm.model || aiModel,
+          api_key: aiApiKey || undefined,
+          base_url: norm.baseUrl || aiBaseUrl || undefined,
+        });
+      }
+    } catch (err: any) {
+      console.error('Failed to update AI config on backend:', err);
     }
 
-    onSaved();
+    await onSaved();
     onClose();
   };
 
@@ -424,8 +436,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                       setAiProvider(val);
                       if (val === 'local') {
                         setAiModel('qwen2.5vl:3b');
-                      } else if (!aiModel || aiModel === 'qwen2.5vl:3b') {
-                        setAiModel('google/gemini-2.5-flash');
+                      } else {
+                        if (!aiModel || aiModel === 'qwen2.5vl:3b') {
+                          setAiModel('nvidia/nemotron-3-ultra-550b-a55b:free');
+                        }
+                        if (!aiBaseUrl) {
+                          setAiBaseUrl('https://openrouter.ai/api/v1');
+                        }
                       }
                     }}
                   >
@@ -440,79 +457,160 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 </span>
               </div>
 
-              <div className="settings-field-col">
-                <label className="settings-input-label" htmlFor="ai-model-input">
-                  Model
-                </label>
-                <div className="settings-input-wrapper">
-                  <div className="settings-input-left-icon" aria-hidden="true">
-                    <Cpu size={18} />
-                  </div>
-                  <input
-                    id="ai-model-input"
-                    type="text"
-                    className="settings-input-field"
-                    value={aiModel}
-                    onChange={(e) => setAiModel(e.target.value)}
-                    disabled={aiProvider === 'local'}
-                    placeholder={aiProvider === 'local' ? 'qwen2.5vl:3b' : 'e.g. google/gemini-2.5-flash or gpt-4o-mini'}
-                  />
-                </div>
-                <span className="settings-field-hint">
-                  {aiProvider === 'local'
-                    ? 'Default vision model: qwen2.5vl:3b (mandatory local fallback).'
-                    : 'Target LLM/vision model name supported by the external provider.'}
-                </span>
-              </div>
-            </div>
-
-            {/* External Provider Credentials (Hidden when Local Ollama is selected) */}
-            {aiProvider === 'external' && (
-              <div className="settings-two-col-grid" style={{ marginTop: '16px' }}>
+              {aiProvider === 'external' ? (
                 <div className="settings-field-col">
-                  <label className="settings-input-label" htmlFor="ai-api-key-input">
-                    API Key
-                  </label>
-                  <div className="settings-input-wrapper">
-                    <div className="settings-input-left-icon" aria-hidden="true">
-                      <Key size={18} />
-                    </div>
-                    <input
-                      id="ai-api-key-input"
-                      type="password"
-                      className="settings-input-field"
-                      value={aiApiKey}
-                      onChange={(e) => setAiApiKey(e.target.value)}
-                      placeholder={isAiKeyConfigured ? '•••••••••••••••• (Configured)' : 'Enter external provider API key'}
-                    />
-                  </div>
-                  <span className="settings-field-hint">
-                    API keys are stored exclusively in backend secrets and never in browser storage.
-                  </span>
-                </div>
-
-                <div className="settings-field-col">
-                  <label className="settings-input-label" htmlFor="ai-base-url-input">
-                    Base URL (Optional)
+                  <label className="settings-input-label" htmlFor="external-provider-select">
+                    External Service
                   </label>
                   <div className="settings-input-wrapper">
                     <div className="settings-input-left-icon" aria-hidden="true">
                       <Globe size={18} />
                     </div>
+                    <select
+                      id="external-provider-select"
+                      className="settings-input-field"
+                      value={externalProviderName}
+                      onChange={(e) => {
+                        const prov = e.target.value;
+                        setExternalProviderName(prov);
+                        if (prov === 'openrouter') {
+                          setAiModel('nvidia/nemotron-3-ultra-550b-a55b:free');
+                          setAiBaseUrl('https://openrouter.ai/api/v1');
+                        } else if (prov === 'openai') {
+                          setAiModel('gpt-4o-mini');
+                          setAiBaseUrl('https://api.openai.com/v1');
+                        }
+                      }}
+                    >
+                      <option value="openrouter">OpenRouter</option>
+                      <option value="openai">OpenAI</option>
+                      <option value="custom">Custom OpenAI-Compatible</option>
+                    </select>
+                  </div>
+                  <span className="settings-field-hint">
+                    Select OpenRouter, OpenAI, or a custom API gateway.
+                  </span>
+                </div>
+              ) : (
+                <div className="settings-field-col">
+                  <label className="settings-input-label" htmlFor="ai-model-input">
+                    Model
+                  </label>
+                  <div className="settings-input-wrapper">
+                    <div className="settings-input-left-icon" aria-hidden="true">
+                      <Cpu size={18} />
+                    </div>
                     <input
-                      id="ai-base-url-input"
+                      id="ai-model-input"
                       type="text"
                       className="settings-input-field"
-                      value={aiBaseUrl}
-                      onChange={(e) => setAiBaseUrl(e.target.value)}
-                      placeholder="https://openrouter.ai/api/v1 (or https://api.openai.com/v1)"
+                      value="qwen2.5vl:3b"
+                      disabled
                     />
                   </div>
                   <span className="settings-field-hint">
-                    Custom OpenAI-compatible base URL (defaults to OpenRouter or OpenAI).
+                    Default vision model: qwen2.5vl:3b (mandatory local fallback).
                   </span>
                 </div>
-              </div>
+              )}
+            </div>
+
+            {/* External Provider Configuration */}
+            {aiProvider === 'external' && (
+              <>
+                <div className="settings-two-col-grid" style={{ marginTop: '16px' }}>
+                  <div className="settings-field-col">
+                    <label className="settings-input-label" htmlFor="ai-model-input-ext">
+                      Model ID
+                    </label>
+                    <div className="settings-input-wrapper">
+                      <div className="settings-input-left-icon" aria-hidden="true">
+                        <Cpu size={18} />
+                      </div>
+                      <input
+                        id="ai-model-input-ext"
+                        type="text"
+                        className="settings-input-field"
+                        value={aiModel}
+                        onChange={(e) => setAiModel(e.target.value)}
+                        placeholder="nvidia/nemotron-3-ultra-550b-a55b:free"
+                      />
+                    </div>
+                    <span className="settings-field-hint">
+                      Model identifier (e.g. nvidia/nemotron-3-ultra-550b-a55b:free).
+                    </span>
+                  </div>
+
+                  <div className="settings-field-col">
+                    <label className="settings-input-label" htmlFor="ai-base-url-input">
+                      Base URL
+                    </label>
+                    <div className="settings-input-wrapper">
+                      <div className="settings-input-left-icon" aria-hidden="true">
+                        <Globe size={18} />
+                      </div>
+                      <input
+                        id="ai-base-url-input"
+                        type="text"
+                        className="settings-input-field"
+                        value={aiBaseUrl}
+                        onChange={(e) => setAiBaseUrl(e.target.value)}
+                        placeholder="https://openrouter.ai/api/v1"
+                      />
+                    </div>
+                    <span className="settings-field-hint">
+                      API endpoint (e.g. https://openrouter.ai/api/v1).
+                    </span>
+                  </div>
+                </div>
+
+                <div className="settings-two-col-grid" style={{ marginTop: '16px' }}>
+                  <div className="settings-field-col">
+                    <label className="settings-input-label" htmlFor="ai-api-key-input">
+                      API Key
+                    </label>
+                    <div className="settings-input-wrapper">
+                      <div className="settings-input-left-icon" aria-hidden="true">
+                        <Key size={18} />
+                      </div>
+                      <input
+                        id="ai-api-key-input"
+                        type="password"
+                        className="settings-input-field"
+                        value={aiApiKey}
+                        onChange={(e) => setAiApiKey(e.target.value)}
+                        placeholder={isAiKeyConfigured ? '•••••••••••••••• (Configured)' : 'Enter external provider API key'}
+                      />
+                    </div>
+                    <span className="settings-field-hint">
+                      API keys are stored exclusively in backend memory and never in browser storage.
+                    </span>
+                  </div>
+                </div>
+
+                {externalProviderName === 'openrouter' && (
+                  <div
+                    style={{
+                      marginTop: '14px',
+                      padding: '12px 16px',
+                      background: '#f8fafc',
+                      borderRadius: '8px',
+                      border: '1px solid #cbd5e1',
+                      fontSize: '12.5px',
+                      lineHeight: '1.6',
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, color: '#1e293b', marginBottom: '4px' }}>
+                      OpenRouter Recommended Configuration:
+                    </div>
+                    <div style={{ color: '#475569' }}>
+                      • <strong>Provider:</strong> OpenRouter<br />
+                      • <strong>Model:</strong> <code>nvidia/nemotron-3-ultra-550b-a55b:free</code><br />
+                      • <strong>Base URL:</strong> <code>https://openrouter.ai/api/v1</code>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
 
             {/* AI Test Connection Action */}

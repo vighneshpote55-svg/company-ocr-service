@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import type { AppMode, DashboardStats as StatsType, DocumentItem, EngineInfo, SupportedType } from '../types';
+import type { AppMode, DashboardStats as StatsType, DocumentItem, EngineInfo, SupportedType, AIProviderConfig } from '../types';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import type { NavTab } from './Sidebar';
@@ -26,6 +26,9 @@ export interface DashboardLayoutProps {
   // Stats & Documents
   stats: StatsType;
   documents: DocumentItem[];
+  // AI Config & Refresh
+  aiConfig?: AIProviderConfig | null;
+  onRefreshAiConfig?: () => Promise<AIProviderConfig | null | void>;
   // Actions
   onDocumentUploaded: (doc: DocumentItem) => void;
   onDeleteDocument: (id: string) => void;
@@ -51,6 +54,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   supportedTypes,
   stats,
   documents,
+  aiConfig,
+  onRefreshAiConfig,
   onDocumentUploaded,
   onDeleteDocument,
   onClearAll,
@@ -173,6 +178,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                     onSwitchToOffline={() => onSelectMode('offline')}
                     onRefresh={onRefresh}
                     onDocumentUploaded={onDocumentUploaded}
+                    aiConfig={aiConfig}
+                    onRefreshAiConfig={onRefreshAiConfig}
                   />
                 )}
               </div>

@@ -62,6 +62,65 @@ def clean_json_response(raw_text: str) -> str:
     return text
 
 
+def normalize_openrouter_endpoint_and_model(
+    provider: Optional[str],
+    model: Optional[str],
+    base_url: Optional[str],
+) -> tuple[str, str, str]:
+    """
+    Validates and normalizes OpenRouter and external provider configuration:
+    - If provider is openrouter (or base_url is from openrouter.ai):
+      * Normalizes base_url to https://openrouter.ai/api/v1
+      * Strips fragments such as #providers
+      * Does not interpret model webpage URL as API endpoint
+      * Normalizes model ID (e.g. 'nvidia/nemotron-3-ultra-550b-a55b:free')
+    - If base_url ends with /chat/completions, strips it.
+    """
+    prov = (provider or "").lower().strip()
+    clean_model = (model or "").strip()
+    clean_url = (base_url or "").strip()
+
+    # Strip fragments like #providers
+    if "#" in clean_url:
+        clean_url = clean_url.split("#")[0].strip()
+    if "#" in clean_model:
+        clean_model = clean_model.split("#")[0].strip()
+
+    is_openrouter = prov in ("openrouter", "open_router") or "openrouter.ai" in clean_url.lower()
+
+    if is_openrouter:
+        # Check if clean_url contains a model slug or webpage path
+        if "openrouter.ai" in clean_url.lower():
+            # e.g. https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free
+            m_match = re.search(r"openrouter\.ai/(?!api/v1)([^/?#]+/[^/?#]+)", clean_url, re.IGNORECASE)
+            if m_match and (not clean_model or clean_model == DEFAULT_EXTERNAL_MODEL or "nemotron" in m_match.group(1).lower()):
+                clean_model = m_match.group(1).strip()
+
+            clean_url = DEFAULT_OPENROUTER_BASE_URL
+        elif not clean_url:
+            clean_url = DEFAULT_OPENROUTER_BASE_URL
+
+        # Check if user entered URL as model
+        if "openrouter.ai/" in clean_model.lower():
+            m_slug = re.search(r"openrouter\.ai/(?:models/)?([^/?#]+/[^/?#]+)", clean_model, re.IGNORECASE)
+            if m_slug:
+                clean_model = m_slug.group(1).strip()
+
+        # Handle display names such as "NVIDIA: Nemotron 3 Ultra (free)"
+        display_lower = clean_model.lower()
+        if "nemotron" in display_lower and ("ultra" in display_lower or "nvidia" in display_lower):
+            clean_model = "nvidia/nemotron-3-ultra-550b-a55b:free"
+        elif not clean_model:
+            clean_model = "nvidia/nemotron-3-ultra-550b-a55b:free"
+
+    else:
+        clean_url = clean_url.rstrip("/")
+        if clean_url.endswith("/chat/completions"):
+            clean_url = clean_url[:-len("/chat/completions")].rstrip("/")
+
+    return prov, clean_model, clean_url
+
+
 def normalize_ai_response(
     raw_response: Dict[str, Any],
     ocr_text: str = "",
@@ -320,15 +379,15 @@ class OpenAICompatibleProvider(BaseAIProvider):
         model_name: str,
         timeout: float = 60.0,
     ):
-        self._provider = (provider_name or "external").lower().strip()
-        self._base_url = (base_url or "").rstrip("/")
-        if not self._base_url:
-            if self._provider == "openai":
-                self._base_url = DEFAULT_OPENAI_BASE_URL
-            else:
-                self._base_url = DEFAULT_OPENROUTER_BASE_URL
+        norm_prov, norm_model, norm_url = normalize_openrouter_endpoint_and_model(
+            provider_name, model_name, base_url
+        )
+        self._provider = norm_prov or "external"
+        self._base_url = norm_url or (
+            DEFAULT_OPENAI_BASE_URL if self._provider == "openai" else DEFAULT_OPENROUTER_BASE_URL
+        )
         self._api_key = (api_key or "").strip()
-        self._model = (model_name or "").strip() or (
+        self._model = norm_model or (
             "gpt-4o-mini" if self._provider == "openai" else DEFAULT_EXTERNAL_MODEL
         )
         self._timeout = timeout
@@ -649,15 +708,19 @@ class AIProviderManager:
 
     @property
     def current_model(self) -> str:
-        if self._model is not None:
-            return self._model
-        return os.getenv("AI_MODEL", "").strip()
+        raw = self._model if self._model is not None else os.getenv("AI_MODEL", "").strip()
+        p = self.current_provider
+        u = self._base_url if self._base_url is not None else os.getenv("AI_BASE_URL", "").strip()
+        _, norm_model, _ = normalize_openrouter_endpoint_and_model(p, raw, u)
+        return norm_model
 
     @property
     def current_base_url(self) -> str:
-        if self._base_url is not None:
-            return self._base_url
-        return os.getenv("AI_BASE_URL", "").strip()
+        raw = self._base_url if self._base_url is not None else os.getenv("AI_BASE_URL", "").strip()
+        p = self.current_provider
+        m = self._model if self._model is not None else os.getenv("AI_MODEL", "").strip()
+        _, _, norm_url = normalize_openrouter_endpoint_and_model(p, m, raw)
+        return norm_url
 
     @property
     def current_fallback_on_error(self) -> bool:
@@ -686,10 +749,17 @@ class AIProviderManager:
             self._provider = provider.lower().strip()
         if api_key is not None:
             self._api_key = api_key.strip()
-        if model is not None:
-            self._model = model.strip()
-        if base_url is not None:
-            self._base_url = base_url.strip().rstrip("/")
+
+        target_p = self._provider or os.getenv("AI_PROVIDER", "local")
+        target_m = model if model is not None else (self._model or os.getenv("AI_MODEL", ""))
+        target_u = base_url if base_url is not None else (self._base_url or os.getenv("AI_BASE_URL", ""))
+
+        norm_p, norm_m, norm_u = normalize_openrouter_endpoint_and_model(target_p, target_m, target_u)
+
+        if model is not None or norm_m != target_m:
+            self._model = norm_m
+        if base_url is not None or norm_u != target_u:
+            self._base_url = norm_u
         if fallback_on_error is not None:
             self._fallback_on_error = bool(fallback_on_error)
 
@@ -709,6 +779,8 @@ class AIProviderManager:
             return DEFAULT_LOCAL_MODEL
         elif provider_name == "openai":
             return "gpt-4o-mini"
+        elif provider_name in ("openrouter", "open_router"):
+            return "nvidia/nemotron-3-ultra-550b-a55b:free"
         return DEFAULT_EXTERNAL_MODEL
 
     def get_active_provider(self) -> BaseAIProvider:
@@ -761,20 +833,23 @@ class AIProviderManager:
         """Test candidate or currently active provider connection without exposing secrets."""
         if candidate_config:
             p = (candidate_config.get("provider") or "local").lower().strip()
-            key = (candidate_config.get("api_key") or (self._api_key if p == self._provider else "")).strip()
-            model = (candidate_config.get("model") or self.get_effective_model(p)).strip()
-            base_url = (candidate_config.get("base_url") or self.get_effective_base_url(p)).strip()
+            raw_key = candidate_config.get("api_key")
+            key = (raw_key if raw_key is not None else (self._api_key if p == self._provider else "")).strip()
+            raw_model = (candidate_config.get("model") or self.get_effective_model(p)).strip()
+            raw_url = (candidate_config.get("base_url") or self.get_effective_base_url(p)).strip()
 
-            if p != "local" and key:
+            norm_p, norm_m, norm_u = normalize_openrouter_endpoint_and_model(p, raw_model, raw_url)
+
+            if norm_p != "local" and key:
                 test_prov = OpenAICompatibleProvider(
-                    provider_name=p,
-                    base_url=base_url,
+                    provider_name=norm_p,
+                    base_url=norm_u,
                     api_key=key,
-                    model_name=model,
+                    model_name=norm_m,
                 )
                 return await test_prov.test_connection()
             else:
-                test_prov = LocalOllamaProvider(model_name=model if p == "local" else DEFAULT_LOCAL_MODEL)
+                test_prov = LocalOllamaProvider(model_name=norm_m if norm_p == "local" else DEFAULT_LOCAL_MODEL)
                 return await test_prov.test_connection()
 
         provider = self.get_active_provider()

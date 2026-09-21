@@ -43,6 +43,58 @@ export function saveStoredBaseUrl(url: string): void {
   }
 }
 
+export function normalizeOpenRouterConfig(
+  provider?: string,
+  model?: string,
+  baseUrl?: string
+): { provider: string; model: string; baseUrl: string } {
+  const p = (provider || '').toLowerCase().trim();
+  let cleanModel = (model || '').trim();
+  let cleanUrl = (baseUrl || '').trim();
+
+  if (cleanUrl.includes('#')) cleanUrl = cleanUrl.split('#')[0].trim();
+  if (cleanModel.includes('#')) cleanModel = cleanModel.split('#')[0].trim();
+
+  const isOpenRouter =
+    p === 'openrouter' || p === 'open_router' || cleanUrl.toLowerCase().includes('openrouter.ai');
+
+  if (isOpenRouter) {
+    if (cleanUrl.toLowerCase().includes('openrouter.ai')) {
+      const match = cleanUrl.match(/openrouter\.ai\/(?!api\/v1)([^/?#]+\/[^/?#]+)/i);
+      if (
+        match &&
+        (!cleanModel ||
+          cleanModel.toLowerCase().includes('nemotron') ||
+          cleanModel === 'google/gemini-2.5-flash')
+      ) {
+        cleanModel = match[1].trim();
+      }
+      cleanUrl = 'https://openrouter.ai/api/v1';
+    } else if (!cleanUrl) {
+      cleanUrl = 'https://openrouter.ai/api/v1';
+    }
+
+    if (cleanModel.toLowerCase().includes('openrouter.ai/')) {
+      const matchM = cleanModel.match(/openrouter\.ai\/(?:models\/)?([^/?#]+\/[^/?#]+)/i);
+      if (matchM) cleanModel = matchM[1].trim();
+    }
+
+    const displayLower = cleanModel.toLowerCase();
+    if (displayLower.includes('nemotron') && (displayLower.includes('ultra') || displayLower.includes('nvidia'))) {
+      cleanModel = 'nvidia/nemotron-3-ultra-550b-a55b:free';
+    } else if (!cleanModel) {
+      cleanModel = 'nvidia/nemotron-3-ultra-550b-a55b:free';
+    }
+  } else {
+    cleanUrl = cleanUrl.replace(/\/+$/, '');
+    if (cleanUrl.endsWith('/chat/completions')) {
+      cleanUrl = cleanUrl.slice(0, -'/chat/completions'.length).replace(/\/+$/, '');
+    }
+  }
+
+  return { provider: isOpenRouter ? 'openrouter' : p, model: cleanModel, baseUrl: cleanUrl };
+}
+
 export class ApiService {
   private baseUrl: string;
   private token: string | null = null;
@@ -195,7 +247,8 @@ export class ApiService {
   }
 
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
-    const res = await fetch(url, options);
+    const headers = { ...this.getHeaders(), ...(options.headers as any) };
+    const res = await fetch(url, { ...options, headers });
     if (res.status === 401) {
       this.notifyUnauthorized();
       throw new Error('Authentication required or session expired (HTTP 401). Please sign in.');
@@ -483,7 +536,9 @@ export class ApiService {
   }
 
   public async getAiConfig(): Promise<AIProviderConfig> {
-    const res = await this.fetchWithAuth(this.getUrl('/api/ai/config'));
+    const res = await this.fetchWithAuth(this.getUrl('/api/ai/config'), {
+      headers: this.getHeaders(),
+    });
     if (!res.ok) throw new Error('Failed to fetch AI configuration');
     return res.json();
   }
@@ -495,10 +550,17 @@ export class ApiService {
     base_url?: string;
     fallback_on_error?: boolean;
   }): Promise<AIProviderConfig> {
+    const norm = normalizeOpenRouterConfig(payload.provider, payload.model, payload.base_url);
+    const safePayload = {
+      ...payload,
+      provider: norm.provider || payload.provider,
+      model: norm.model || payload.model,
+      base_url: norm.baseUrl || payload.base_url,
+    };
     const res = await this.fetchWithAuth(this.getUrl('/api/ai/config'), {
       method: 'POST',
       headers: this.getHeaders(),
-      body: JSON.stringify(payload),
+      body: JSON.stringify(safePayload),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'Failed to update AI configuration' }));
@@ -513,10 +575,17 @@ export class ApiService {
     api_key?: string;
     base_url?: string;
   }): Promise<AIConnectionTestResult> {
+    const norm = candidate ? normalizeOpenRouterConfig(candidate.provider, candidate.model, candidate.base_url) : null;
+    const safeCandidate = candidate ? {
+      ...candidate,
+      provider: norm?.provider || candidate.provider,
+      model: norm?.model || candidate.model,
+      base_url: norm?.baseUrl || candidate.base_url,
+    } : {};
     const res = await this.fetchWithAuth(this.getUrl('/api/ai/test-connection'), {
       method: 'POST',
       headers: this.getHeaders(),
-      body: JSON.stringify(candidate || {}),
+      body: JSON.stringify(safeCandidate),
     });
     if (!res.ok) {
       const err = await res.json().catch(() => ({ detail: 'AI connection test failed' }));

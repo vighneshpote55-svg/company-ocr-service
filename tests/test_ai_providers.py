@@ -386,3 +386,40 @@ async def test_unknown_document_does_not_crash():
     assert "confidence" in res
     assert "summary" in res
     assert "extracted_fields" in res
+
+
+def test_openrouter_url_and_model_normalization(client, monkeypatch):
+    """
+    OpenRouter configuration must:
+    - Normalize base_url to https://openrouter.ai/api/v1
+    - Strip fragments such as #providers
+    - Not interpret model webpage URL as API endpoint
+    - Normalize model ID to nvidia/nemotron-3-ultra-550b-a55b:free
+    """
+    ai_providers.ai_provider_manager.update_config(
+        provider="openrouter",
+        api_key="sk-or-v1-test-key",
+        model="NVIDIA: Nemotron 3 Ultra (free)",
+        base_url="https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free#providers",
+    )
+
+    cfg = ai_providers.ai_provider_manager.get_safe_config()
+    assert cfg["mode"] == "external"
+    assert cfg["active_provider"] == "openrouter"
+    assert cfg["active_model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
+    assert cfg["base_url"] == "https://openrouter.ai/api/v1"
+    assert "#providers" not in cfg["base_url"]
+
+    # Also test via POST /api/ai/config endpoint
+    res = client.post("/api/ai/config", json={
+        "provider": "openrouter",
+        "api_key": "sk-or-v1-test-key-2",
+        "model": "https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free#providers",
+        "base_url": "https://openrouter.ai/nvidia/nemotron-3-ultra-550b-a55b:free#providers",
+    })
+    assert res.status_code == 200
+    res_data = res.json()
+    assert res_data["mode"] == "external"
+    assert res_data["active_provider"] == "openrouter"
+    assert res_data["active_model"] == "nvidia/nemotron-3-ultra-550b-a55b:free"
+    assert res_data["base_url"] == "https://openrouter.ai/api/v1"
