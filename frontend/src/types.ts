@@ -271,9 +271,9 @@ export function normalizeAiDocument(raw: any): DocumentItem & AiAnalysisResult {
     extracted_fields = raw.fields;
   }
 
-  // 8. Resolve URLs
-  const file_url = raw.file_url || `/api/documents/${id}/file`;
-  const preview_url = raw.preview_url !== undefined ? raw.preview_url : `/api/documents/${id}/preview`;
+  // 8. Resolve URLs defensively: never produce /api/documents/undefined/file
+  const file_url = raw.file_url || (id && id !== 'undefined' && id !== 'null' ? `/api/documents/${id}/file` : '');
+  const preview_url = raw.preview_url !== undefined ? raw.preview_url : (id && id !== 'undefined' && id !== 'null' ? `/api/documents/${id}/preview` : '');
 
   return {
     id,

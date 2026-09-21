@@ -11,6 +11,7 @@ import { AIKeyFindingsCard } from './AIKeyFindingsCard.tsx';
 import { AIChatPanel } from './AIChatPanel.tsx';
 import { SettingsModal } from './SettingsModal.tsx';
 import { AIModeView } from './AIModeView.tsx';
+import { ExtractedFields } from './ExtractedFields.tsx';
 import type { DocumentItem, SupportedType, AIProviderConfig } from '../types.ts';
 import { normalizeAiDocument } from '../types.ts';
 
@@ -417,6 +418,126 @@ test('AIModeView reflects local config correctly when mode is local', () => {
   assert.ok(html.includes('Local AI Active'), 'Must display Local AI Active');
   assert.ok(html.includes('qwen2.5vl:3b'), 'Must display qwen2.5vl:3b');
   assert.ok(!html.includes('External AI Active'), 'Must NOT display External AI Active when mode is local');
+});
+
+test('DocumentPreview renders native PDF preview with decrypted endpoint', () => {
+  const pdfDoc: DocumentItem = {
+    id: 'pdf-doc-1234',
+    filename: 'Customer_Agreement.pdf',
+    file_type: '.pdf',
+    file_size: 1048576,
+    pages: 3,
+    status: 'completed',
+    document_type: 'Agreement',
+    confidence: 0.95,
+  };
+
+  const html = renderToString(React.createElement(DocumentPreview, { document: pdfDoc }));
+
+  assert.ok(html.includes('data-testid="document-preview-panel"'), 'Must render preview panel');
+  assert.ok(html.includes('/api/documents/pdf-doc-1234/file'), 'Must use authenticated decrypted file endpoint');
+  assert.ok(html.includes('Customer_Agreement.pdf'), 'Must render document filename');
+  assert.ok(html.includes('3 Pages'), 'Must display multi-page count');
+  assert.ok(html.includes('type="application/pdf"'), 'Must use native PDF object');
+  assert.ok(!html.includes('/api/documents/undefined/file'), 'Must NEVER produce undefined URL');
+});
+
+test('DocumentPreview renders image preview with zoom controls', () => {
+  const imgDoc: DocumentItem = {
+    id: 'img-doc-5678',
+    filename: 'PAN_Card.png',
+    file_type: '.png',
+    file_size: 204800,
+    pages: 1,
+    status: 'completed',
+    document_type: 'PAN Card',
+    confidence: 0.98,
+  };
+
+  const html = renderToString(React.createElement(DocumentPreview, { document: imgDoc }));
+
+  assert.ok(html.includes('preview-img'), 'Must render image element');
+  assert.ok(html.includes('/api/documents/img-doc-5678/file'), 'Must use authenticated decrypted file endpoint');
+  assert.ok(html.includes('Zoom in'), 'Must include Zoom In button for images');
+  assert.ok(html.includes('Zoom out'), 'Must include Zoom Out button for images');
+});
+
+test('DocumentPreview handles missing or undefined document safely without crashing', () => {
+  const htmlNull = renderToString(React.createElement(DocumentPreview, { document: null }));
+  assert.ok(htmlNull.includes('No document loaded for preview'), 'Must render clean empty state for null document');
+  assert.ok(!htmlNull.includes('undefined'), 'Must not render raw undefined string');
+
+  const emptyDoc: any = { id: '', filename: '' };
+  const htmlEmpty = renderToString(React.createElement(DocumentPreview, { document: emptyDoc }));
+  assert.ok(htmlEmpty.includes('No document loaded for preview'), 'Must render clean empty state for empty doc ID');
+  assert.ok(!htmlEmpty.includes('/api/documents//file'), 'Must not generate malformed URL');
+});
+
+test('ExtractedFields formats null as "Not found" and booleans as labels', () => {
+  const docWithNulls: DocumentItem = {
+    id: 'test-fields-doc',
+    filename: 'test.pdf',
+    file_type: '.pdf',
+    status: 'completed',
+    document_type: 'Tax Document',
+    extracted_fields: {
+      name: 'John Doe',
+      pan: null,
+      address: '',
+      is_active: true,
+      has_tax_due: false,
+    },
+  };
+
+  const html = renderToString(React.createElement(ExtractedFields, { document: docWithNulls }));
+
+  assert.ok(html.includes('John Doe'), 'Must render present string value');
+  assert.ok(html.includes('Not found'), 'Must render Not found for null or empty string fields');
+  assert.ok(html.includes('Yes'), 'Must render Yes for boolean true');
+  assert.ok(html.includes('No'), 'Must render No for boolean false');
+});
+
+test('AIModeView renders 2-column workspace with preview and tabs when document is loaded', () => {
+  const doc: DocumentItem = {
+    id: 'ai-workspace-doc-1',
+    document_id: 'ai-workspace-doc-1',
+    filename: 'Employment_Contract.pdf',
+    file_type: '.pdf',
+    document_type: 'Employment Contract',
+    confidence: 0.94,
+    confidence_level: 'high',
+    summary: 'This is an employment contract between ACME Corp and Jane Doe.',
+    extracted_fields: {
+      employer: 'ACME Corp',
+      employee: 'Jane Doe',
+      salary: '$120,000',
+    },
+    extracted_text: 'Employment Contract text here...',
+    status: 'completed',
+  };
+
+  const html = renderToString(
+    React.createElement(AIModeView, {
+      onNotify: () => {},
+      selectedDoc: doc,
+      aiConfig: {
+        mode: 'external',
+        active_provider: 'openrouter',
+        active_model: 'nvidia/nemotron-3-ultra-550b-a55b:free',
+        api_key_configured: true,
+      },
+    })
+  );
+
+  assert.ok(html.includes('data-testid="ai-workspace-flow"'), 'Must render AI workspace flow');
+  assert.ok(html.includes('ai-workspace-grid'), 'Must render 2-column workspace grid');
+  assert.ok(html.includes('data-testid="document-preview-panel"'), 'Must include integrated DocumentPreview');
+  assert.ok(html.includes('Extracted Fields'), 'Must include Extracted Fields tab');
+  assert.ok(html.includes('Extracted Text'), 'Must include Extracted Text tab');
+  assert.ok(html.includes('Raw JSON Payload'), 'Must include Raw JSON tab');
+  assert.ok(html.includes('Document AI Assistant'), 'Must include grounded AIChatPanel');
+  assert.ok(html.includes('External AI Active'), 'Must render external AI active status');
+  assert.ok(!html.includes('PASSED_RULES'), 'Must NOT render Offline Mode PASSED_RULES badge');
 });
 
 

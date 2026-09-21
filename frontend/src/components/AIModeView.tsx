@@ -3,16 +3,26 @@ import {
   Sparkles,
   CheckCircle2,
   RefreshCw,
+  FileText,
+  FileCode,
+  ShieldCheck,
+  UploadCloud,
+  RotateCcw,
+  Layers,
+  Cpu,
 } from 'lucide-react';
-import type { AiAnalysisResult, ChatMessage, UploadProgress, AIProviderConfig } from '../types';
+import type { AiAnalysisResult, ChatMessage, UploadProgress, AIProviderConfig, DocumentItem } from '../types';
 import { normalizeAiDocument } from '../types';
 import { api } from '../services/api';
 import { AIUploadCard } from './AIUploadCard';
-import { AIAnalysisCard } from './AIAnalysisCard';
 import { AISummaryCard } from './AISummaryCard';
 import { AIKeyFindingsCard } from './AIKeyFindingsCard';
 import { AIQuickActions } from './AIQuickActions';
 import { AIChatPanel } from './AIChatPanel';
+import { DocumentPreview } from './DocumentPreview';
+import { ExtractedFields } from './ExtractedFields';
+import { ExtractedTextViewer } from './ExtractedTextViewer';
+import { JsonResultViewer } from './JsonResultViewer';
 
 interface AIModeViewProps {
   onNotify: (message: string, type?: 'success' | 'error' | 'info') => void;
@@ -21,6 +31,8 @@ interface AIModeViewProps {
   onDocumentUploaded?: (doc: any) => void;
   aiConfig?: AIProviderConfig | null;
   onRefreshAiConfig?: () => Promise<AIProviderConfig | null | void>;
+  selectedDoc?: DocumentItem | null;
+  onClearSelectedDoc?: () => void;
 }
 
 export const AIModeView: React.FC<AIModeViewProps> = ({
@@ -30,8 +42,12 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
   onDocumentUploaded,
   aiConfig: propAiConfig,
   onRefreshAiConfig,
+  selectedDoc,
+  onClearSelectedDoc,
 }) => {
-  const [analyzedDoc, setAnalyzedDoc] = useState<AiAnalysisResult | null>(null);
+  const [analyzedDoc, setAnalyzedDoc] = useState<AiAnalysisResult | null>(() => {
+    return selectedDoc ? normalizeAiDocument(selectedDoc) : null;
+  });
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState<UploadProgress>({
     step: 'idle',
@@ -42,6 +58,7 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
   const [isAiThinking, setIsAiThinking] = useState(false);
   const [aiConfig, setAiConfig] = useState<AIProviderConfig | null>(propAiConfig ?? null);
   const [isCheckingAiConfig, setIsCheckingAiConfig] = useState(false);
+  const [activeTab, setActiveTab] = useState<'fields' | 'text' | 'json'>('fields');
 
   // Synchronize when prop changes
   useEffect(() => {
@@ -49,6 +66,23 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
       setAiConfig(propAiConfig);
     }
   }, [propAiConfig]);
+
+  // Synchronize with external selectedDoc if provided (e.g. inspected from Document Vault while in AI Mode)
+  useEffect(() => {
+    if (selectedDoc) {
+      const normalized = normalizeAiDocument(selectedDoc);
+      setAnalyzedDoc(normalized);
+      const confStr = normalized.confidence_level || (typeof normalized.confidence === 'number' ? `${Math.round(normalized.confidence * 100)}%` : String(normalized.confidence || 'high'));
+      setMessages([
+        {
+          id: 'init-msg',
+          role: 'assistant',
+          content: `I analyzed "${normalized.filename}" and identified it as ${normalized.document_type} (${confStr} confidence).\n\n${normalized.summary || ''}\n\nYou can ask any questions regarding this document below or use the quick actions.`,
+          timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        },
+      ]);
+    }
+  }, [selectedDoc]);
 
   const fileInputHiddenRef = useRef<HTMLInputElement>(null);
 
@@ -111,19 +145,18 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
         if (pct < 90) setProgress((prev) => ({ ...prev, percent: pct }));
       });
 
-      console.error('[AI Mode] Raw AI analysis response received:', result);
       const normalizedDoc = normalizeAiDocument(result);
-      console.error('[AI Mode] Normalized AI document payload:', normalizedDoc);
 
       setProgress({ step: 'done', percent: 100, message: 'AI Analysis complete!' });
       setTimeout(() => {
         setIsProcessing(false);
         setAnalyzedDoc(normalizedDoc);
+        const confDisplay = normalizedDoc.confidence_level || (typeof normalizedDoc.confidence === 'number' ? `${Math.round(normalizedDoc.confidence * 100)}%` : String(normalizedDoc.confidence || 'high'));
         setMessages([
           {
             id: 'init-msg',
             role: 'assistant',
-            content: `I analyzed this document and identified it as ${normalizedDoc.document_type} (${normalizedDoc.confidence_level || normalizedDoc.confidence} confidence).\n\n${normalizedDoc.summary}\n\nYou can ask any questions regarding this document below or use the quick actions.`,
+            content: `I analyzed this document and identified it as ${normalizedDoc.document_type} (${confDisplay} confidence).\n\n${normalizedDoc.summary || ''}\n\nYou can ask any questions regarding this document below or use the quick actions.`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
@@ -161,7 +194,8 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
         content: m.content,
       }));
 
-      const reply = await api.chatAiDocument(analyzedDoc.document_id, trimmed, historyPayload);
+      const docId = analyzedDoc.document_id || analyzedDoc.id || '';
+      const reply = await api.chatAiDocument(docId, trimmed, historyPayload);
 
       const aiMsg: ChatMessage = {
         id: String(Date.now() + 1),
@@ -210,12 +244,30 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
   };
 
   const resetSession = () => {
-    if (window.confirm('Clear the current document and start a new AI session?')) {
+    if (window.confirm('Clear the current document and return to upload?')) {
       setAnalyzedDoc(null);
       setMessages([]);
       setProgress({ step: 'idle', percent: 0, message: '' });
+      if (onClearSelectedDoc) {
+        onClearSelectedDoc();
+      }
     }
   };
+
+  // Provider Pill Text
+  const providerLabel = aiConfig?.mode === 'external'
+    ? `${aiConfig.active_provider === 'openrouter' ? 'OpenRouter' : aiConfig.active_provider.toUpperCase()} • ${aiConfig.active_model}`
+    : 'Ollama • Qwen2.5-VL 3B';
+
+  const rawConf = (analyzedDoc as any)?.confidence_level || analyzedDoc?.confidence || 'high';
+  const confidenceLower = typeof rawConf === 'string'
+    ? rawConf.toLowerCase()
+    : (typeof rawConf === 'number' && rawConf >= 0.85 ? 'high' : rawConf >= 0.65 ? 'medium' : 'low');
+  const confidenceDisplay = typeof rawConf === 'number' ? `${Math.round(rawConf * 100)}%` : rawConf;
+
+  // Extract primary name or entity from extracted fields if available
+  const fields = analyzedDoc?.extracted_fields || {};
+  const extractedEntityName = fields.name || fields.person_name || fields.full_name || fields.company_name || fields.establishment_name || fields.holder_name || '';
 
   return (
     <div className="ai-workspace-container">
@@ -267,7 +319,7 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
                 <div className="local-ai-status-title">
                   <strong>External AI Active</strong>
                   <span className="local-ai-model-pill" style={{ background: '#7c3aed', color: '#ffffff' }}>
-                    {aiConfig.active_provider === 'openrouter' ? 'OpenRouter' : aiConfig.active_provider.toUpperCase()} • {aiConfig.active_model}
+                    {providerLabel}
                   </span>
                 </div>
                 <p className="local-ai-status-desc">
@@ -295,7 +347,7 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
               <div className="local-ai-status-content">
                 <div className="local-ai-status-title">
                   <strong>Local AI Active</strong>
-                  <span className="local-ai-model-pill">Ollama • qwen2.5vl:3b</span>
+                  <span className="local-ai-model-pill">Ollama • Qwen2.5-VL 3B</span>
                 </div>
                 <p className="local-ai-status-desc">
                   Ollama (qwen2.5vl:3b) is running locally. All AI document analysis is performed completely offline.
@@ -316,7 +368,7 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
         )
       )}
 
-      {/* When no document is loaded or while processing */}
+      {/* When no document is loaded or while processing: Upload Area */}
       {!analyzedDoc ? (
         <AIUploadCard
           onUpload={handleFileUpload}
@@ -324,44 +376,163 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
           progress={progress}
         />
       ) : (
-        /* Document Analyzed: Full SaaS Flow */
-        <div className="ai-results-flow-container">
-          {/* 1. AI Analysis Card */}
-          <AIAnalysisCard
-            document={analyzedDoc}
-            onUploadNew={() => fileInputHiddenRef.current?.click()}
-            onReset={resetSession}
-          />
+        /* Document Analyzed: Full 2-Column AI Document Intelligence Workspace */
+        <div className="ai-workspace-flow" data-testid="ai-workspace-flow">
+          {/* Document Header (Part 5) */}
+          <div className="ai-doc-header-card">
+            <div className="ai-doc-header-main">
+              <div className="ai-doc-header-titles">
+                <div className="ai-doc-header-badge-row">
+                  <span className="ai-doc-classification-pill">
+                    <Layers size={14} />
+                    <span>{analyzedDoc.document_type || 'Document'}</span>
+                  </span>
+                  <span className={`ai-confidence-pill ${confidenceLower}`}>
+                    <CheckCircle2 size={13} />
+                    <span>Confidence: {confidenceDisplay}</span>
+                  </span>
+                  <span className="ai-provider-tag-pill">
+                    <Cpu size={13} />
+                    <span>Provider: {providerLabel}</span>
+                  </span>
+                  <span className="ai-status-pill verified">
+                    <span>Verified by AI</span>
+                  </span>
+                </div>
 
-          {/* 2. Document Summary */}
-          <AISummaryCard
-            summary={analyzedDoc.summary}
-            documentType={analyzedDoc.document_type}
-          />
+                <h3 className="ai-doc-title-text" title={analyzedDoc.filename}>
+                  {extractedEntityName ? `${extractedEntityName} — ` : ''}{analyzedDoc.filename}
+                </h3>
+              </div>
 
-          {/* 3. Key Findings */}
-          <AIKeyFindingsCard
-            reasoning={analyzedDoc.reasoning}
-            documentType={analyzedDoc.document_type}
-            extractedFields={analyzedDoc.extracted_fields}
-          />
+              <div className="ai-doc-header-actions">
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={() => fileInputHiddenRef.current?.click()}
+                  style={{ padding: '0.45rem 0.85rem' }}
+                >
+                  <UploadCloud size={15} />
+                  <span>Upload New</span>
+                </button>
 
-          {/* 4. Quick Actions */}
-          <AIQuickActions
-            document={analyzedDoc}
-            onTriggerPrompt={handleSendMessage}
-            onDownloadAnalysis={handleDownloadAnalysis}
-          />
+                <button
+                  type="button"
+                  className="btn btn-secondary"
+                  onClick={resetSession}
+                  style={{ padding: '0.45rem 0.85rem' }}
+                  title="Clear current document"
+                >
+                  <RotateCcw size={15} />
+                  <span>{selectedDoc ? 'Back to Vault' : 'Reset'}</span>
+                </button>
+              </div>
+            </div>
+          </div>
 
-          {/* 5. AI Chat Assistant */}
-          <AIChatPanel
-            document={analyzedDoc}
-            messages={messages}
-            isAiThinking={isAiThinking}
-            onSendMessage={handleSendMessage}
-            onSwitchToOffline={onSwitchToOffline}
-            onNotify={onNotify}
-          />
+          {/* 2-Column Workspace Layout (Part 3 & Part 9) */}
+          <div className="ai-workspace-grid">
+            {/* LEFT COLUMN: Document Preview (Part 1 & 8) */}
+            <div className="ai-preview-column">
+              <DocumentPreview document={analyzedDoc as any} />
+            </div>
+
+            {/* RIGHT COLUMN: AI Analysis, Key Findings, Tabs (Part 3, 6, 7) */}
+            <div className="ai-analysis-column">
+              {/* 1. Document Summary */}
+              {analyzedDoc.summary && (
+                <AISummaryCard
+                  summary={analyzedDoc.summary}
+                  documentType={analyzedDoc.document_type}
+                />
+              )}
+
+              {/* 2. Key Findings & Reasoning */}
+              <AIKeyFindingsCard
+                reasoning={analyzedDoc.reasoning || analyzedDoc.evidence}
+                documentType={analyzedDoc.document_type}
+                extractedFields={analyzedDoc.extracted_fields}
+              />
+
+              {/* 3. Tabbed Inspector (Extracted Fields, Extracted Text, Raw JSON) */}
+              <div className="inspect-panel" style={{ marginTop: '1.25rem' }}>
+                <div className="tabs-nav">
+                  <button
+                    type="button"
+                    className={`tab-btn ${activeTab === 'fields' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('fields')}
+                  >
+                    <ShieldCheck size={16} />
+                    <span>Extracted Fields</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`tab-btn ${activeTab === 'text' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('text')}
+                  >
+                    <FileText size={16} />
+                    <span>Extracted Text ({(analyzedDoc.extracted_text || '').length} chars)</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    className={`tab-btn ${activeTab === 'json' ? 'active' : ''}`}
+                    onClick={() => setActiveTab('json')}
+                  >
+                    <FileCode size={16} />
+                    <span>Raw JSON Payload</span>
+                  </button>
+                </div>
+
+                <div className="tab-content" style={{ padding: '1.25rem' }}>
+                  {activeTab === 'fields' && (
+                    <ExtractedFields
+                      document={analyzedDoc as any}
+                      onCopyToast={onNotify}
+                      onSwitchToAiMode={undefined}
+                    />
+                  )}
+
+                  {activeTab === 'text' && (
+                    <ExtractedTextViewer
+                      text={analyzedDoc.extracted_text || ''}
+                      filename={analyzedDoc.filename}
+                      onCopyToast={onNotify}
+                    />
+                  )}
+
+                  {activeTab === 'json' && (
+                    <JsonResultViewer
+                      document={analyzedDoc as any}
+                      onCopyToast={onNotify}
+                    />
+                  )}
+                </div>
+              </div>
+
+              {/* 4. Quick Actions */}
+              <div style={{ marginTop: '1.25rem' }}>
+                <AIQuickActions
+                  document={analyzedDoc}
+                  onTriggerPrompt={handleSendMessage}
+                  onDownloadAnalysis={handleDownloadAnalysis}
+                />
+              </div>
+            </div>
+          </div>
+
+          {/* BOTTOM: Full-Width Grounded Contextual AI Chat (Part 10) */}
+          <div className="ai-chat-row" style={{ marginTop: '1.5rem' }}>
+            <AIChatPanel
+              document={analyzedDoc}
+              messages={messages}
+              isAiThinking={isAiThinking}
+              onSendMessage={handleSendMessage}
+              onSwitchToOffline={onSwitchToOffline}
+              onNotify={onNotify}
+            />
+          </div>
         </div>
       )}
     </div>

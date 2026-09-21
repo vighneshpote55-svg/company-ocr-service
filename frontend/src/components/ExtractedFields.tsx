@@ -270,9 +270,11 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({
     const value = fields[key];
     const conf = confidences[key];
     const icon = getFieldIcon(key);
+    const isNullOrEmpty = value === null || value === undefined || (typeof value === 'string' && value.trim() === '');
+    const isBool = typeof value === 'boolean';
 
     return (
-      <div key={key} className="field-item-card">
+      <div key={key} className="field-item-card" style={{ height: '100%', display: 'flex', flexDirection: 'column', justifyContent: 'space-between' }}>
         <div className="field-item-header">
           <div className="field-label-wrap">
             <span className="field-type-icon">{icon}</span>
@@ -297,8 +299,9 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({
               </span>
             )}
             <button
+              type="button"
               className="copy-btn"
-              onClick={() => handleCopy(key, value)}
+              onClick={() => handleCopy(key, isNullOrEmpty ? 'Not found' : isBool ? (value ? 'Yes' : 'No') : value)}
               title="Copy field value"
               aria-label={`Copy ${key}`}
             >
@@ -308,10 +311,18 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({
         </div>
 
         <div className="field-value-box">
-          {Array.isArray(value) ? (
+          {isNullOrEmpty ? (
+            <span className="field-text-value not-found" style={{ color: 'var(--text-subtle)', fontStyle: 'italic', fontWeight: 500 }}>
+              Not found
+            </span>
+          ) : isBool ? (
+            <span className="field-text-value" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere', userSelect: 'text' }}>
+              {value ? 'Yes' : 'No'}
+            </span>
+          ) : Array.isArray(value) ? (
             <div className="field-array-list">
               {value.map((item, idx) => (
-                <span key={idx} className="field-tag-item">
+                <span key={idx} className="field-tag-item" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>
                   {typeof item === 'object' && item !== null
                     ? item.date
                       ? `${item.date} • ${item.type ? item.type + ' ' : ''}${item.amount} • Bal: ${item.balance || '-'} • ${item.description || ''}`
@@ -321,9 +332,11 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({
               ))}
             </div>
           ) : typeof value === 'object' && value !== null ? (
-            <pre className="field-json-pre">{JSON.stringify(value, null, 2)}</pre>
+            <pre className="field-json-pre" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere' }}>{JSON.stringify(value, null, 2)}</pre>
           ) : (
-            <span className="field-text-value">{String(value)}</span>
+            <span className="field-text-value" style={{ wordBreak: 'break-word', overflowWrap: 'anywhere', userSelect: 'text' }}>
+              {String(value)}
+            </span>
           )}
         </div>
       </div>

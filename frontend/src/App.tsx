@@ -381,7 +381,13 @@ export const App: React.FC = () => {
         onDocumentUploaded={handleDocumentUploaded}
         onDeleteDocument={handleDeleteDocument}
         onClearAll={() => setIsClearModalOpen(true)}
-        onSelectDocument={(doc) => setSelectedDoc(doc)}
+        onSelectDocument={(doc) => {
+          setSelectedDoc(doc);
+          if (appMode === 'ai') {
+            setCurrentTab('dashboard');
+          }
+        }}
+        onClearSelectedDoc={() => setSelectedDoc(null)}
         onNotify={addToast}
         selectedDoc={selectedDoc}
         inspectContent={renderInspectionContent()}

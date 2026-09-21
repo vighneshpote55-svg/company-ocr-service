@@ -37,6 +37,7 @@ export interface DashboardLayoutProps {
   onNotify: (message: string, type?: 'success' | 'error' | 'info') => void;
   // Optional inspection view when inspecting a single document
   selectedDoc?: DocumentItem | null;
+  onClearSelectedDoc?: () => void;
   inspectContent?: React.ReactNode;
 }
 
@@ -62,6 +63,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   onSelectDocument,
   onNotify,
   selectedDoc,
+  onClearSelectedDoc,
   inspectContent,
 }) => {
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
@@ -129,8 +131,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
         />
 
         <main className="content-body">
-          {/* 1. Document Inspection Mode */}
-          {selectedDoc && inspectContent ? (
+          {/* 1. Document Inspection Mode: strictly for Offline Mode verification */}
+          {selectedDoc && inspectContent && mode === 'offline' ? (
             inspectContent
           ) : currentTab === 'repository' ? (
             /* 2. Document Vault Full View */
@@ -180,6 +182,8 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                     onDocumentUploaded={onDocumentUploaded}
                     aiConfig={aiConfig}
                     onRefreshAiConfig={onRefreshAiConfig}
+                    selectedDoc={mode === 'ai' ? selectedDoc : null}
+                    onClearSelectedDoc={onClearSelectedDoc}
                   />
                 )}
               </div>
