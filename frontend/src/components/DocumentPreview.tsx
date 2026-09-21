@@ -9,11 +9,13 @@ interface DocumentPreviewProps {
 
 export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) => {
   const [imageZoom, setImageZoom] = useState(1);
-  const isPdf = document.filename.toLowerCase().endsWith('.pdf');
-  const fileUrl = api.getFileUrl(document.id);
+  const docId = document.id || (document as any).document_id || '';
+  const filename = document.filename || 'document';
+  const isPdf = filename.toLowerCase().endsWith('.pdf');
+  const fileUrl = document.file_url || (docId ? api.getFileUrl(docId) : '');
 
-  const formatBytes = (bytes: number) => {
-    if (bytes === 0) return '0 Bytes';
+  const formatBytes = (bytes?: number) => {
+    if (!bytes || bytes === 0) return '0 Bytes';
     const k = 1024;
     const sizes = ['Bytes', 'KB', 'MB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -64,8 +66,8 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
           </a>
 
           <a
-            href={api.getFileUrl(document.id, true)}
-            download={document.filename}
+            href={docId ? api.getFileUrl(docId, true) : '#'}
+            download={filename}
             className="copy-btn"
             title="Download document file"
           >
@@ -77,14 +79,14 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
       <div className="preview-body">
         {isPdf ? (
           <iframe
-            src={`${fileUrl}#toolbar=0&navpanes=0`}
-            title={document.filename}
+            src={fileUrl ? `${fileUrl}#toolbar=0&navpanes=0` : ''}
+            title={filename}
             className="preview-iframe"
           />
         ) : (
           <img
             src={fileUrl}
-            alt={document.filename}
+            alt={filename}
             className="preview-img"
             style={{ transform: `scale(${imageZoom})` }}
           />
@@ -103,8 +105,8 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
           color: 'var(--text-muted)',
         }}
       >
-        <span>Format: <strong style={{ textTransform: 'uppercase' }}>{document.file_type.replace('.', '')}</strong></span>
-        <span>Storage ID: <code style={{ fontFamily: 'var(--font-mono)' }}>{document.id.slice(0, 8)}...</code></span>
+        <span>Format: <strong style={{ textTransform: 'uppercase' }}>{(document.file_type || (isPdf ? '.pdf' : '.png')).replace('.', '').toUpperCase()}</strong></span>
+        <span>Storage ID: <code style={{ fontFamily: 'var(--font-mono)' }}>{(docId || 'unknown').slice(0, 8)}...</code></span>
       </div>
     </div>
   );

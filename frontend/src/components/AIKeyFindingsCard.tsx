@@ -29,8 +29,9 @@ export const AIKeyFindingsCard: React.FC<AIKeyFindingsCardProps> = ({
   extractedFields,
 }) => {
   // Helper to choose contextual icon & title
-  const parseFinding = (text: string, index: number): FindingItem => {
-    const lower = text.toLowerCase();
+  const parseFinding = (text: any, index: number): FindingItem => {
+    const str = typeof text === 'string' ? text : (typeof text === 'object' && text !== null ? JSON.stringify(text) : String(text ?? ''));
+    const lower = str.toLowerCase();
     let icon = <CheckCircle2 size={18} className="ai-finding-icon text-ai" />;
     let label = `Key Feature ${index + 1}`;
 
@@ -58,12 +59,15 @@ export const AIKeyFindingsCard: React.FC<AIKeyFindingsCardProps> = ({
       id: `finding-${index}`,
       icon,
       label,
-      description: text,
+      description: str,
     };
   };
 
-  const fieldItems = extractedFields && Object.keys(extractedFields).length > 0
-    ? Object.entries(extractedFields).map(([k, v]) => `${k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${v}`)
+  const fieldItems = extractedFields && typeof extractedFields === 'object' && !Array.isArray(extractedFields)
+    ? Object.entries(extractedFields).map(([k, v]) => {
+        const valStr = typeof v === 'object' && v !== null ? JSON.stringify(v) : String(v ?? '');
+        return `${k.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())}: ${valStr}`;
+      })
     : [];
 
   const rawItems = [

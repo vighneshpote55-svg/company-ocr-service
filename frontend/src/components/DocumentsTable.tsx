@@ -269,10 +269,11 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                 </td>
               </tr>
             ) : (
-              filteredDocs.map((doc) => {
+              filteredDocs.map((doc, idx) => {
+                const docId = doc.id || (doc as any).document_id || '';
                 const isBypassed = !doc.ocr_required;
                 const isFailed = doc.status === 'error' || doc.status === 'failed';
-                const previewUrl = api.getPreviewUrl(doc.id);
+                const previewUrl = doc.preview_url || (docId ? api.getPreviewUrl(docId) : '');
 
                 const getEngineLabel = () => {
                   if (isBypassed) return 'Text Layer';
@@ -282,13 +283,19 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                   return 'Neural OCR';
                 };
 
+                const confNum = typeof doc.confidence === 'number'
+                  ? doc.confidence
+                  : typeof (doc as any).confidence === 'string' && !isNaN(parseFloat((doc as any).confidence))
+                  ? parseFloat((doc as any).confidence)
+                  : 1;
+
                 return (
                   <tr
-                    key={doc.id}
+                    key={docId || `${doc.filename}-${idx}`}
                     className={`vault-table-row ${isFailed ? 'row-failed' : ''}`}
                   >
                     <td>
-                      {doc.has_preview ? (
+                      {doc.has_preview || previewUrl ? (
                         <img
                           src={previewUrl}
                           alt={doc.filename}
@@ -343,7 +350,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
 
                     <td>
                       <span className="vault-confidence-text">
-                        {isFailed ? '0%' : `${Math.round((typeof doc.confidence === 'number' ? doc.confidence : 1) * 100)}%`}
+                        {isFailed ? '0%' : `${Math.round(confNum <= 1 ? confNum * 100 : confNum)}%`}
                       </span>
                     </td>
 
@@ -363,7 +370,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                         </button>
 
                         <a
-                          href={api.getFileUrl(doc.id, true)}
+                          href={docId ? api.getFileUrl(docId, true) : '#'}
                           download={doc.filename}
                           className="icon-action-btn"
                           title="Download original file"
@@ -376,7 +383,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                           className="icon-action-btn delete-btn"
                           onClick={() => {
                             if (window.confirm(`Delete "${doc.filename}" from vault?`)) {
-                              onDeleteDocument(doc.id);
+                              onDeleteDocument(docId);
                             }
                           }}
                           title="Delete document"

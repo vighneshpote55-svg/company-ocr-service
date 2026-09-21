@@ -16,18 +16,18 @@ export const ExtractedTextViewer: React.FC<ExtractedTextViewerProps> = ({
   const [copied, setCopied] = useState(false);
 
   const handleCopyAll = () => {
-    navigator.clipboard.writeText(text);
+    navigator.clipboard.writeText(text || '');
     setCopied(true);
     if (onCopyToast) onCopyToast('All extracted text copied to clipboard');
     setTimeout(() => setCopied(false), 1800);
   };
 
   const handleDownloadTxt = () => {
-    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const blob = new Blob([text || ''], { type: 'text/plain;charset=utf-8' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${filename.replace(/\.[^/.]+$/, '')}_extracted.txt`;
+    a.download = `${(filename || 'document').replace(/\.[^/.]+$/, '')}_extracted.txt`;
     a.click();
     URL.revokeObjectURL(url);
     if (onCopyToast) onCopyToast('Text file downloaded');
@@ -99,7 +99,7 @@ export const ExtractedTextViewer: React.FC<ExtractedTextViewerProps> = ({
       <pre className="text-display-pre">{renderedText || 'No text extracted from document.'}</pre>
 
       <div style={{ fontSize: '0.75rem', color: 'var(--text-subtle)', textAlign: 'right' }}>
-        Total Characters: {text.length} • Lines: {text.split('\n').length}
+        Total Characters: {(text || '').length} • Lines: {(text || '').split('\n').length}
       </div>
     </div>
   );

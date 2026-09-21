@@ -10,6 +10,7 @@ import type {
   OllamaStatusResponse,
   OfflineUploadResult,
 } from '../types';
+import { normalizeAiDocument } from '../types';
 
 const STORAGE_KEY_BASE_URL = 'ocr_app_base_url';
 const SESSION_KEY_TOKEN = 'ocr_session_jwt_token';
@@ -516,7 +517,8 @@ export class ApiService {
           try {
             if (onProgress) onProgress(100);
             const data = JSON.parse(xhr.responseText);
-            resolve(data);
+            const normalized = normalizeAiDocument(data);
+            resolve(normalized);
           } catch (e) {
             reject(new Error('Invalid JSON returned by server'));
           }

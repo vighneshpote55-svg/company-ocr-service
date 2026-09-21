@@ -158,8 +158,9 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({
     document.doc_type === 'unknown' ||
     document.document_type === 'Unknown Document';
 
-  if (isUnknown || fieldKeys.length === 0) {
+  if (fieldKeys.length === 0) {
     if (isUnknown) {
+      const isAiAnalyzed = document.doc_type === 'ai_analyzed' || (document as any).is_local_ai;
       return (
         <div
           className="empty-fields-state unknown-doc-fields-state"
@@ -177,59 +178,67 @@ export const ExtractedFields: React.FC<ExtractedFieldsProps> = ({
                 Unknown Document
               </h3>
               <span style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>
-                Offline OCR completed successfully
+                {isAiAnalyzed ? 'AI Document Analysis completed' : 'Offline OCR completed successfully'}
               </span>
             </div>
           </div>
 
           <p style={{ fontSize: '0.92rem', lineHeight: '1.5', color: 'var(--text-main)', marginBottom: '0.75rem' }}>
-            This document has been successfully scanned using Offline OCR.
+            {isAiAnalyzed
+              ? 'This document was evaluated by AI Universal Intelligence.'
+              : 'This document has been successfully scanned using Offline OCR.'}
           </p>
           <p style={{ fontSize: '0.88rem', lineHeight: '1.5', color: 'var(--text-muted)', marginBottom: '1.25rem' }}>
-            The document is not one of the 22 supported Offline document types, so structured extraction and verification are unavailable in Offline Mode.
+            {isAiAnalyzed
+              ? 'Specific discrete key-value fields were not detected in standard format. You can inspect raw content in the "Extracted Text" tab or query the AI assistant.'
+              : 'The document is not one of the 22 supported Offline document types, so structured extraction and verification are unavailable in Offline Mode.'}
           </p>
 
-          <div
-            style={{
-              backgroundColor: 'rgba(255, 255, 255, 0.04)',
-              border: '1px solid var(--border-color)',
-              borderRadius: 'var(--radius-md)',
-              padding: '1rem 1.25rem',
-              marginBottom: '1.5rem',
-            }}
-          >
-            <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-main)', marginBottom: '0.5rem' }}>
-              You can switch to AI Mode for:
-            </div>
-            <ul
-              style={{
-                margin: 0,
-                paddingLeft: '1.25rem',
-                fontSize: '0.85rem',
-                color: 'var(--text-muted)',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '0.35rem',
-              }}
-            >
-              <li>Document identification</li>
-              <li>Detailed field extraction</li>
-              <li>Document understanding</li>
-              <li>Question answering</li>
-              <li>Summary generation</li>
-            </ul>
-          </div>
+          {!isAiAnalyzed && (
+            <>
+              <div
+                style={{
+                  backgroundColor: 'rgba(255, 255, 255, 0.04)',
+                  border: '1px solid var(--border-color)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '1rem 1.25rem',
+                  marginBottom: '1.5rem',
+                }}
+              >
+                <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--text-main)', marginBottom: '0.5rem' }}>
+                  You can switch to AI Mode for:
+                </div>
+                <ul
+                  style={{
+                    margin: 0,
+                    paddingLeft: '1.25rem',
+                    fontSize: '0.85rem',
+                    color: 'var(--text-muted)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: '0.35rem',
+                  }}
+                >
+                  <li>Document identification</li>
+                  <li>Detailed field extraction</li>
+                  <li>Document understanding</li>
+                  <li>Question answering</li>
+                  <li>Summary generation</li>
+                </ul>
+              </div>
 
-          {onSwitchToAiMode && (
-            <button
-              className="btn btn-primary switch-ai-glow-btn"
-              onClick={onSwitchToAiMode}
-              style={{ width: '100%', justifyContent: 'center' }}
-            >
-              <Sparkles size={16} />
-              <span>Switch to AI Mode</span>
-              <ArrowRight size={15} />
-            </button>
+              {onSwitchToAiMode && (
+                <button
+                  className="btn btn-primary switch-ai-glow-btn"
+                  onClick={onSwitchToAiMode}
+                  style={{ width: '100%', justifyContent: 'center' }}
+                >
+                  <Sparkles size={16} />
+                  <span>Switch to AI Mode</span>
+                  <ArrowRight size={15} />
+                </button>
+              )}
+            </>
           )}
         </div>
       );

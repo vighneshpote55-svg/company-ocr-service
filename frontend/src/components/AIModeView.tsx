@@ -6,6 +6,7 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import type { AiAnalysisResult, ChatMessage, UploadProgress, OllamaStatusResponse } from '../types';
+import { normalizeAiDocument } from '../types';
 import { api } from '../services/api';
 import { AIUploadCard } from './AIUploadCard';
 import { AIAnalysisCard } from './AIAnalysisCard';
@@ -96,21 +97,28 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
         if (pct < 90) setProgress((prev) => ({ ...prev, percent: pct }));
       });
 
+      console.error('[AI Mode] Raw AI analysis response received:', result);
+      const normalizedDoc = normalizeAiDocument(result);
+      console.error('[AI Mode] Normalized AI document payload:', normalizedDoc);
+
       setProgress({ step: 'done', percent: 100, message: 'AI Analysis complete!' });
       setTimeout(() => {
         setIsProcessing(false);
-        setAnalyzedDoc(result);
+        setAnalyzedDoc(normalizedDoc);
         setMessages([
           {
             id: 'init-msg',
             role: 'assistant',
-            content: `I analyzed this document and identified it as ${result.document_type} (${result.confidence} confidence).\n\n${result.summary}\n\nYou can ask any questions regarding this document below or use the quick actions.`,
+            content: `I analyzed this document and identified it as ${normalizedDoc.document_type} (${normalizedDoc.confidence_level || normalizedDoc.confidence} confidence).\n\n${normalizedDoc.summary}\n\nYou can ask any questions regarding this document below or use the quick actions.`,
             timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           },
         ]);
-        onNotify(`Document "${result.filename}" analyzed successfully with AI!`, 'success');
-        if (onRefresh) onRefresh();
-        if (onDocumentUploaded) onDocumentUploaded(result);
+        onNotify(`Document "${normalizedDoc.filename}" analyzed successfully with AI!`, 'success');
+        if (onDocumentUploaded) {
+          onDocumentUploaded(normalizedDoc);
+        } else if (onRefresh) {
+          onRefresh();
+        }
       }, 400);
     } catch (err: any) {
       setIsProcessing(false);
@@ -166,10 +174,10 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
   const handleDownloadAnalysis = () => {
     if (!analyzedDoc) return;
     const payload = {
-      document_id: analyzedDoc.document_id,
-      document_type: analyzedDoc.document_type,
+      document_id: analyzedDoc.document_id || analyzedDoc.id || '',
+      document_type: analyzedDoc.document_type || 'Unknown Document',
       confidence: analyzedDoc.confidence,
-      summary: analyzedDoc.summary,
+      summary: analyzedDoc.summary || '',
       evidence: analyzedDoc.reasoning || analyzedDoc.evidence || [],
       extracted_fields: analyzedDoc.extracted_fields || {},
     };
@@ -178,7 +186,8 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `${analyzedDoc.filename.replace(/\.[^/.]+$/, '')}_ai_analysis.json`;
+    const safeBaseName = (analyzedDoc.filename || 'document').replace(/\.[^/.]+$/, '');
+    link.download = `${safeBaseName}_ai_analysis.json`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);

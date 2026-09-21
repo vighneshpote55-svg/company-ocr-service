@@ -23,7 +23,8 @@ export const JsonResultViewer: React.FC<JsonResultViewerProps> = ({ document, on
     const url = URL.createObjectURL(blob);
     const a = window.document.createElement('a');
     a.href = url;
-    a.download = `${document.filename.replace(/\.[^/.]+$/, '')}_ocr_result.json`;
+    const safeName = (document.filename || 'document').replace(/\.[^/.]+$/, '');
+    a.download = `${safeName}_ocr_result.json`;
     a.click();
     URL.revokeObjectURL(url);
     if (onCopyToast) onCopyToast('JSON file downloaded');

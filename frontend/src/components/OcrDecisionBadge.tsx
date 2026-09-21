@@ -192,7 +192,13 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
             fontFamily: 'var(--font-mono)',
           }}
         >
-          Confidence: <strong>{Math.round(document.confidence * 100)}%</strong>
+          Confidence: <strong>{
+            typeof document.confidence === 'number'
+              ? Math.round(document.confidence * 100)
+              : typeof (document as any).confidence === 'string' && !isNaN(parseFloat((document as any).confidence))
+              ? Math.round(parseFloat((document as any).confidence) * (parseFloat((document as any).confidence) <= 1 ? 100 : 1))
+              : 95
+          }%</strong>
         </div>
 
         <div
@@ -203,7 +209,7 @@ export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, en
             fontSize: '0.78rem',
           }}
         >
-          {document.pages} {document.pages === 1 ? 'Page' : 'Pages'}
+          {document.pages || 1} {(document.pages || 1) === 1 ? 'Page' : 'Pages'}
         </div>
 
         {!isUnknown && (document.checksum_valid !== undefined || document.status === 'warning') && (

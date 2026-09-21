@@ -21,7 +21,10 @@ export const AIAnalysisCard: React.FC<AIAnalysisCardProps> = ({
   onUploadNew,
   onReset,
 }) => {
-  const confidenceLower = (document.confidence || 'high').toLowerCase();
+  const rawConf = (document as any).confidence_level || document.confidence || 'high';
+  const confidenceLower = typeof rawConf === 'string'
+    ? rawConf.toLowerCase()
+    : (typeof rawConf === 'number' && rawConf >= 0.85 ? 'high' : rawConf >= 0.65 ? 'medium' : 'low');
   const confidenceLabel =
     confidenceLower === 'high'
       ? 'High Confidence'

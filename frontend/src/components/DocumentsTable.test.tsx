@@ -3,7 +3,14 @@ import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
 import { DocumentsTable } from './DocumentsTable.tsx';
+import { DocumentPreview } from './DocumentPreview.tsx';
+import { OcrDecisionBadge } from './OcrDecisionBadge.tsx';
+import { AIAnalysisCard } from './AIAnalysisCard.tsx';
+import { AISummaryCard } from './AISummaryCard.tsx';
+import { AIKeyFindingsCard } from './AIKeyFindingsCard.tsx';
+import { AIChatPanel } from './AIChatPanel.tsx';
 import type { DocumentItem, SupportedType } from '../types.ts';
+import { normalizeAiDocument } from '../types.ts';
 
 const mockSupportedTypes: SupportedType[] = [
   { id: 'auto', name: 'Auto Detect', category: 'General' },
@@ -187,3 +194,133 @@ test('DocumentsTable renders empty state message only when documents array is tr
   const rowMatches = html.match(/vault-table-row/g);
   assert.equal(rowMatches, null, 'No vault rows should be rendered when vault is empty');
 });
+
+test('Regression: AI Mode upload with document_type = "Unknown Document" remains rendered and Document Vault renders existing documents', () => {
+  // 1. Open AI Mode
+  const currentMode = 'ai';
+  assert.equal(currentMode, 'ai');
+
+  // 2. Mock successful AI response with document_type = "Unknown Document"
+  // This matches the exact shape returned by POST /api/mode/ai/analyze in backend main.py
+  const mockAiBackendResponse = {
+    document_id: 'c52f207b-8910-4131-bda0-e37452d37801',
+    filename: 'Customer_Agreement_Draft.pdf',
+    document_type: 'Unknown Document',
+    confidence: 'high', // string confidence
+    summary: 'I analyzed this document and identified it as Unknown Document.',
+    evidence: ['General business terms detected', 'No standard tax or identity markers'],
+    reasoning: ['General business terms detected', 'No standard tax or identity markers'],
+    extracted_fields: {}, // empty extracted fields
+    file_url: '/api/documents/c52f207b-8910-4131-bda0-e37452d37801/file',
+    preview_url: '/api/documents/c52f207b-8910-4131-bda0-e37452d37801/preview',
+    file_size: 204800,
+    pages: 2,
+    text_source: 'rapid_ocr',
+    extracted_text: 'THIS AGREEMENT is entered into on 15th day of August 2026...',
+  };
+
+  // 3. Complete upload: normalize response before state updates
+  const normalizedDoc = normalizeAiDocument(mockAiBackendResponse);
+
+  // Verify normalization safely produced valid identifiers and values
+  assert.equal(normalizedDoc.id, 'c52f207b-8910-4131-bda0-e37452d37801');
+  assert.equal(normalizedDoc.document_id, 'c52f207b-8910-4131-bda0-e37452d37801');
+  assert.equal(normalizedDoc.document_type, 'Unknown Document');
+  assert.equal(typeof normalizedDoc.confidence, 'number');
+  assert.equal(normalizedDoc.confidence, 0.95);
+  assert.equal(normalizedDoc.confidence_level, 'high');
+  assert.equal(normalizedDoc.file_type, '.pdf');
+
+  // Update vault state as in handleDocumentUploaded
+  let vaultDocuments: DocumentItem[] = [...mockThreeDocuments];
+  const exists = vaultDocuments.some((d) => d.id === normalizedDoc.id);
+  vaultDocuments = exists
+    ? vaultDocuments.map((d) => (d.id === normalizedDoc.id ? normalizedDoc : d))
+    : [normalizedDoc, ...vaultDocuments];
+
+  // 4. Verify AI Mode workspace components render without crashing (no blank screen!)
+  const analysisHtml = renderToString(
+    React.createElement(AIAnalysisCard, {
+      document: normalizedDoc,
+      onUploadNew: () => {},
+      onReset: () => {},
+    })
+  );
+  assert.ok(analysisHtml.includes('Customer_Agreement_Draft.pdf'), 'AIAnalysisCard should render filename');
+  assert.ok(analysisHtml.includes('Unknown Document'), 'AIAnalysisCard should render Unknown Document type');
+  assert.ok(analysisHtml.includes('High Confidence'), 'AIAnalysisCard should render confidence label');
+
+  const summaryHtml = renderToString(
+    React.createElement(AISummaryCard, {
+      summary: normalizedDoc.summary,
+      documentType: normalizedDoc.document_type,
+    })
+  );
+  assert.ok(summaryHtml.includes('Unknown Document'), 'AISummaryCard should render document type');
+
+  const findingsHtml = renderToString(
+    React.createElement(AIKeyFindingsCard, {
+      reasoning: normalizedDoc.reasoning,
+      documentType: normalizedDoc.document_type,
+      extractedFields: normalizedDoc.extracted_fields,
+    })
+  );
+  assert.ok(findingsHtml.includes('General business terms detected'), 'AIKeyFindingsCard should render reasoning points');
+
+  const chatHtml = renderToString(
+    React.createElement(AIChatPanel, {
+      document: normalizedDoc,
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'assistant',
+          content: 'I analyzed this document and identified it as Unknown Document.',
+          timestamp: '12:00 PM',
+        },
+      ],
+      isAiThinking: false,
+      onSendMessage: () => {},
+      onNotify: () => {},
+    })
+  );
+  assert.ok(chatHtml.includes('Document AI Assistant'), 'AIChatPanel should render safely');
+  assert.ok(chatHtml.includes('Customer_Agreement_Draft.pdf'), 'AIChatPanel should reference uploaded document');
+
+  // Also verify inspection components (DocumentPreview & OcrDecisionBadge) render without throwing
+  const previewHtml = renderToString(
+    React.createElement(DocumentPreview, {
+      document: normalizedDoc,
+    })
+  );
+  assert.ok(previewHtml.includes('Customer_Agreement_Draft.pdf'), 'DocumentPreview should render without crashing');
+  assert.ok(previewHtml.includes('PDF'), 'DocumentPreview should safely format file type');
+
+  const badgeHtml = renderToString(
+    React.createElement(OcrDecisionBadge, {
+      document: normalizedDoc,
+    })
+  );
+  assert.ok(badgeHtml.includes('Unknown Document'), 'OcrDecisionBadge should safely render Unknown Document badge');
+
+  // 5. Verify Document Vault still renders existing documents
+  const tableHtml = renderToString(
+    React.createElement(DocumentsTable, {
+      documents: vaultDocuments,
+      supportedTypes: mockSupportedTypes,
+      onSelectDocument: () => {},
+      onDeleteDocument: () => {},
+      onRefresh: () => {},
+      isLoading: false,
+    })
+  );
+
+  // All 3 previous documents plus the new AI document must be rendered
+  assert.ok(tableHtml.includes('WhatsApp Image 2026-09-10 at 16.53.24.jpeg'), 'Existing PAN Card should remain rendered');
+  assert.ok(tableHtml.includes('GST RC.pdf'), 'Existing GST RC should remain rendered');
+  assert.ok(tableHtml.includes('Account_Statement_Report_30-07-2026_1246hrs.PDF'), 'Existing Bank Statement should remain rendered');
+  assert.ok(tableHtml.includes('Customer_Agreement_Draft.pdf'), 'Newly uploaded Unknown Document should be rendered in vault');
+
+  const rowMatches4 = tableHtml.match(/vault-table-row/g);
+  assert.equal(rowMatches4?.length, 4, 'Vault table must render 4 rows (3 existing + 1 new AI document)');
+});
+

@@ -25,7 +25,11 @@ export const AISummaryCard: React.FC<AISummaryCardProps> = ({
       <div className="ai-summary-body-wrap">
         <Quote size={24} className="ai-summary-quote-icon" />
         <p className="ai-summary-text">
-          {summary || 'Document analysis completed successfully.'}
+          {typeof summary === 'string' && summary.trim()
+            ? summary
+            : (typeof summary === 'object' && summary !== null
+            ? JSON.stringify(summary)
+            : 'Document analysis completed successfully.')}
         </p>
       </div>
     </div>

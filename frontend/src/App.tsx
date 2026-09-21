@@ -8,8 +8,10 @@ import {
 } from 'lucide-react';
 
 import type { DocumentItem, SupportedType, DashboardStats as StatsType, EngineInfo, AppMode } from './types';
+import { normalizeAiDocument } from './types';
 import { api } from './services/api';
 import { DashboardLayout } from './components/DashboardLayout';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import type { NavTab } from './components/Sidebar';
 import { OcrDecisionBadge } from './components/OcrDecisionBadge';
 import { DocumentPreview } from './components/DocumentPreview';
@@ -138,13 +140,22 @@ export const App: React.FC = () => {
   }, [loadData]);
 
   const handleDocumentUploaded = (doc: DocumentItem) => {
-    setSelectedDoc(doc);
-    setInspectTab('fields');
-    addToast(`Successfully processed "${doc.filename}"!`, 'success');
+    console.error('[App] handleDocumentUploaded received document payload:', doc);
+    const normalized = normalizeAiDocument(doc);
+    console.error('[App] handleDocumentUploaded normalized document:', normalized);
+
+    // In Offline Mode, immediately route to the inspection view.
+    // In AI Mode, keep the user in the rich AIModeView workspace.
+    if (appMode === 'offline') {
+      setSelectedDoc(normalized);
+      setInspectTab('fields');
+    }
+    addToast(`Successfully processed "${normalized.filename}"!`, 'success');
+
     // Ensure new upload does not replace previous vault records with only the newest document
     setDocuments((prev) => {
-      const exists = prev.some((d) => d.id === doc.id);
-      return exists ? prev : [doc, ...prev];
+      const exists = prev.some((d) => d.id === normalized.id);
+      return exists ? prev.map((d) => (d.id === normalized.id ? normalized : d)) : [normalized, ...prev];
     });
     loadData();
   };
@@ -315,7 +326,7 @@ export const App: React.FC = () => {
   };
 
   return (
-    <>
+    <ErrorBoundary>
       <DashboardLayout
         mode={appMode}
         onSelectMode={(mode) => {
@@ -375,7 +386,7 @@ export const App: React.FC = () => {
 
       {/* Toast Notifications */}
       <Toast toasts={toasts} onDismiss={removeToast} />
-    </>
+    </ErrorBoundary>
   );
 };
 
