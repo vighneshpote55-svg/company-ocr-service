@@ -140,6 +140,35 @@ export interface OllamaStatusResponse {
   error?: string;
 }
 
+export interface AIProviderConfig {
+  active_provider: string;
+  active_model: string;
+  mode: 'local' | 'external';
+  api_key_configured: boolean;
+  base_url?: string;
+  ollama_available?: boolean;
+  local_fallback_available?: boolean;
+  fallback_on_error?: boolean;
+}
+
+export interface AIProviderStatus {
+  active_provider: string;
+  active_model: string;
+  mode: 'local' | 'external';
+  api_key_configured: boolean;
+  ollama_available: boolean;
+  local_fallback_available: boolean;
+  message?: string;
+}
+
+export interface AIConnectionTestResult {
+  success: boolean;
+  provider: string;
+  model: string;
+  message: string;
+  latency_ms?: number;
+}
+
 export interface AiStatusResponse {
   configured: boolean;
   provider: string;

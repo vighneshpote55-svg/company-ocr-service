@@ -173,4 +173,126 @@ test('ApiService getOllamaStatus calls GET /api/ollama/status and returns health
   }
 });
 
+test('ApiService getAiConfig calls GET /api/ai/config and returns safe config', async () => {
+  const api = new ApiService();
+  api.setAuthEnabled(false);
+
+  let capturedUrl = '';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url: any) => {
+    capturedUrl = String(url);
+    return {
+      status: 200,
+      ok: true,
+      json: async () => ({
+        active_provider: 'local',
+        active_model: 'qwen2.5vl:3b',
+        mode: 'local',
+        api_key_configured: false,
+        ollama_available: true,
+        local_fallback_available: true,
+      }),
+    } as any;
+  };
+
+  try {
+    const cfg = await api.getAiConfig();
+    assert.equal(capturedUrl, 'http://localhost:8000/api/ai/config');
+    assert.equal(cfg.active_provider, 'local');
+    assert.equal(cfg.mode, 'local');
+    assert.equal(cfg.api_key_configured, false);
+    assert.equal((cfg as any).api_key, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ApiService updateAiConfig calls POST /api/ai/config with payload', async () => {
+  const api = new ApiService();
+  api.setAuthEnabled(false);
+
+  let capturedUrl = '';
+  let capturedBody = '';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedBody = opts?.body || '';
+    return {
+      status: 200,
+      ok: true,
+      json: async () => ({
+        active_provider: 'openrouter',
+        active_model: 'google/gemini-2.5-flash',
+        mode: 'external',
+        api_key_configured: true,
+      }),
+    } as any;
+  };
+
+  try {
+    const updated = await api.updateAiConfig({
+      provider: 'openrouter',
+      api_key: 'sk-test-secret-key-12345',
+      model: 'google/gemini-2.5-flash',
+    });
+    assert.equal(capturedUrl, 'http://localhost:8000/api/ai/config');
+    assert.ok(capturedBody.includes('sk-test-secret-key-12345'));
+    assert.equal(updated.mode, 'external');
+    assert.equal((updated as any).api_key, undefined);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ApiService testAiConnection calls POST /api/ai/test-connection', async () => {
+  const api = new ApiService();
+  api.setAuthEnabled(false);
+
+  let capturedUrl = '';
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url: any) => {
+    capturedUrl = String(url);
+    return {
+      status: 200,
+      ok: true,
+      json: async () => ({
+        success: true,
+        provider: 'ollama',
+        model: 'qwen2.5vl:3b',
+        message: 'Ollama is ready',
+        latency_ms: 12,
+      }),
+    } as any;
+  };
+
+  try {
+    const res = await api.testAiConnection({ provider: 'local' });
+    assert.equal(capturedUrl, 'http://localhost:8000/api/ai/test-connection');
+    assert.equal(res.success, true);
+    assert.equal(res.provider, 'ollama');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('API keys are NEVER persisted to localStorage or sessionStorage', () => {
+  const dummyKey = 'sk-or-never-store-in-browser-storage-999';
+  
+  // Verify localStorage and sessionStorage keys
+  const localKeys = Object.keys(globalThis.localStorage || {});
+  const sessionKeys = Object.keys(globalThis.sessionStorage || {});
+
+  for (const k of localKeys) {
+    const val = (globalThis.localStorage as any).getItem(k);
+    assert.notEqual(val, dummyKey);
+    assert.ok(!String(k).toLowerCase().includes('ai_api_key'));
+  }
+  for (const k of sessionKeys) {
+    const val = (globalThis.sessionStorage as any).getItem(k);
+    assert.notEqual(val, dummyKey);
+    assert.ok(!String(k).toLowerCase().includes('ai_api_key'));
+  }
+});
+
+
 

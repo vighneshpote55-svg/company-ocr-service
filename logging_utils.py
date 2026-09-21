@@ -81,6 +81,18 @@ def redact_sensitive_text(text: str) -> str:
     if env_key and len(env_key) >= 16 and env_key in text:
         text = text.replace(env_key, "[REDACTED_KEY]")
 
+    # Redact configured AI API keys from environment
+    for ai_var in ("AI_API_KEY", "OPENROUTER_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY"):
+        k_val = os.getenv(ai_var, "").strip()
+        if k_val and len(k_val) >= 8 and k_val in text:
+            text = text.replace(k_val, "[REDACTED_API_KEY]")
+
+    # Redact bearer token headers
+    text = re.sub(r"(Bearer\s+)[A-Za-z0-9_\-\.]{12,}", r"\1[REDACTED_TOKEN]", text, flags=re.IGNORECASE)
+
+    # Redact common sk-... API key patterns
+    text = re.sub(r"\b(?:sk-[a-zA-Z0-9_\-]{16,})\b", "[REDACTED_API_KEY]", text)
+
     # Redact 64-char hex keys
     text = HEX_KEY_PATTERN.sub("[REDACTED_KEY]", text)
 
@@ -116,7 +128,7 @@ def redact_data(obj: Any) -> Any:
             key_str = str(k).lower()
             if key_str in ("ocr_text", "full_text", "prompt", "ai_prompt", "response_text", "raw_content", "ai_response"):
                 cleaned[k] = "[REDACTED_LARGE_PAYLOAD]"
-            elif any(s in key_str for s in ("encryption_key", "jwt_secret", "secret_key", "password", "api_key")):
+            elif any(s in key_str for s in ("encryption_key", "jwt_secret", "secret_key", "password", "api_key", "ai_api_key", "authorization", "bearer", "token")):
                 cleaned[k] = "[REDACTED_SECRET]"
             else:
                 cleaned[k] = redact_data(v)

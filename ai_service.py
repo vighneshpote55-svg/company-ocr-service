@@ -16,6 +16,7 @@ import httpx
 
 import field_registry
 import ollama_ai
+import ai_providers
 
 logger = logging.getLogger("company_ocr.ai_service")
 
@@ -26,57 +27,32 @@ DEFAULT_MODEL = "google/gemini-2.5-flash"
 
 
 def get_ai_config() -> Dict[str, Any]:
-    """Load current AI configuration from environment variables."""
-    provider = os.getenv("AI_PROVIDER", "openrouter").lower().strip()
-
-    # Check provider-specific API keys with fallback to generic AI_API_KEY
-    api_key = (
-        os.getenv("AI_API_KEY")
-        or os.getenv("OPENROUTER_API_KEY")
-        or os.getenv("OPENAI_API_KEY")
-        or os.getenv("GEMINI_API_KEY")
-    )
-    if api_key:
-        api_key = api_key.strip()
-
-    model = os.getenv("AI_MODEL")
-    if not model:
-        if provider == "openai":
-            model = "gpt-4o-mini"
-        elif provider == "gemini":
-            model = "gemini-2.5-flash"
-        else:
-            model = DEFAULT_MODEL
-
-    base_url = os.getenv("AI_BASE_URL")
-    if not base_url:
-        if provider == "openai":
-            base_url = DEFAULT_OPENAI_BASE_URL
-        else:
-            base_url = DEFAULT_OPENROUTER_BASE_URL
-
-    base_url = base_url.rstrip("/")
-
+    """Load current AI configuration from ai_providers.ai_provider_manager."""
+    safe_cfg = ai_providers.ai_provider_manager.get_safe_config()
     return {
-        "provider": provider,
-        "api_key": api_key,
-        "model": model,
-        "base_url": base_url,
-        "configured": bool(api_key),
+        "provider": safe_cfg["active_provider"],
+        "model": safe_cfg["active_model"],
+        "base_url": safe_cfg["base_url"],
+        "configured": safe_cfg["api_key_configured"],
+        "mode": safe_cfg["mode"],
     }
 
 
 def check_ai_status() -> Dict[str, Any]:
     """Return public status of AI provider configuration (does not reveal API key)."""
-    cfg = get_ai_config()
+    safe_cfg = ai_providers.ai_provider_manager.get_safe_config()
     ollama_status = ollama_ai.check_ollama_health()
+    configured = safe_cfg["api_key_configured"]
     return {
-        "configured": cfg["configured"],
-        "provider": cfg["provider"],
-        "model": cfg["model"],
-        "base_url": cfg["base_url"],
-        "message": "AI provider configured and ready" if cfg["configured"] else "AI_API_KEY is not set. Please configure AI_API_KEY in .env.",
+        "configured": configured,
+        "provider": safe_cfg["active_provider"],
+        "model": safe_cfg["active_model"],
+        "base_url": safe_cfg["base_url"],
+        "mode": safe_cfg["mode"],
+        "message": "AI provider configured and ready" if configured else "AI_API_KEY is not set. Please configure AI_API_KEY in .env.",
         "ollama": ollama_status,
+        "local_fallback_available": safe_cfg["local_fallback_available"],
+        "fallback_on_error": safe_cfg["fallback_on_error"],
     }
 
 
@@ -318,95 +294,37 @@ async def analyze_document(
 
     # If canonical classifier identified document with high/medium confidence, enforce it
     if canonical_res["confidence"] in ("high", "medium") and canonical_res["document_type"] != "Unknown Document":
-        # If Ollama is running locally, optionally augment extracted fields with vision analysis
+        # Optionally augment extracted fields with active provider vision analysis
         if file_path and os.path.exists(file_path):
-            health = ollama_ai.check_ollama_health()
-            if health.get("reachable") and health.get("model_installed"):
-                try:
-                    ollama_res = ollama_ai.analyze_document(file_path, filename=filename, ocr_text=document_text)
-                    if "error" not in ollama_res:
-                        extra_fields = ollama_res.get("extracted_fields") or {}
-                        # Keep canonical verified fields primary, add extra visual fields
-                        merged_fields = {**extra_fields, **canonical_res.get("extracted_fields", {})}
-                        canonical_res["extracted_fields"] = merged_fields
-                except Exception as ex:
-                    logger.warning("Ollama vision augmentation skipped: %s", ex)
+            try:
+                active_prov = ai_providers.ai_provider_manager.get_active_provider()
+                prov_res = await active_prov.analyze_document(
+                    document_text=document_text,
+                    file_path=file_path,
+                    filename=filename,
+                )
+                extra_fields = prov_res.get("extracted_fields") or {}
+                canonical_res["extracted_fields"] = {**extra_fields, **canonical_res.get("extracted_fields", {})}
+            except Exception as ex:
+                logger.debug("Provider vision augmentation skipped: %s", ex)
         return canonical_res
 
-    # 3. Local Ollama Vision + Multimodal check for unrecognized documents
-    if file_path and os.path.exists(file_path):
-        health = ollama_ai.check_ollama_health()
-        if health.get("reachable") and health.get("model_installed"):
-            try:
-                ollama_res = ollama_ai.analyze_document(file_path, filename=filename, ocr_text=document_text)
-                if "error" not in ollama_res:
-                    norm_type = ollama_ai.normalize_document_type(
-                        ollama_res.get("document_type", "Unknown Document"),
-                        text_content=document_text,
-                    )
-                    ollama_res["document_type"] = norm_type
-                    if norm_type == "Unknown Document":
-                        ollama_res["confidence"] = "low"
-                    if not ollama_res.get("evidence"):
-                        ollama_res["evidence"] = canonical_res.get("evidence", [])
-                        ollama_res["reasoning"] = canonical_res.get("evidence", [])
-                    return ollama_res
-            except Exception as ex:
-                logger.warning("Ollama analysis error; falling back to local intelligence: %s", ex)
+    # 3. Active AI Provider Document Analysis (Local Ollama or External Provider)
+    try:
+        prov_res = await ai_providers.ai_provider_manager.analyze_document(
+            document_text=document_text,
+            file_path=file_path,
+            filename=filename,
+        )
+        if prov_res and "error" not in prov_res:
+            return prov_res
+    except Exception as ex:
+        logger.warning("AI Provider analysis failed: %s; falling back to canonical classifier", ex)
+        active_p = ai_providers.ai_provider_manager.get_active_provider()
+        if not active_p.is_local and not ai_providers.ai_provider_manager._fallback_on_error:
+            raise
 
-    # 4. External Cloud LLM check (OpenAI / Gemini / OpenRouter)
-    cfg = get_ai_config()
-    if cfg["configured"]:
-        try:
-            system_prompt = (
-                "You are an expert document understanding AI. Analyze the uploaded document's extracted text.\n"
-                "Classify it into its true document type (e.g. 'GST Registration Certificate', 'PAN Card', 'Aadhaar Card', 'Income Tax Notice', 'Employment Contract', 'Bank Statement', 'Commercial Invoice', 'Salary Slip', or 'Unknown Document').\n"
-                "CRITICAL RULES:\n"
-                "- NEVER use the filename or raw text fragments like 'Incometaxdepartment' as the document type.\n"
-                "- If the document is a GST Registration Certificate, classify it as 'GST Registration Certificate'.\n"
-                "- If the document is a PAN Card, classify it as 'PAN Card'.\n"
-                "- If the document is an Aadhaar Card, classify it as 'Aadhaar Card'.\n"
-                "- If the document is an Income Tax Department notice, classify it as 'Income Tax Notice'.\n"
-                "- Respond ONLY with a valid JSON object matching:\n"
-                "{\n"
-                '  "document_type": "string",\n'
-                '  "confidence": "high" | "medium" | "low",\n'
-                '  "summary": "1-2 sentence factual summary of the document and its actual contents.",\n'
-                '  "evidence": [\n'
-                '    "Short factual evidence point 1 from document",\n'
-                '    "Short factual evidence point 2 from document",\n'
-                '    "Short factual evidence point 3 from document"\n'
-                '  ]\n'
-                "}\n"
-            )
-            user_prompt = f"Document Filename: {filename}\n\nExtracted Text:\n---\n{document_text[:12000]}\n---"
-            messages = [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_prompt}]
-            raw_response = await _call_llm_chat(messages, temperature=0.1, max_tokens=1000)
-            cleaned = _clean_json_response(raw_response)
-            parsed = json.loads(cleaned)
-
-            raw_type = parsed.get("document_type", "Unknown Document")
-            norm_type = ollama_ai.normalize_document_type(raw_type, text_content=document_text)
-            confidence = parsed.get("confidence", "high").lower()
-            if confidence not in ("high", "medium", "low"):
-                confidence = "high" if norm_type != "Unknown Document" else "low"
-
-            evidence = parsed.get("evidence") or parsed.get("reasoning") or []
-            if isinstance(evidence, str):
-                evidence = [evidence]
-
-            return {
-                "document_type": norm_type,
-                "confidence": confidence,
-                "summary": parsed.get("summary", f"This document was analyzed and identified as a {norm_type}."),
-                "evidence": evidence,
-                "reasoning": evidence,
-                "extracted_fields": canonical_res.get("extracted_fields", {}),
-            }
-        except Exception as ex:
-            logger.warning("Cloud LLM document analysis failed: %s; falling back to local classifier", ex)
-
-    # 5. Built-in Local Grounded Document Classifier
+    # 4. Built-in Local Grounded Document Classifier fallback
     return canonical_res
 
 
@@ -746,69 +664,33 @@ async def chat_with_document(
             else:
                 return f"I could not find a {field_def.display_name} in this document."
 
-    # 17. Local Ollama Chat (if running)
-    health = ollama_ai.check_ollama_health()
-    if health.get("reachable") and health.get("model_installed"):
-        try:
-            ollama_reply = ollama_ai.chat_with_document(
-                document_context=document_text,
-                filename=filename,
-                message=message,
-                history=history,
-                stored_analysis=stored_analysis,
-            )
-            # Guard against edge-case hallucinations in Ollama reply
+    # 17. Active AI Provider Chat (Local Ollama or External Provider)
+    try:
+        reply = await ai_providers.ai_provider_manager.chat(
+            document_text=document_text,
+            filename=filename,
+            message=message,
+            history=history,
+            stored_analysis=stored_analysis,
+        )
+        if reply and reply.strip():
+            # Guard against edge-case hallucinations in model reply
             if "employee" in q and "employment" not in doc_type.lower() and "employee_name" not in extracted:
-                if any(k in ollama_reply.lower() for k in ["employee is", "employee named", "employee name:"]):
+                if any(k in reply.lower() for k in ["employee is", "employee named", "employee name:"]):
                     return "I could not find an employee name in this document."
             if "ifsc" in q:
-                if not re.search(r"\b([A-Z]{4}0[A-Z0-9]{6})\b", ollama_reply):
+                if not re.search(r"\b([A-Z]{4}0[A-Z0-9]{6})\b", reply):
                     return "I could not find an IFSC Code in this document."
 
-            ollama_reply = ollama_reply.replace("***/Name", "the cardholder's name").replace("*/Name", "").replace("\u5dde/Name", "")
-            return ollama_reply
-        except Exception as ex:
-            logger.warning("Ollama chat failed: %s; falling back to grounded response engine", ex)
+            reply = reply.replace("***/Name", "the cardholder's name").replace("*/Name", "").replace("\u5dde/Name", "")
+            return reply
+    except Exception as ex:
+        active_p = ai_providers.ai_provider_manager.get_active_provider()
+        if not active_p.is_local and not ai_providers.ai_provider_manager._fallback_on_error:
+            raise
+        logger.warning("Active AI Provider chat failed: %s; falling back to grounded line search", ex)
 
-    # 18. Cloud LLM (if configured)
-    cfg = get_ai_config()
-    if cfg["configured"]:
-        try:
-            system_prompt = (
-                f"You are an AI Document Assistant analyzing the document '{filename}'.\n"
-                f"Document Type: {doc_type}\n"
-                f"Extracted Document Text:\n---\n{document_text[:12000]}\n---\n\n"
-                f"Verified Stored Fields:\n{json.dumps(extracted, indent=2)}\n\n"
-                "CRITICAL GROUNDING RULES:\n"
-                "1. Answer only from the provided document text and verified fields above.\n"
-                "2. Use OCR text and extracted fields as primary evidence.\n"
-                "3. Do not invent values, assume, or hallucinate facts, numbers, dates, or names.\n"
-                "4. If information is absent, explicitly say it was not found (e.g. 'I could not find [field name] in this document.').\n"
-                "5. Never use previous conversation unless it refers to the current document.\n"
-                "6. Do not expose chain-of-thought, internal reasoning, or thinking tags.\n"
-                "7. Return concise grounded answers.\n"
-                "8. NEVER output raw OCR placeholder artifacts or label fragments such as '***/Name', 'Name', or fake values.\n"
-                "9. Never substitute Bank Name or Branch when asked for IFSC.\n"
-                "10. Never substitute Account Number when asked for Customer Number, or GSTIN when asked for PAN.\n"
-                "11. Never output Python dictionary syntax for dates or statement periods.\n"
-                "12. Maintain a concise, direct, helpful, and professional tone."
-            )
-            messages = [{"role": "system", "content": system_prompt}]
-            if history:
-                for turn in history[-6:]:
-                    r = turn.get("role")
-                    c = turn.get("content")
-                    if r in ("user", "assistant") and c:
-                        messages.append({"role": r, "content": str(c)})
-            messages.append({"role": "user", "content": message.strip()})
-
-            resp = await _call_llm_chat(messages, temperature=0.1, max_tokens=1000)
-            resp = resp.replace("***/Name", "the cardholder's name").replace("*/Name", "")
-            return resp
-        except Exception as ex:
-            logger.warning("Cloud LLM chat failed: %s; falling back to local grounded engine", ex)
-
-    # 19. General Grounded Line Search
+    # 18. General Grounded Line Search
     doc_lines = [l.strip() for l in document_text.split("\n") if l.strip()]
     matching = [l for l in doc_lines if any(w in l.lower() for w in q.split() if len(w) > 3)]
     if matching:

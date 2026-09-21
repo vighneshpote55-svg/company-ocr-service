@@ -39,6 +39,11 @@ services:
       - ENVIRONMENT=production
       - OLLAMA_HOST=http://ollama:11434
       - OCR_TEMP_DIR=/tmp/company_ocr_temp
+      - AI_PROVIDER=${AI_PROVIDER:-local}
+      - AI_API_KEY=${AI_API_KEY:-}
+      - AI_MODEL=${AI_MODEL:-qwen2.5vl:3b}
+      - AI_BASE_URL=${AI_BASE_URL:-}
+      - AI_FALLBACK_ON_ERROR=${AI_FALLBACK_ON_ERROR:-false}
     volumes:
       - document_uploads:/app/uploads
     depends_on:

@@ -32,6 +32,7 @@ load_dotenv()
 
 import ai_service
 import ollama_ai
+import ai_providers
 from pydantic import BaseModel, Field
 import logging_utils
 import retention_service
@@ -1702,6 +1703,65 @@ async def get_ai_mode_status(
     return res
 
 
+class AiConfigUpdatePayload(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+    fallback_on_error: Optional[bool] = None
+
+
+class AiTestConnectionPayload(BaseModel):
+    provider: Optional[str] = None
+    model: Optional[str] = None
+    api_key: Optional[str] = None
+    base_url: Optional[str] = None
+
+
+@app.get("/api/ai/config")
+async def get_ai_config_endpoint(
+    auth: dict = Depends(authenticate_request),
+):
+    """
+    Returns public safe AI provider configuration status.
+    CRITICAL: Never returns API keys, authorization headers, or secret tokens.
+    """
+    return ai_providers.ai_provider_manager.get_safe_config()
+
+
+@app.post("/api/ai/config")
+async def update_ai_config_endpoint(
+    payload: AiConfigUpdatePayload,
+    auth: dict = Depends(authenticate_request),
+):
+    """
+    Updates runtime AI provider configuration securely on backend.
+    Never stores keys on frontend, never returns secret keys in response.
+    """
+    ai_providers.ai_provider_manager.update_config(
+        provider=payload.provider,
+        api_key=payload.api_key,
+        model=payload.model,
+        base_url=payload.base_url,
+        fallback_on_error=payload.fallback_on_error,
+    )
+    return ai_providers.ai_provider_manager.get_safe_config()
+
+
+@app.post("/api/ai/test-connection")
+async def test_ai_connection_endpoint(
+    payload: Optional[AiTestConnectionPayload] = None,
+    auth: dict = Depends(authenticate_request),
+):
+    """
+    Tests connectivity to candidate or currently configured AI provider.
+    Returns safe test result (success, provider, model, message, latency_ms).
+    Never exposes secrets in response.
+    """
+    candidate = payload.model_dump() if payload else None
+    return await ai_providers.ai_provider_manager.test_connection(candidate)
+
+
 @app.post("/api/mode/offline")
 async def process_offline_mode_endpoint(
     file: UploadFile = File(...),
@@ -2070,12 +2130,16 @@ async def process_ai_analyze_endpoint(
             "extracted_text": extracted_text,
             "summary": ai_res.get("summary", ""),
             "evidence": evidence_list,
+            "is_local_ai": ai_res.get("is_local_ai", True),
+            "model_used": ai_res.get("model_used", "qwen2.5vl:3b"),
             "ai_analysis": {
                 "document_type": ai_res.get("document_type", "Unknown Document"),
                 "confidence": ai_res.get("confidence", "high"),
                 "summary": ai_res.get("summary", ""),
                 "evidence": evidence_list,
                 "extracted_fields": ai_res.get("extracted_fields", {}),
+                "is_local_ai": ai_res.get("is_local_ai", True),
+                "model_used": ai_res.get("model_used", "qwen2.5vl:3b"),
             },
         }
 
@@ -2088,13 +2152,17 @@ async def process_ai_analyze_endpoint(
         if saved_record.get("ai_analysis"):
             saved_record["ai_analysis"]["document_id"] = saved_record["id"]
 
+        is_local = ai_res.get("is_local_ai", True)
+        used_model = ai_res.get("model_used", "qwen2.5vl:3b")
+
         logging_utils.log_event(
             logger,
             logging.INFO,
             event="document_processed",
             document_type=ai_res.get("document_type", "Unknown Document"),
             ocr_engine="RapidOCR",
-            ai_model="qwen2.5vl:3b",
+            ai_provider="ollama" if is_local else "external",
+            ai_model=used_model,
             processing_time_ms=int((time.time() - req_start) * 1000),
             status="success",
         )
@@ -2114,6 +2182,8 @@ async def process_ai_analyze_endpoint(
             "pages": saved_record["pages"],
             "text_source": text_source,
             "extracted_text": extracted_text,
+            "is_local_ai": is_local,
+            "model_used": used_model,
         }
 
     finally:

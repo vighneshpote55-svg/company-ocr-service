@@ -9,7 +9,10 @@ import type {
   AiStatusResponse,
   OllamaStatusResponse,
   OfflineUploadResult,
+  AIProviderConfig,
+  AIConnectionTestResult,
 } from '../types';
+export type { AIProviderConfig, AIProviderStatus, AIConnectionTestResult } from '../types';
 import { normalizeAiDocument } from '../types';
 
 const STORAGE_KEY_BASE_URL = 'ocr_app_base_url';
@@ -476,6 +479,49 @@ export class ApiService {
   public async getOllamaStatus(): Promise<OllamaStatusResponse> {
     const res = await this.fetchWithAuth(this.getUrl('/api/ollama/status'));
     if (!res.ok) throw new Error('Failed to fetch Ollama status');
+    return res.json();
+  }
+
+  public async getAiConfig(): Promise<AIProviderConfig> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/ai/config'));
+    if (!res.ok) throw new Error('Failed to fetch AI configuration');
+    return res.json();
+  }
+
+  public async updateAiConfig(payload: {
+    provider?: string;
+    model?: string;
+    api_key?: string;
+    base_url?: string;
+    fallback_on_error?: boolean;
+  }): Promise<AIProviderConfig> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/ai/config'), {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to update AI configuration' }));
+      throw new Error(err.detail || 'Failed to update AI configuration');
+    }
+    return res.json();
+  }
+
+  public async testAiConnection(candidate?: {
+    provider?: string;
+    model?: string;
+    api_key?: string;
+    base_url?: string;
+  }): Promise<AIConnectionTestResult> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/ai/test-connection'), {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(candidate || {}),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'AI connection test failed' }));
+      throw new Error(err.detail || 'AI connection test failed');
+    }
     return res.json();
   }
 

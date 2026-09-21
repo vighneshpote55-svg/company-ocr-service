@@ -13,6 +13,8 @@ import {
   UserCheck,
   ShieldAlert,
   Sparkles,
+  Bot,
+  Cpu,
 } from 'lucide-react';
 import { api } from '../services/api';
 
@@ -33,6 +35,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [isTesting, setIsTesting] = useState(false);
   const [connectionLatency, setConnectionLatency] = useState<number | null>(null);
 
+  // AI Model Configuration State
+  const [aiProvider, setAiProvider] = useState<'local' | 'external'>('local');
+  const [externalProviderName, setExternalProviderName] = useState('openrouter');
+  const [aiModel, setAiModel] = useState('qwen2.5vl:3b');
+  const [aiApiKey, setAiApiKey] = useState('');
+  const [aiBaseUrl, setAiBaseUrl] = useState('');
+  const [isAiKeyConfigured, setIsAiKeyConfigured] = useState(false);
+  const [isTestingAi, setIsTestingAi] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+
   // Sync state with api config whenever modal opens
   useEffect(() => {
     if (isOpen) {
@@ -43,6 +55,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       setBearerToken(cfg.token || '');
       setApiKey(cfg.apiKey || '');
       setTestResult(null);
+
+      // Load AI Model Configuration from backend
+      api.getAiConfig()
+        .then((aiCfg) => {
+          const isExt = aiCfg.mode === 'external';
+          setAiProvider(isExt ? 'external' : 'local');
+          setExternalProviderName(aiCfg.active_provider !== 'ollama' ? aiCfg.active_provider : 'openrouter');
+          setAiModel(aiCfg.active_model || (isExt ? 'google/gemini-2.5-flash' : 'qwen2.5vl:3b'));
+          setAiBaseUrl(aiCfg.base_url || '');
+          setIsAiKeyConfigured(Boolean(aiCfg.api_key_configured));
+          setAiApiKey('');
+          setAiTestResult(null);
+        })
+        .catch(() => {
+          setAiProvider('local');
+          setAiModel('qwen2.5vl:3b');
+        });
     }
   }, [isOpen]);
 
@@ -103,6 +132,31 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     }
   };
 
+  const handleTestAiConnection = async () => {
+    setIsTestingAi(true);
+    setAiTestResult(null);
+    try {
+      const candidate = {
+        provider: aiProvider === 'local' ? 'local' : externalProviderName,
+        model: aiModel,
+        api_key: aiApiKey || undefined,
+        base_url: aiBaseUrl || undefined,
+      };
+      const res = await api.testAiConnection(candidate);
+      setAiTestResult({
+        ok: res.success,
+        message: res.message,
+      });
+    } catch (err: any) {
+      setAiTestResult({
+        ok: false,
+        message: `Connection failed: ${err.message || 'Error reaching provider.'}`,
+      });
+    } finally {
+      setIsTestingAi(false);
+    }
+  };
+
   const handleSave = () => {
     api.updateConfig({
       baseUrl,
@@ -111,6 +165,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       token: bearerToken || undefined,
       apiKey: apiKey || undefined,
     });
+
+    if (aiProvider === 'local') {
+      api.updateAiConfig({
+        provider: 'local',
+        model: 'qwen2.5vl:3b',
+      }).catch(console.error);
+    } else {
+      api.updateAiConfig({
+        provider: externalProviderName,
+        model: aiModel,
+        api_key: aiApiKey || undefined,
+        base_url: aiBaseUrl || undefined,
+      }).catch(console.error);
+    }
+
     onSaved();
     onClose();
   };
@@ -328,6 +397,155 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 </div>
               </div>
             </div>
+          </div>
+
+          {/* Section 4: AI Model Configuration */}
+          <div className="settings-form-section">
+            <div className="settings-section-title-row">
+              <div className="settings-section-heading">AI Model Configuration</div>
+              <span className="settings-endpoint-pill">AI Mode Engine</span>
+            </div>
+
+            <div className="settings-two-col-grid">
+              <div className="settings-field-col">
+                <label className="settings-input-label" htmlFor="ai-provider-select">
+                  Provider
+                </label>
+                <div className="settings-input-wrapper">
+                  <div className="settings-input-left-icon" aria-hidden="true">
+                    <Bot size={18} />
+                  </div>
+                  <select
+                    id="ai-provider-select"
+                    className="settings-input-field"
+                    value={aiProvider}
+                    onChange={(e) => {
+                      const val = e.target.value as 'local' | 'external';
+                      setAiProvider(val);
+                      if (val === 'local') {
+                        setAiModel('qwen2.5vl:3b');
+                      } else if (!aiModel || aiModel === 'qwen2.5vl:3b') {
+                        setAiModel('google/gemini-2.5-flash');
+                      }
+                    }}
+                  >
+                    <option value="local">Local Ollama (Offline / Private)</option>
+                    <option value="external">External Provider (OpenRouter / OpenAI / Custom)</option>
+                  </select>
+                </div>
+                <span className="settings-field-hint">
+                  {aiProvider === 'local'
+                    ? 'Runs locally via Ollama. No external API key required; inference stays private.'
+                    : 'Routes AI Mode analysis to an external cloud or custom OpenAI-compatible endpoint.'}
+                </span>
+              </div>
+
+              <div className="settings-field-col">
+                <label className="settings-input-label" htmlFor="ai-model-input">
+                  Model
+                </label>
+                <div className="settings-input-wrapper">
+                  <div className="settings-input-left-icon" aria-hidden="true">
+                    <Cpu size={18} />
+                  </div>
+                  <input
+                    id="ai-model-input"
+                    type="text"
+                    className="settings-input-field"
+                    value={aiModel}
+                    onChange={(e) => setAiModel(e.target.value)}
+                    disabled={aiProvider === 'local'}
+                    placeholder={aiProvider === 'local' ? 'qwen2.5vl:3b' : 'e.g. google/gemini-2.5-flash or gpt-4o-mini'}
+                  />
+                </div>
+                <span className="settings-field-hint">
+                  {aiProvider === 'local'
+                    ? 'Default vision model: qwen2.5vl:3b (mandatory local fallback).'
+                    : 'Target LLM/vision model name supported by the external provider.'}
+                </span>
+              </div>
+            </div>
+
+            {/* External Provider Credentials (Hidden when Local Ollama is selected) */}
+            {aiProvider === 'external' && (
+              <div className="settings-two-col-grid" style={{ marginTop: '16px' }}>
+                <div className="settings-field-col">
+                  <label className="settings-input-label" htmlFor="ai-api-key-input">
+                    API Key
+                  </label>
+                  <div className="settings-input-wrapper">
+                    <div className="settings-input-left-icon" aria-hidden="true">
+                      <Key size={18} />
+                    </div>
+                    <input
+                      id="ai-api-key-input"
+                      type="password"
+                      className="settings-input-field"
+                      value={aiApiKey}
+                      onChange={(e) => setAiApiKey(e.target.value)}
+                      placeholder={isAiKeyConfigured ? '•••••••••••••••• (Configured)' : 'Enter external provider API key'}
+                    />
+                  </div>
+                  <span className="settings-field-hint">
+                    API keys are stored exclusively in backend secrets and never in browser storage.
+                  </span>
+                </div>
+
+                <div className="settings-field-col">
+                  <label className="settings-input-label" htmlFor="ai-base-url-input">
+                    Base URL (Optional)
+                  </label>
+                  <div className="settings-input-wrapper">
+                    <div className="settings-input-left-icon" aria-hidden="true">
+                      <Globe size={18} />
+                    </div>
+                    <input
+                      id="ai-base-url-input"
+                      type="text"
+                      className="settings-input-field"
+                      value={aiBaseUrl}
+                      onChange={(e) => setAiBaseUrl(e.target.value)}
+                      placeholder="https://openrouter.ai/api/v1 (or https://api.openai.com/v1)"
+                    />
+                  </div>
+                  <span className="settings-field-hint">
+                    Custom OpenAI-compatible base URL (defaults to OpenRouter or OpenAI).
+                  </span>
+                </div>
+              </div>
+            )}
+
+            {/* AI Test Connection Action */}
+            <div className="settings-mint-action-row" style={{ marginTop: '16px' }}>
+              <button
+                type="button"
+                className="btn btn-secondary settings-mint-btn"
+                onClick={handleTestAiConnection}
+                disabled={isTestingAi}
+              >
+                <RefreshCw size={15} className={isTestingAi ? 'spin-anim' : ''} />
+                <span>{isTestingAi ? 'Testing AI Connection...' : 'Test AI Connection'}</span>
+              </button>
+              <span className="settings-field-hint-inline">
+                {aiProvider === 'local'
+                  ? 'Verifies local Ollama server connectivity and Qwen2.5-VL model availability.'
+                  : 'Pings the external provider endpoint to verify API key and model availability.'}
+              </span>
+            </div>
+
+            {/* AI Connection Test Banner */}
+            {aiTestResult && (
+              <div
+                className={`settings-feedback-banner ${aiTestResult.ok ? 'feedback-success' : 'feedback-error'}`}
+                role="alert"
+                style={{ marginTop: '14px' }}
+              >
+                <div className="feedback-icon">
+                  {aiTestResult.ok ? <Check size={18} /> : <X size={18} />}
+                </div>
+                <div className="feedback-message">{aiTestResult.message}</div>
+              </div>
+            )}
           </div>
 
           {/* Test Status Banner */}

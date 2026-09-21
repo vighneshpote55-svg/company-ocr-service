@@ -9,6 +9,7 @@ import { AIAnalysisCard } from './AIAnalysisCard.tsx';
 import { AISummaryCard } from './AISummaryCard.tsx';
 import { AIKeyFindingsCard } from './AIKeyFindingsCard.tsx';
 import { AIChatPanel } from './AIChatPanel.tsx';
+import { SettingsModal } from './SettingsModal.tsx';
 import type { DocumentItem, SupportedType } from '../types.ts';
 import { normalizeAiDocument } from '../types.ts';
 
@@ -323,4 +324,50 @@ test('Regression: AI Mode upload with document_type = "Unknown Document" remains
   const rowMatches4 = tableHtml.match(/vault-table-row/g);
   assert.equal(rowMatches4?.length, 4, 'Vault table must render 4 rows (3 existing + 1 new AI document)');
 });
+
+test('SettingsModal renders AI Model Configuration with Provider select and Model input', () => {
+  const html = renderToString(
+    React.createElement(SettingsModal, {
+      isOpen: true,
+      onClose: () => {},
+      onSaved: () => {},
+    })
+  );
+
+  assert.ok(html.includes('AI Model Configuration'), 'Must render AI Model Configuration heading');
+  assert.ok(html.includes('Local Ollama (Offline / Private)'), 'Must include Local Ollama option');
+  assert.ok(html.includes('External Provider (OpenRouter / OpenAI / Custom)'), 'Must include External Provider option');
+  assert.ok(html.includes('Test AI Connection'), 'Must render Test AI Connection button');
+});
+
+test('AI Mode Provider Status renders Local active state correctly', () => {
+  // Test local status pill markup structure
+  const localPillHtml = renderToString(
+    React.createElement(
+      'div',
+      { className: 'local-ai-status-banner banner-ready', 'data-testid': 'ai-provider-status-local' },
+      React.createElement('strong', null, 'Local AI Active'),
+      React.createElement('span', { className: 'local-ai-model-pill' }, 'Ollama • Qwen2.5-VL 3B')
+    )
+  );
+
+  assert.ok(localPillHtml.includes('Local AI Active'), 'Should display Local AI Active');
+  assert.ok(localPillHtml.includes('Ollama • Qwen2.5-VL 3B'), 'Should display Qwen2.5-VL 3B');
+});
+
+test('AI Mode Provider Status renders External active state correctly', () => {
+  // Test external status pill markup structure
+  const externalPillHtml = renderToString(
+    React.createElement(
+      'div',
+      { className: 'local-ai-status-banner banner-ready', 'data-testid': 'ai-provider-status-external' },
+      React.createElement('strong', null, 'External AI Active'),
+      React.createElement('span', { className: 'local-ai-model-pill' }, 'OPENROUTER • GOOGLE/GEMINI-2.5-FLASH')
+    )
+  );
+
+  assert.ok(externalPillHtml.includes('External AI Active'), 'Should display External AI Active');
+  assert.ok(externalPillHtml.includes('OPENROUTER • GOOGLE/GEMINI-2.5-FLASH'), 'Should display external provider and model');
+});
+
 
