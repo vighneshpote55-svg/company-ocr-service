@@ -18,6 +18,7 @@ interface AIChatPanelProps {
   onSendMessage: (text: string) => void;
   onSwitchToOffline?: () => void;
   onNotify: (message: string, type?: 'success' | 'error' | 'info') => void;
+  providerLabel?: string;
 }
 
 const getSuggestedPrompts = (documentType: string): string[] => {
@@ -75,6 +76,7 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   onSendMessage,
   onSwitchToOffline,
   onNotify,
+  providerLabel,
 }) => {
   const [inputQuery, setInputQuery] = useState('');
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
@@ -126,14 +128,14 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
           </div>
           <div>
             <div className="ai-chat-title-row">
-              <h4 className="ai-chat-title">Document AI Assistant</h4>
+              <h4 className="ai-chat-title" aria-label="Document AI Assistant">AI Assistant</h4>
               <span className="ai-chat-live-badge">
                 <span className="ai-chat-live-dot" />
-                <span>Context Loaded</span>
+                <span>Using: {providerLabel || 'Ollama • Qwen2.5-VL 3B'}</span>
               </span>
             </div>
             <p className="ai-chat-subtitle">
-              Answers strictly grounded in <strong>{document.filename}</strong> ({document.document_type})
+              Ask questions about this document. Grounded in <strong>{document.filename}</strong> ({document.document_type}).
             </p>
           </div>
         </div>

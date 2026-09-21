@@ -147,3 +147,8 @@ def decrypt_bytes(encrypted_data: bytes, key: Optional[bytes] = None) -> bytes:
         ) from it_ex
     except Exception as ex:
         raise DocumentDecryptionError(f"Decryption failed: {str(ex)}") from ex
+
+
+# Convenient aliases for callers
+encrypt_data = encrypt_bytes
+decrypt_data = decrypt_bytes

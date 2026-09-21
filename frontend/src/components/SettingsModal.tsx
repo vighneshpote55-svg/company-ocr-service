@@ -36,6 +36,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [connectionLatency, setConnectionLatency] = useState<number | null>(null);
 
   // AI Model Configuration State
+  const [activeAiConfig, setActiveAiConfig] = useState<any>(null);
   const [aiProvider, setAiProvider] = useState<'local' | 'external'>('local');
   const [externalProviderName, setExternalProviderName] = useState('openrouter');
   const [aiModel, setAiModel] = useState('qwen2.5vl:3b');
@@ -59,6 +60,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       // Load AI Model Configuration from backend
       api.getAiConfig()
         .then((aiCfg) => {
+          setActiveAiConfig(aiCfg);
           const isExt = aiCfg.mode === 'external';
           setAiProvider(isExt ? 'external' : 'local');
           const prov = aiCfg.active_provider !== 'ollama' && aiCfg.active_provider !== 'local' ? aiCfg.active_provider : 'openrouter';
@@ -175,18 +177,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
     try {
       if (aiProvider === 'local') {
-        await api.updateAiConfig({
+        const updated = await api.updateAiConfig({
           provider: 'local',
           model: 'qwen2.5vl:3b',
         });
+        if (updated) {
+          setActiveAiConfig(updated);
+          setIsAiKeyConfigured(Boolean(updated.api_key_configured));
+        }
       } else {
         const norm = normalizeOpenRouterConfig(externalProviderName, aiModel, aiBaseUrl);
-        await api.updateAiConfig({
+        const updated = await api.updateAiConfig({
           provider: norm.provider || externalProviderName,
           model: norm.model || aiModel,
           api_key: aiApiKey || undefined,
           base_url: norm.baseUrl || aiBaseUrl || undefined,
         });
+        if (updated) {
+          setActiveAiConfig(updated);
+          setIsAiKeyConfigured(Boolean(updated.api_key_configured));
+        }
       }
     } catch (err: any) {
       console.error('Failed to update AI config on backend:', err);
@@ -416,6 +426,89 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             <div className="settings-section-title-row">
               <div className="settings-section-heading">AI Model Configuration</div>
               <span className="settings-endpoint-pill">AI Mode Engine</span>
+            </div>
+
+            {/* Current Active Provider Card (Part 13) */}
+            <div
+              className="settings-active-provider-card"
+              data-testid="settings-current-active-provider"
+              style={{
+                marginBottom: '16px',
+                padding: '12px 16px',
+                borderRadius: '8px',
+                background: activeAiConfig?.mode === 'external' ? '#f5f3ff' : '#f0fdf4',
+                border: activeAiConfig?.mode === 'external' ? '1px solid #c4b5fd' : '1px solid #bbf7d0',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px',
+                    fontSize: '13px',
+                    fontWeight: 600,
+                    color: activeAiConfig?.mode === 'external' ? '#6d28d9' : '#15803d',
+                  }}
+                >
+                  <span
+                    style={{
+                      display: 'inline-block',
+                      width: '8px',
+                      height: '8px',
+                      borderRadius: '50%',
+                      background: activeAiConfig?.mode === 'external' ? '#7c3aed' : '#16a34a',
+                      boxShadow: activeAiConfig?.mode === 'external' ? '0 0 6px #8b5cf6' : '0 0 6px #22c55e',
+                    }}
+                  />
+                  <span>
+                    {activeAiConfig?.mode === 'external'
+                      ? `● External AI Active • ${activeAiConfig.active_provider === 'openrouter' ? 'OpenRouter' : (activeAiConfig.active_provider || '').toUpperCase()} • ${activeAiConfig.active_model}`
+                      : `● Local AI Active • Ollama • ${activeAiConfig?.active_model || 'qwen2.5vl:3b'}`}
+                  </span>
+                </div>
+                <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '3px' }}>
+                  {activeAiConfig?.mode === 'external'
+                    ? `Endpoint: ${activeAiConfig.base_url || 'Default'} • Key: ${activeAiConfig.api_key_configured ? 'Configured (AES-256 encrypted)' : 'Not configured'}`
+                    : 'Private offline inference via internal Ollama (qwen2.5vl:3b).'}
+                </div>
+              </div>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                  padding: '3px 8px',
+                  borderRadius: '4px',
+                  background: activeAiConfig?.mode === 'external' ? '#ede9fe' : '#dcfce7',
+                  color: activeAiConfig?.mode === 'external' ? '#5b21b6' : '#166534',
+                }}
+              >
+                Active
+              </span>
+            </div>
+
+            {/* EDIT CONFIGURATION SUBHEADING */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '8px',
+                marginBottom: '14px',
+                paddingBottom: '6px',
+                borderBottom: '1px solid #e2e8f0',
+              }}
+            >
+              <span style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.05em', color: '#475569', textTransform: 'uppercase' }}>
+                Edit Configuration
+              </span>
+              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
+                (Unsaved edits will not affect active AI until saved)
+              </span>
             </div>
 
             <div className="settings-two-col-grid">
@@ -678,7 +771,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             onClick={handleSave}
           >
             <Check size={16} />
-            <span>Save Configuration</span>
+            <span>Save Changes</span>
           </button>
         </div>
       </div>

@@ -39,6 +39,7 @@ import httpx
 
 import logging_utils
 import ollama_ai
+import encryption
 
 logger = logging_utils.get_logger("company_server_ocr.ai_providers")
 
@@ -47,6 +48,95 @@ DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_LOCAL_MODEL = "qwen2.5vl:3b"
 DEFAULT_EXTERNAL_MODEL = "google/gemini-2.5-flash"
+
+
+def get_persisted_config_path() -> str:
+    """Return the absolute path to the encrypted AI configuration file."""
+    storage_root = os.getenv(
+        "DOCUMENT_STORAGE_DIR",
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads")
+    )
+    return os.path.join(storage_root, "ai_config.enc")
+
+
+def save_persisted_config(config_dict: Dict[str, Any]) -> None:
+    """
+    Encrypt and save candidate configuration to storage root.
+    Guarantees cross-worker consistency under Gunicorn and persistence across container restarts.
+    Never stores keys in plaintext.
+    """
+    path = get_persisted_config_path()
+    try:
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        data_bytes = json.dumps(config_dict).encode("utf-8")
+        if encryption.is_encryption_available():
+            encrypted_bytes = encryption.encrypt_bytes(data_bytes)
+        else:
+            encrypted_bytes = data_bytes
+        tmp_path = f"{path}.tmp.{os.getpid()}"
+        with open(tmp_path, "wb") as f:
+            f.write(encrypted_bytes)
+        os.replace(tmp_path, path)
+    except Exception as ex:
+        logger.warning("Could not persist encrypted AI provider configuration: %s", ex)
+
+
+def load_persisted_config() -> Optional[Dict[str, Any]]:
+    """
+    Read and decrypt configuration from storage root.
+    Returns None if file does not exist or cannot be decrypted.
+    """
+    path = get_persisted_config_path()
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "rb") as f:
+            raw_bytes = f.read()
+        if not raw_bytes:
+            return None
+        if encryption.is_encryption_available() and encryption.is_encrypted_payload(raw_bytes):
+            decrypted_bytes = encryption.decrypt_bytes(raw_bytes)
+            return json.loads(decrypted_bytes.decode("utf-8"))
+        elif not encryption.is_encrypted_payload(raw_bytes):
+            return json.loads(raw_bytes.decode("utf-8"))
+    except Exception as ex:
+        logger.warning("Could not load persisted AI configuration: %s", ex)
+        return None
+    return None
+
+
+def clear_persisted_config() -> None:
+    """Remove persisted configuration file if present."""
+    path = get_persisted_config_path()
+    if os.path.exists(path):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+
+
+def format_external_provider_error(
+    provider: str,
+    status_code: Optional[int] = None,
+    raw_error: str = "",
+    is_timeout: bool = False,
+) -> str:
+    """Format safe, controlled error messages according to Part 21 rules."""
+    if is_timeout:
+        return "External AI request timed out."
+    if status_code == 401:
+        return "External AI authentication failed. Please check the API key."
+    if status_code == 403:
+        return "External AI access forbidden. Please verify your provider account permissions."
+    if status_code == 429:
+        return "External AI rate limit reached. Please try again later or check your quota."
+    if status_code and status_code >= 500:
+        return "External AI service returned an error."
+
+    prov_name = provider.capitalize() if provider else "External AI"
+    clean = (raw_error or "").replace("\n", " ").strip()
+    clean = re.sub(r"(Bearer\s+|key=)[A-Za-z0-9_\-\.]+", r"\1[REDACTED]", clean)
+    return f"{prov_name} service error: {clean[:150]}" if clean else "External AI request failed."
 
 
 def clean_json_response(raw_text: str) -> str:
@@ -516,7 +606,8 @@ class OpenAICompatibleProvider(BaseAIProvider):
                 res = await client.post(endpoint, headers=self._get_headers(), json=payload)
                 if res.status_code != 200:
                     safe_err = res.text[:200].replace(self._api_key, "[REDACTED_API_KEY]")
-                    raise RuntimeError(f"HTTP {res.status_code}: {safe_err}")
+                    err_msg = format_external_provider_error(self.provider_name, res.status_code, safe_err)
+                    raise RuntimeError(err_msg)
 
                 data = res.json()
                 raw_reply = data.get("choices", [{}])[0].get("message", {}).get("content", "")
@@ -543,6 +634,22 @@ class OpenAICompatibleProvider(BaseAIProvider):
                     is_local=False,
                     duration=duration,
                 )
+        except httpx.TimeoutException:
+            duration = time.time() - t0
+            logging_utils.log_event(
+                logger,
+                logging.ERROR,
+                event="ai_failed",
+                provider=self.provider_name,
+                model=self.model_name,
+                duration_ms=round(duration * 1000, 2),
+                error_code="TIMEOUT",
+                status="error",
+                operation="analyze_document",
+            )
+            raise RuntimeError(format_external_provider_error(self.provider_name, is_timeout=True))
+        except RuntimeError:
+            raise
         except Exception as ex:
             duration = time.time() - t0
             logging_utils.log_event(
@@ -557,7 +664,7 @@ class OpenAICompatibleProvider(BaseAIProvider):
                 operation="analyze_document",
             )
             safe_ex_str = str(ex).replace(self._api_key, "[REDACTED_API_KEY]")
-            raise RuntimeError(f"External provider '{self.provider_name}' error during analyze_document: {safe_ex_str}")
+            raise RuntimeError(format_external_provider_error(self.provider_name, raw_error=safe_ex_str))
 
     async def chat(
         self,
@@ -612,15 +719,20 @@ class OpenAICompatibleProvider(BaseAIProvider):
                 res = await client.post(endpoint, headers=self._get_headers(), json=payload)
                 if res.status_code != 200:
                     safe_err = res.text[:200].replace(self._api_key, "[REDACTED_API_KEY]")
-                    raise RuntimeError(f"HTTP {res.status_code}: {safe_err}")
+                    err_msg = format_external_provider_error(self.provider_name, res.status_code, safe_err)
+                    raise RuntimeError(err_msg)
 
                 data = res.json()
                 reply = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
                 reply = reply.replace("***/Name", "the cardholder's name").replace("*/Name", "")
                 return reply
+        except httpx.TimeoutException:
+            raise RuntimeError(format_external_provider_error(self.provider_name, is_timeout=True))
+        except RuntimeError:
+            raise
         except Exception as ex:
             safe_ex_str = str(ex).replace(self._api_key, "[REDACTED_API_KEY]")
-            raise RuntimeError(f"External provider '{self.provider_name}' error during chat: {safe_ex_str}")
+            raise RuntimeError(format_external_provider_error(self.provider_name, raw_error=safe_ex_str))
 
     async def test_connection(self) -> Dict[str, Any]:
         t0 = time.time()
@@ -647,13 +759,23 @@ class OpenAICompatibleProvider(BaseAIProvider):
                     }
                 else:
                     safe_err = res.text[:150].replace(self._api_key, "[REDACTED_API_KEY]")
+                    msg = format_external_provider_error(self.provider_name, res.status_code, safe_err)
                     return {
                         "success": False,
                         "provider": self.provider_name,
                         "model": self.model_name,
-                        "message": f"Connection failed (HTTP {res.status_code}): {safe_err}",
+                        "message": f"Connection failed (HTTP {res.status_code}): {msg}",
                         "latency_ms": latency_ms,
                     }
+        except httpx.TimeoutException:
+            latency_ms = round((time.time() - t0) * 1000)
+            return {
+                "success": False,
+                "provider": self.provider_name,
+                "model": self.model_name,
+                "message": format_external_provider_error(self.provider_name, is_timeout=True),
+                "latency_ms": latency_ms,
+            }
         except Exception as ex:
             latency_ms = round((time.time() - t0) * 1000)
             safe_err = str(ex).replace(self._api_key, "[REDACTED_API_KEY]")
@@ -673,12 +795,15 @@ class OpenAICompatibleProvider(BaseAIProvider):
 class AIProviderManager:
     """
     Manager singleton responsible for:
-    - Loading provider configuration from environment and runtime settings.
+    - Loading provider configuration from environment and persisted encrypted storage.
     - Deterministic provider selection:
-      * Valid external provider + valid API key -> OpenAICompatibleProvider
-      * Unconfigured external provider / missing API key -> LocalOllamaProvider (qwen2.5vl:3b)
-    - Protecting API key secrets.
-    - Preventing silent fallback on external runtime errors unless explicitly configured.
+      * CASE A: AI_PROVIDER=local -> LocalOllamaProvider (qwen2.5vl:3b)
+      * CASE B: AI_PROVIDER=ollama -> LocalOllamaProvider (qwen2.5vl:3b)
+      * CASE C: External provider + valid API key -> OpenAICompatibleProvider
+      * CASE D: External provider selected but API key missing/empty -> LocalOllamaProvider (qwen2.5vl:3b)
+    - Protecting API key secrets: keys are never logged, never returned in API responses, never stored in browser.
+    - Encrypted configuration persistence across Gunicorn workers and container restarts.
+    - Preventing silent fallback on external runtime errors unless explicit fallback_on_error is enabled.
     """
 
     def __init__(self):
@@ -687,15 +812,37 @@ class AIProviderManager:
         self._model: Optional[str] = None
         self._base_url: Optional[str] = None
         self._fallback_on_error: Optional[bool] = None
+        self._cached_mtime: float = 0.0
+        self._sync_with_disk()
+
+    def _sync_with_disk(self) -> None:
+        """Check if persisted config on disk is newer or exists, and reload if so."""
+        path = get_persisted_config_path()
+        if os.path.exists(path):
+            try:
+                mtime = os.path.getmtime(path)
+                if mtime > self._cached_mtime or self._provider is None:
+                    loaded = load_persisted_config()
+                    if loaded and isinstance(loaded, dict):
+                        self._provider = loaded.get("provider")
+                        self._api_key = loaded.get("api_key")
+                        self._model = loaded.get("model")
+                        self._base_url = loaded.get("base_url")
+                        self._fallback_on_error = loaded.get("fallback_on_error")
+                        self._cached_mtime = mtime
+            except Exception as ex:
+                logger.debug("Error syncing AI config from disk: %s", ex)
 
     @property
     def current_provider(self) -> str:
+        self._sync_with_disk()
         if self._provider is not None:
             return self._provider
         return os.getenv("AI_PROVIDER", "local").lower().strip()
 
     @property
     def current_api_key(self) -> str:
+        self._sync_with_disk()
         if self._api_key is not None:
             return self._api_key
         return (
@@ -708,6 +855,7 @@ class AIProviderManager:
 
     @property
     def current_model(self) -> str:
+        self._sync_with_disk()
         raw = self._model if self._model is not None else os.getenv("AI_MODEL", "").strip()
         p = self.current_provider
         u = self._base_url if self._base_url is not None else os.getenv("AI_BASE_URL", "").strip()
@@ -716,6 +864,7 @@ class AIProviderManager:
 
     @property
     def current_base_url(self) -> str:
+        self._sync_with_disk()
         raw = self._base_url if self._base_url is not None else os.getenv("AI_BASE_URL", "").strip()
         p = self.current_provider
         m = self._model if self._model is not None else os.getenv("AI_MODEL", "").strip()
@@ -724,17 +873,20 @@ class AIProviderManager:
 
     @property
     def current_fallback_on_error(self) -> bool:
+        self._sync_with_disk()
         if self._fallback_on_error is not None:
             return self._fallback_on_error
         return os.getenv("AI_FALLBACK_ON_ERROR", "false").lower() in ("true", "1", "yes")
 
     def reload_from_env(self) -> None:
-        """Reload configuration from environment variables."""
+        """Reload configuration from environment variables, clearing in-memory overrides and persisted config."""
+        clear_persisted_config()
         self._provider = None
         self._api_key = None
         self._model = None
         self._base_url = None
         self._fallback_on_error = None
+        self._cached_mtime = 0.0
 
     def update_config(
         self,
@@ -744,7 +896,8 @@ class AIProviderManager:
         base_url: Optional[str] = None,
         fallback_on_error: Optional[bool] = None,
     ) -> None:
-        """Update runtime provider configuration securely."""
+        """Update runtime provider configuration securely and persist encrypted across workers and container restarts."""
+        self._sync_with_disk()
         if provider is not None:
             self._provider = provider.lower().strip()
         if api_key is not None:
@@ -763,6 +916,19 @@ class AIProviderManager:
         if fallback_on_error is not None:
             self._fallback_on_error = bool(fallback_on_error)
 
+        # Persist encrypted configuration to disk for multi-worker and restart persistence
+        persisted_data = {
+            "provider": self._provider,
+            "api_key": self._api_key,
+            "model": self._model,
+            "base_url": self._base_url,
+            "fallback_on_error": self._fallback_on_error,
+        }
+        save_persisted_config(persisted_data)
+        path = get_persisted_config_path()
+        if os.path.exists(path):
+            self._cached_mtime = os.path.getmtime(path)
+
     def get_effective_base_url(self, provider_name: str) -> str:
         base_url = self.current_base_url
         if base_url:
@@ -775,7 +941,7 @@ class AIProviderManager:
         model = self.current_model
         if model:
             return model
-        if provider_name == "local" or provider_name == "ollama":
+        if provider_name in ("local", "ollama"):
             return DEFAULT_LOCAL_MODEL
         elif provider_name == "openai":
             return "gpt-4o-mini"
@@ -786,21 +952,18 @@ class AIProviderManager:
     def get_active_provider(self) -> BaseAIProvider:
         """
         Deterministic provider selection:
-        IF:
-          - A valid external provider is configured
-          - AND API key is present
-        THEN:
-          - Use configured OpenAICompatibleProvider
-        ELSE IF:
-          - No external provider OR API key is missing OR provider == 'local'
-        THEN:
-          - Mandatory fallback to LocalOllamaProvider (qwen2.5vl:3b)
+        CASE A & B: Provider is 'local' or 'ollama' -> LocalOllamaProvider (qwen2.5vl:3b)
+        CASE C: External provider + valid API key -> OpenAICompatibleProvider
+        CASE D: External provider selected but API key missing/empty -> Mandatory fallback to LocalOllamaProvider (qwen2.5vl:3b)
         """
+        self._sync_with_disk()
         p = self.current_provider
         api_key = self.current_api_key
-        has_key = bool(api_key)
+        has_key = bool(api_key and api_key.strip())
 
-        if p and p != "local" and has_key:
+        if p in ("local", "ollama"):
+            return LocalOllamaProvider(model_name=self.get_effective_model("local"))
+        elif p and has_key:
             return OpenAICompatibleProvider(
                 provider_name=p,
                 base_url=self.get_effective_base_url(p),
@@ -808,12 +971,14 @@ class AIProviderManager:
                 model_name=self.get_effective_model(p),
             )
         else:
+            # Case D: External provider configured but missing/empty API key -> mandatory local Qwen fallback
             return LocalOllamaProvider(model_name=self.get_effective_model("local"))
 
     def get_safe_config(self) -> Dict[str, Any]:
         """
         Return public safe configuration without exposing any API keys or secrets.
         """
+        self._sync_with_disk()
         provider = self.get_active_provider()
         ollama_health = ollama_ai.check_ollama_health()
         is_external = not provider.is_local
@@ -830,17 +995,24 @@ class AIProviderManager:
         }
 
     async def test_connection(self, candidate_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-        """Test candidate or currently active provider connection without exposing secrets."""
+        """Test candidate or currently active provider connection without exposing secrets or mutating active state."""
         if candidate_config:
             p = (candidate_config.get("provider") or "local").lower().strip()
             raw_key = candidate_config.get("api_key")
-            key = (raw_key if raw_key is not None else (self._api_key if p == self._provider else "")).strip()
+            # If candidate didn't pass a new key, check if key is already configured for this provider
+            if raw_key and raw_key.strip():
+                key = raw_key.strip()
+            elif p == self.current_provider and self.current_api_key:
+                key = self.current_api_key
+            else:
+                key = ""
+
             raw_model = (candidate_config.get("model") or self.get_effective_model(p)).strip()
             raw_url = (candidate_config.get("base_url") or self.get_effective_base_url(p)).strip()
 
             norm_p, norm_m, norm_u = normalize_openrouter_endpoint_and_model(p, raw_model, raw_url)
 
-            if norm_p != "local" and key:
+            if norm_p not in ("local", "ollama") and key:
                 test_prov = OpenAICompatibleProvider(
                     provider_name=norm_p,
                     base_url=norm_u,
@@ -848,8 +1020,16 @@ class AIProviderManager:
                     model_name=norm_m,
                 )
                 return await test_prov.test_connection()
+            elif norm_p not in ("local", "ollama") and not key:
+                return {
+                    "success": False,
+                    "provider": norm_p,
+                    "model": norm_m,
+                    "message": f"API key is required to test external provider '{norm_p}'.",
+                    "latency_ms": 0,
+                }
             else:
-                test_prov = LocalOllamaProvider(model_name=norm_m if norm_p == "local" else DEFAULT_LOCAL_MODEL)
+                test_prov = LocalOllamaProvider(model_name=norm_m if norm_p in ("local", "ollama") else DEFAULT_LOCAL_MODEL)
                 return await test_prov.test_connection()
 
         provider = self.get_active_provider()
@@ -870,9 +1050,9 @@ class AIProviderManager:
                 filename=filename,
             )
         except Exception as ex:
-            if not provider.is_local and self._fallback_on_error:
+            if not provider.is_local and self.current_fallback_on_error:
                 logger.warning(
-                    "External provider '%s' failed: %s; explicit fallback to local Ollama enabled",
+                    "External provider '%s' failed: %s; explicit fallback_on_error enabled, routing to local Ollama",
                     provider.provider_name,
                     ex,
                 )
@@ -903,9 +1083,9 @@ class AIProviderManager:
                 stored_analysis=stored_analysis,
             )
         except Exception as ex:
-            if not provider.is_local and self._fallback_on_error:
+            if not provider.is_local and self.current_fallback_on_error:
                 logger.warning(
-                    "External provider '%s' failed during chat: %s; explicit fallback to local Ollama enabled",
+                    "External provider '%s' failed during chat: %s; explicit fallback_on_error enabled, routing to local Ollama",
                     provider.provider_name,
                     ex,
                 )

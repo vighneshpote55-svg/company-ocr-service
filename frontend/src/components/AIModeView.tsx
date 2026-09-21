@@ -531,6 +531,7 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
               onSendMessage={handleSendMessage}
               onSwitchToOffline={onSwitchToOffline}
               onNotify={onNotify}
+              providerLabel={providerLabel}
             />
           </div>
         </div>

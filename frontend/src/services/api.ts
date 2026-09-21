@@ -247,8 +247,24 @@ export class ApiService {
   }
 
   private async fetchWithAuth(url: string, options: RequestInit = {}): Promise<Response> {
-    const headers = { ...this.getHeaders(), ...(options.headers as any) };
-    const res = await fetch(url, { ...options, headers });
+    const defaultHeaders = this.getHeaders();
+    const mergedHeaders: Record<string, string> = { ...defaultHeaders };
+
+    if (options.headers) {
+      if (typeof (options.headers as any).forEach === 'function') {
+        (options.headers as Headers).forEach((value, key) => {
+          mergedHeaders[key] = value;
+        });
+      } else if (Array.isArray(options.headers)) {
+        for (const [key, value] of options.headers) {
+          mergedHeaders[key] = value;
+        }
+      } else {
+        Object.assign(mergedHeaders, options.headers);
+      }
+    }
+
+    const res = await fetch(url, { ...options, headers: mergedHeaders });
     if (res.status === 401) {
       this.notifyUnauthorized();
       throw new Error('Authentication required or session expired (HTTP 401). Please sign in.');
