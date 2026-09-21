@@ -86,6 +86,15 @@ def get_encryption_key() -> bytes:
     )
 
 
+def is_encryption_available() -> bool:
+    """Check whether a valid server encryption key is configured and functional."""
+    try:
+        get_encryption_key()
+        return True
+    except Exception:
+        return False
+
+
 def is_encrypted_payload(data: bytes) -> bool:
     """Check if the provided byte sequence starts with the ENC1 magic header and has valid length."""
     return (

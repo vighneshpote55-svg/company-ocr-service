@@ -20,32 +20,45 @@ try:
 except ImportError:
     ollama = None
 
-logger = logging.getLogger("company_server_ocr.ollama_ai")
+import logging_utils
 
-DEFAULT_OLLAMA_HOST = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434")
-DEFAULT_MODEL = os.getenv("OLLAMA_MODEL", "qwen2.5vl:3b")
+logger = logging_utils.get_logger("company_server_ocr.ollama_ai")
+
+def get_ollama_host() -> str:
+    """Retrieve currently configured Ollama host URL."""
+    return os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").strip()
+
+
+def get_ollama_model() -> str:
+    """Retrieve currently configured Ollama vision model name."""
+    return os.getenv("OLLAMA_MODEL", "qwen2.5vl:3b").strip()
+
+
+DEFAULT_OLLAMA_HOST = get_ollama_host()
+DEFAULT_MODEL = get_ollama_model()
 
 
 def get_client() -> Any:
     """Return an Ollama client pointing to the configured host."""
     if ollama is None:
         raise RuntimeError("The 'ollama' Python package is not installed.")
-    return ollama.Client(host=DEFAULT_OLLAMA_HOST)
+    return ollama.Client(host=get_ollama_host())
 
 
 def check_ollama_health() -> Dict[str, Any]:
     """
-    Verify if the Ollama server is reachable and if qwen2.5vl:3b is installed.
+    Verify if the Ollama server is reachable and if configured model is installed.
     Returns status dictionary for health checks and debugging.
     """
     if ollama is None:
         return {
             "reachable": False,
             "model_installed": False,
-            "model": DEFAULT_MODEL,
+            "model": get_ollama_model(),
             "error": "The 'ollama' Python package is not installed.",
         }
 
+    active_model = get_ollama_model()
     try:
         client = get_client()
         models_response = client.list()
@@ -57,7 +70,7 @@ def check_ollama_health() -> Dict[str, Any]:
                 name = m.get("name", "") if isinstance(m, dict) else getattr(m, "name", "")
             installed_models.append(name.lower())
 
-        target_model = DEFAULT_MODEL.lower()
+        target_model = active_model.lower()
         # Accept exact match or prefix match (e.g. qwen2.5vl:3b or qwen2.5vl:latest)
         model_found = any(
             target_model in m or m.startswith(target_model.split(":")[0])
@@ -68,17 +81,17 @@ def check_ollama_health() -> Dict[str, Any]:
             return {
                 "reachable": True,
                 "model_installed": False,
-                "model": DEFAULT_MODEL,
+                "model": active_model,
                 "installed_models": installed_models,
-                "error": f"Model '{DEFAULT_MODEL}' is missing. Please run: ollama pull {DEFAULT_MODEL}",
+                "error": f"Model '{active_model}' is missing. Please run: ollama pull {active_model}",
             }
 
         return {
             "reachable": True,
             "model_installed": True,
-            "model": DEFAULT_MODEL,
+            "model": active_model,
             "installed_models": installed_models,
-            "message": f"Ollama server is running and {DEFAULT_MODEL} is ready.",
+            "message": f"Ollama server is running and {active_model} is ready.",
         }
     except Exception as ex:
         err_msg = str(ex).lower()
@@ -285,6 +298,14 @@ def analyze_document(
         "}\n"
     )
 
+    logging_utils.log_event(
+        logger,
+        logging.INFO,
+        event="ai_started",
+        model=DEFAULT_MODEL,
+        operation="analyze_document",
+    )
+
     try:
         client = get_client()
         response = client.chat(
@@ -301,7 +322,16 @@ def analyze_document(
         )
 
         duration = time.time() - t0
-        logger.info("Response received from Ollama in %.2f seconds", duration)
+        duration_ms = round(duration * 1000, 2)
+        logging_utils.log_event(
+            logger,
+            logging.INFO,
+            event="ai_completed",
+            model=DEFAULT_MODEL,
+            duration_ms=duration_ms,
+            status="success",
+            operation="analyze_document",
+        )
 
         raw_content = response.get("message", {}).get("content", "")
         cleaned_json = _clean_json_response(raw_content)
@@ -361,6 +391,17 @@ def analyze_document(
 
     except Exception as ex:
         duration = time.time() - t0
+        duration_ms = round(duration * 1000, 2)
+        logging_utils.log_event(
+            logger,
+            logging.ERROR,
+            event="ai_failed",
+            model=DEFAULT_MODEL,
+            duration_ms=duration_ms,
+            error_code="OLLAMA_ERROR",
+            status="error",
+            operation="analyze_document",
+        )
         logger.error("Error communicating with Ollama: %s", ex, exc_info=True)
         err_text = str(ex).lower()
         if "connection refused" in err_text or "connecterror" in err_text:
@@ -439,8 +480,42 @@ def chat_with_document(
 
     messages.append({"role": "user", "content": message})
 
-    client = get_client()
-    response = client.chat(model=DEFAULT_MODEL, messages=messages)
+    t0 = time.time()
+    logging_utils.log_event(
+        logger,
+        logging.INFO,
+        event="ai_started",
+        model=DEFAULT_MODEL,
+        operation="chat_with_document",
+    )
+
+    try:
+        client = get_client()
+        response = client.chat(model=DEFAULT_MODEL, messages=messages)
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logging_utils.log_event(
+            logger,
+            logging.INFO,
+            event="ai_completed",
+            model=DEFAULT_MODEL,
+            duration_ms=duration_ms,
+            status="success",
+            operation="chat_with_document",
+        )
+    except Exception as ex:
+        duration_ms = round((time.time() - t0) * 1000, 2)
+        logging_utils.log_event(
+            logger,
+            logging.ERROR,
+            event="ai_failed",
+            model=DEFAULT_MODEL,
+            duration_ms=duration_ms,
+            error_code="OLLAMA_ERROR",
+            status="error",
+            operation="chat_with_document",
+        )
+        raise
+
     reply = response.get("message", {}).get("content", "").strip()
 
     # Sanitize any raw OCR artifacts

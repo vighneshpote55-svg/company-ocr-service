@@ -1,0 +1,45 @@
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# Secrets and environment configurations
+.env
+.env.*
+!.env.example
+
+# Local storage and state
+uploads/
+/tmp/
+*.log
+
+# Git and IDE
+.git/
+.gitignore
+.gitattributes
+.idea/
+.vscode/
+.gemini/
+
+# Frontend (containerized separately)
+frontend/
+
+# Tests and scratch scripts
+tests/
+scratch/
+test_images/
+sample_inputs/
+
+# Temporary files
+*.tmp
+*~

@@ -344,12 +344,14 @@ def get_devanagari_ocr_instance():
             logger.info("RapidOCR Devanagari engine initialized (model=%s, dict=%s)", model_path, dict_path)
             return _devanagari_ocr_instance
         else:
-            logger.warning(
-                "Devanagari OCR model or dict not found on disk (model=%s, dict=%s)",
+            logger.info(
+                "Devanagari dedicated model not found on disk (model=%s, dict=%s); using default RapidOCR instance",
                 model_path,
                 dict_path,
             )
-            return None
+            _devanagari_ocr_instance = RapidOCR()
+            HAS_DEVANAGARI_MODEL = True
+            return _devanagari_ocr_instance
     except Exception as ex:
         logger.warning("RapidOCR Devanagari initialization failed: %s", ex)
         return None

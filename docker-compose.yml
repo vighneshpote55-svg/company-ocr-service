@@ -1,0 +1,79 @@
+version: '3.8'
+
+services:
+  nginx:
+    image: nginx:alpine
+    container_name: company_ocr_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+      frontend:
+        condition: service_started
+    networks:
+      - web_net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: company_ocr_frontend
+    restart: unless-stopped
+    networks:
+      - web_net
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: company_ocr_backend
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      - ENVIRONMENT=production
+      - OLLAMA_HOST=http://ollama:11434
+      - OCR_TEMP_DIR=/tmp/company_ocr_temp
+    volumes:
+      - document_uploads:/app/uploads
+    depends_on:
+      - ollama
+    networks:
+      - internal_net
+      - web_net
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: company_ocr_ollama
+    restart: unless-stopped
+    # CRITICAL: No public port mapping. Ollama is isolated on internal_net.
+    volumes:
+      - ollama_models:/root/.ollama
+    networks:
+      - internal_net
+
+networks:
+  # Isolated network between backend and Ollama (no public or frontend access)
+  internal_net:
+    driver: bridge
+    internal: true
+  # Network connecting Nginx proxy with frontend and backend services
+  web_net:
+    driver: bridge
+
+volumes:
+  document_uploads:
+    driver: local
+  ollama_models:
+    driver: local

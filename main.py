@@ -33,8 +33,12 @@ load_dotenv()
 import ai_service
 import ollama_ai
 from pydantic import BaseModel, Field
+import logging_utils
+import retention_service
+from rate_limiter import rate_limit_upload, rate_limit_ai_chat, rate_limit_cleanup
 
-logger = logging.getLogger("company_server_ocr")
+logging_utils.setup_logging()
+logger = logging_utils.get_logger("company_server_ocr")
 
 
 from fastapi import (
@@ -144,6 +148,38 @@ async def periodic_temp_cleaner():
 _startup_security_error: Optional[str] = None
 
 
+def _map_error_code(status_code: int, detail: Any) -> str:
+    """Map HTTP status and detail text to standardized error code for logging."""
+    det = str(detail or "").upper()
+    if "CORRUPT" in det:
+        return "CORRUPTED_FILE"
+    if "PASSWORD" in det or "ENCRYPTED" in det:
+        return "ENCRYPTED_PDF"
+    if "UNSUPPORTED" in det or "FILE TYPE" in det:
+        return "UNSUPPORTED_EXTENSION"
+    if "TRAVERSAL" in det or "INVALID FILENAME" in det:
+        return "PATH_TRAVERSAL_DETECTED"
+    if "SIZE" in det or "LARGE" in det or status_code == 413:
+        return "FILE_SIZE_EXCEEDED"
+    if "EMPTY" in det:
+        return "EMPTY_FILE"
+    if "INVALID PDF" in det:
+        return "INVALID_PDF"
+    if "OCR" in det:
+        return "OCR_FAILED"
+    if "AI" in det:
+        return "AI_FAILED"
+    if status_code == 404:
+        return "NOT_FOUND"
+    if status_code == 401:
+        return "UNAUTHORIZED"
+    if status_code == 403:
+        return "FORBIDDEN"
+    if status_code == 422:
+        return "UNPROCESSABLE_ENTITY"
+    return f"HTTP_{status_code}"
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _startup_security_error
@@ -159,16 +195,65 @@ async def lifespan(app: FastAPI):
         _startup_security_error = str(ex)
         raise
 
+    # Component health discovery for startup event (Task 7)
+    ocr_info = get_ocr_engine_info()
+    rapidocr_status = "ready" if ocr_info.get("status") in ("ready", "mock_ready", "active") else "error"
+    ollama_health = ollama_ai.check_ollama_health()
+    ollama_status = "ready" if ollama_health.get("model_installed") else ("running" if ollama_health.get("reachable") else "offline")
+    storage_health = document_store.check_storage_health()
+    storage_status = "healthy" if storage_health.get("healthy") else "degraded"
+    enc_status = "enabled" if encryption.is_encryption_available() else "disabled"
+
+    logging_utils.log_event(
+        logger,
+        logging.INFO,
+        event="server_started",
+        rapidocr=rapidocr_status,
+        ollama=ollama_status,
+        storage=storage_status,
+        encryption=enc_status,
+    )
+    logging_utils.log_event(logger, logging.INFO, event="ocr_health_check", rapidocr=rapidocr_status)
+    logging_utils.log_event(logger, logging.INFO, event="ollama_health_check", ollama=ollama_status)
+    logging_utils.log_event(logger, logging.INFO, event="storage_health_check", storage=storage_status)
+
+    # Phase 6: Run startup verification and storage cleanup
+    retention_service.run_startup_cleanup()
+
     # Sweep leftover temp files, start job queue and background sweep task
     sweep_orphaned_temp_files()
     await job_queue.start()
     cleaner_task = asyncio.create_task(periodic_temp_cleaner())
+    retention_task = asyncio.create_task(retention_service.periodic_retention_worker())
     yield
-    # Shutdown: stop worker and cleaner
+    # Shutdown: stop workers and cleaners
+    retention_task.cancel()
     cleaner_task.cancel()
     await job_queue.stop()
 
 
+
+def get_cors_origins() -> List[str]:
+    raw = os.getenv("CORS_ALLOWED_ORIGINS", "").strip()
+    if raw:
+        origins = [o.strip() for o in raw.split(",") if o.strip()]
+        if origins:
+            return origins
+    env = os.getenv("ENVIRONMENT", "development").strip().lower()
+    if env == "production":
+        return ["http://localhost", "http://localhost:80", "https://localhost"]
+    return [
+        "http://localhost:5173",
+        "http://localhost:3000",
+        "http://127.0.0.1:5173",
+        "http://127.0.0.1:3000",
+        "http://localhost:80",
+        "http://localhost",
+    ]
+
+
+_cors_origins = get_cors_origins()
+_allow_creds = "*" not in _cors_origins
 
 app = FastAPI(
     title="Company-Server OCR",
@@ -179,11 +264,21 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=_cors_origins,
+    allow_credentials=_allow_creds,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def request_id_tracing_middleware(request: Request, call_next):
+    """Task 2: Injects and propagates request_id across request lifecycle."""
+    req_id = request.headers.get("X-Request-ID") or logging_utils.generate_request_id()
+    logging_utils.set_request_id(req_id)
+    response = await call_next(request)
+    response.headers["X-Request-ID"] = req_id
+    return response
 
 
 @app.middleware("http")
@@ -200,29 +295,74 @@ async def enforce_startup_security_check(request: Request, call_next):
 
 @app.exception_handler(HTTPException)
 async def custom_http_exception_handler(request: Request, exc: HTTPException):
+    """Task 5: Structured error logs while preserving friendly frontend errors."""
     detail = exc.detail
     content = {"detail": detail}
     if isinstance(detail, str):
         content["error"] = detail
     elif isinstance(detail, dict):
         content.update(detail)
-    return JSONResponse(status_code=exc.status_code, content=content)
+
+    error_code = _map_error_code(exc.status_code, detail)
+    is_upload = any(p in request.url.path for p in ("/offline", "/analyze", "/ocr", "/upload"))
+    logging_utils.log_event(
+        logger,
+        logging.WARNING if exc.status_code < 500 else logging.ERROR,
+        event="upload_failed" if is_upload else "request_failed",
+        error_code=error_code,
+        status_code=exc.status_code,
+        path=request.url.path,
+        status="failed",
+    )
+    return JSONResponse(status_code=exc.status_code, content=content, headers=exc.headers)
 
 
 @app.exception_handler(DocumentEncryptionKeyMissingError)
 async def encryption_key_missing_handler(request: Request, exc: DocumentEncryptionKeyMissingError):
     msg = "Encryption service unavailable: server encryption key is not configured."
+    logging_utils.log_event(
+        logger,
+        logging.ERROR,
+        event="upload_failed",
+        error_code="ENCRYPTION_KEY_MISSING",
+        status_code=500,
+        status="error",
+    )
     return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": msg, "error": msg})
 
 
 @app.exception_handler(DocumentDecryptionError)
 async def decryption_error_handler(request: Request, exc: DocumentDecryptionError):
     msg = "Document decryption failed."
+    logging_utils.log_event(
+        logger,
+        logging.ERROR,
+        event="decryption_failed",
+        error_code="DECRYPTION_ERROR",
+        status_code=500,
+        status="error",
+    )
     return JSONResponse(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, content={"detail": msg, "error": msg})
 
 
-MAX_IMAGE_SIZE = 20 * 1024 * 1024  # 20 MB
-MAX_PDF_SIZE = 50 * 1024 * 1024    # 50 MB
+def get_max_image_size_bytes() -> int:
+    try:
+        mb = float(os.getenv("MAX_IMAGE_SIZE_MB", "20"))
+        return int(mb * 1024 * 1024)
+    except Exception:
+        return 20 * 1024 * 1024
+
+
+def get_max_pdf_size_bytes() -> int:
+    try:
+        mb = float(os.getenv("MAX_PDF_SIZE_MB", "50"))
+        return int(mb * 1024 * 1024)
+    except Exception:
+        return 50 * 1024 * 1024
+
+
+MAX_IMAGE_SIZE = get_max_image_size_bytes()
+MAX_PDF_SIZE = get_max_pdf_size_bytes()
 ALLOWED_EXTENSIONS = {".pdf", ".png", ".jpg", ".jpeg", ".webp"}
 
 
@@ -265,13 +405,18 @@ def validate_upload_security(file: UploadFile, file_bytes: bytes) -> tuple[str, 
             detail="Uploaded file is empty",
         )
 
-    if ext in (".png", ".jpg", ".jpeg", ".webp") and len(file_bytes) > MAX_IMAGE_SIZE:
+    env_max_img = get_max_image_size_bytes()
+    cur_max_img = MAX_IMAGE_SIZE if MAX_IMAGE_SIZE != 20 * 1024 * 1024 else env_max_img
+    env_max_pdf = get_max_pdf_size_bytes()
+    cur_max_pdf = MAX_PDF_SIZE if MAX_PDF_SIZE != 50 * 1024 * 1024 else env_max_pdf
+
+    if ext in (".png", ".jpg", ".jpeg", ".webp") and len(file_bytes) > cur_max_img:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="This file exceeds the maximum upload size.",
         )
 
-    if ext == ".pdf" and len(file_bytes) > MAX_PDF_SIZE:
+    if ext == ".pdf" and len(file_bytes) > cur_max_pdf:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
             detail="This file exceeds the maximum upload size.",
@@ -469,9 +614,28 @@ def execute_ocr_pipeline(
 
     # 2. OCR Extraction
     languages = get_languages_for_doc_type(doc_type)
+    logging_utils.log_event(logger, logging.INFO, event="ocr_started", doc_type=doc_type)
+    ocr_start_time = time.time()
     try:
         doc_res: OCRDocumentResult = ocr_engine.process_file(file_path, languages=languages)
+        ocr_dur_ms = int((time.time() - ocr_start_time) * 1000)
+        logging_utils.log_event(
+            logger,
+            logging.INFO,
+            event="ocr_completed",
+            duration_ms=ocr_dur_ms,
+            pages=len(doc_res.pages) if doc_res.pages else 1,
+            status="success",
+        )
     except Exception as ex:
+        ocr_dur_ms = int((time.time() - ocr_start_time) * 1000)
+        logging_utils.log_event(
+            logger,
+            logging.ERROR,
+            event="ocr_completed",
+            duration_ms=ocr_dur_ms,
+            status="failed",
+        )
         duration_ms = (time.time() - start_time) * 1000
         logger.error("OCR engine crashed for job %s: %s", job_id, ex, exc_info=True)
         log_audit_event(
@@ -646,6 +810,17 @@ def execute_ocr_pipeline(
     if cross_check_results:
         response_payload["cross_check"] = cross_check_results
 
+    logging_utils.log_event(
+        logger,
+        logging.INFO,
+        event="document_processed",
+        document_type=doc_type,
+        ocr_engine="RapidOCR",
+        ai_model="none",
+        processing_time_ms=int(duration_ms),
+        status="success" if overall_status in ("verified", "completed", "low_confidence") else "failed",
+    )
+
     return response_payload
 
 
@@ -663,6 +838,7 @@ async def process_ocr_endpoint(
     customer_id: Optional[str] = Form(None),
     sync: bool = Query(False, description="Set True for immediate synchronous execution"),
     auth: dict = Depends(authenticate_request),
+    _rate_limit: None = Depends(rate_limit_upload),
 ):
     """
     POST /ocr/{doc_type}
@@ -791,8 +967,21 @@ async def issue_token(
 @app.get("/health")
 @app.get("/api/health")
 async def health():
-    """Health check endpoint reporting operational status, active OCR engine, and auth state."""
+    """Health check endpoint reporting operational status, active OCR engine, storage, and auth state."""
     engine_info = get_ocr_engine_info()
+    storage_health = document_store.check_storage_health()
+    ollama_health = ollama_ai.check_ollama_health()
+    enc_avail = encryption.is_encryption_available()
+
+    logging_utils.log_event(
+        logger,
+        logging.INFO,
+        event="health_check",
+        status="healthy",
+        storage="healthy" if storage_health.get("healthy") else "degraded",
+        encryption="enabled" if enc_avail else "disabled",
+    )
+
     return {
         "status": "healthy",
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -802,7 +991,62 @@ async def health():
         "ocr_engine_status": engine_info["status"],
         "auth_enabled": is_auth_enabled(),
         "auth_mode": get_auth_mode(),
+        "storage": "healthy" if storage_health.get("healthy") else "degraded",
+        "encryption": "enabled" if enc_avail else "disabled",
+        "ollama": "ready" if ollama_health.get("model_installed") else ("running" if ollama_health.get("reachable") else "offline"),
     }
+
+
+@app.get("/ready")
+@app.get("/api/ready")
+async def readiness_probe():
+    """
+    Production readiness probe evaluating all critical system components:
+    - RapidOCR engine
+    - Storage writeability
+    - Document encryption key
+    - Local Ollama service & model
+    Returns HTTP 200 if core services are ready (even if Ollama is degraded/offline,
+    since Offline Mode continues to work safely without Ollama).
+    Returns HTTP 503 if core services fail (RapidOCR, storage, encryption).
+    """
+    ocr_info = get_ocr_engine_info()
+    rapidocr_ok = ocr_info.get("status") in ("ready", "mock_ready", "active")
+
+    storage_health = document_store.check_storage_health()
+    storage_ok = bool(storage_health.get("healthy"))
+
+    enc_ok = encryption.is_encryption_available()
+
+    ollama_health = ollama_ai.check_ollama_health()
+    ollama_ok = bool(ollama_health.get("reachable"))
+    ollama_model_ok = bool(ollama_health.get("model_installed"))
+
+    core_ok = rapidocr_ok and storage_ok and enc_ok
+    all_ok = core_ok and ollama_ok and ollama_model_ok
+
+    status_str = "ok" if all_ok else ("degraded" if core_ok else "error")
+
+    response_data = {
+        "status": status_str,
+        "ready": core_ok,
+        "checks": {
+            "rapidocr": rapidocr_ok,
+            "storage": storage_ok,
+            "encryption_key": enc_ok,
+            "ollama": ollama_ok,
+            "ollama_model": ollama_model_ok,
+        },
+        "details": {
+            "ocr_engine": ocr_info.get("active_engine", "RapidOCR"),
+            "ollama_host": ollama_ai.get_ollama_host(),
+            "ollama_model": ollama_ai.get_ollama_model(),
+        },
+    }
+
+    if not core_ok:
+        return JSONResponse(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, content=response_data)
+    return JSONResponse(status_code=status.HTTP_200_OK, content=response_data)
 
 
 @app.get("/auth-status")
@@ -1003,6 +1247,19 @@ async def clear_all_documents_endpoint(
     }
 
 
+@app.post("/api/documents/cleanup")
+async def manual_cleanup_endpoint(
+    auth: dict = Depends(authenticate_request),
+    _rate_limit: None = Depends(rate_limit_cleanup),
+):
+    """Run document retention and storage cleanup immediately."""
+    result = retention_service.run_cleanup()
+    return {
+        "success": True,
+        "deleted_count": result.get("deleted_count", 0),
+    }
+
+
 @app.delete("/api/documents/{doc_id}")
 async def delete_document_endpoint(
     doc_id: str,
@@ -1025,12 +1282,14 @@ async def upload_document_endpoint(
     doc_type: Optional[str] = Form(None),
     expected_data: Optional[str] = Form(None),
     auth: dict = Depends(authenticate_request),
+    _rate_limit: None = Depends(rate_limit_upload),
 ):
     """
     Direct browser upload endpoint:
     - If mode == "ai": passes document to local Ollama (qwen2.5vl:3b) for visual reasoning and structured field extraction.
     - If mode == "offline": executes the existing RapidOCR / text layer pipeline for predefined document types.
     """
+    req_start = time.time()
     file_bytes = await file.read()
     clean_filename, ext = validate_upload_security(file, file_bytes)
     filename = clean_filename
@@ -1057,10 +1316,21 @@ async def upload_document_endpoint(
                 )
 
             # Extract text first: check PDF text layer first, fallback to OCR
+            logging_utils.log_event(logger, logging.INFO, event="ocr_started", doc_type="ai_analyzed", filename=filename)
+            ocr_t0 = time.time()
             if ext == ".pdf":
                 doc_res = ocr_engine.process_pdf(temp_path)
             else:
                 doc_res = ocr_engine.process_file(temp_path)
+            ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
+            logging_utils.log_event(
+                logger,
+                logging.INFO,
+                event="ocr_completed",
+                duration_ms=ocr_dur_ms,
+                pages=len(doc_res.pages) if doc_res.pages else 1,
+                status="success",
+            )
 
             extracted_text = doc_res.full_text or ""
 
@@ -1107,6 +1377,17 @@ async def upload_document_endpoint(
                 thumbnail_bytes=thumb_bytes,
             )
 
+            logging_utils.log_event(
+                logger,
+                logging.INFO,
+                event="document_processed",
+                document_type=ai_res.get("document_type", "Unknown Document"),
+                ocr_engine="RapidOCR",
+                ai_model="qwen2.5vl:3b",
+                processing_time_ms=int((time.time() - req_start) * 1000),
+                status="success",
+            )
+
             return {
                 "document_id": saved_record["id"],
                 "filename": saved_record["filename"],
@@ -1132,12 +1413,31 @@ async def upload_document_endpoint(
         # ====================================================================
         requested_type = (doc_type or "").strip().lower()
         init_langs = get_languages_for_doc_type(requested_type) if requested_type and requested_type != "auto" else None
+        logging_utils.log_event(logger, logging.INFO, event="ocr_started", doc_type=requested_type or "auto", filename=filename)
+        ocr_t0 = time.time()
         try:
             if ext == ".pdf":
                 doc_res = ocr_engine.process_pdf(temp_path, languages=init_langs)
             else:
                 doc_res = ocr_engine.process_file(temp_path, languages=init_langs)
+            ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
+            logging_utils.log_event(
+                logger,
+                logging.INFO,
+                event="ocr_completed",
+                duration_ms=ocr_dur_ms,
+                pages=len(doc_res.pages) if doc_res.pages else 1,
+                status="success",
+            )
         except Exception as ex:
+            ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
+            logging_utils.log_event(
+                logger,
+                logging.ERROR,
+                event="ocr_completed",
+                duration_ms=ocr_dur_ms,
+                status="failed",
+            )
             logger.error("OCR extraction exception in /api/ingest: %s", ex, exc_info=True)
             doc_res = OCRDocumentResult(
                 pages=[],
@@ -1325,6 +1625,17 @@ async def upload_document_endpoint(
             thumbnail_bytes=thumb_bytes,
         )
 
+        logging_utils.log_event(
+            logger,
+            logging.INFO,
+            event="document_processed",
+            document_type=detected_doc_title,
+            ocr_engine="RapidOCR",
+            ai_model="none",
+            processing_time_ms=int((time.time() - req_start) * 1000),
+            status="success",
+        )
+
         return saved_record
     finally:
         if os.path.exists(temp_path):
@@ -1397,6 +1708,7 @@ async def process_offline_mode_endpoint(
     doc_type: Optional[str] = Form(None),
     expected_data: Optional[str] = Form(None),
     auth: dict = Depends(authenticate_request),
+    _rate_limit: None = Depends(rate_limit_upload),
 ):
     """
     Offline Mode Document Processing Endpoint:
@@ -1406,6 +1718,7 @@ async def process_offline_mode_endpoint(
       "This document type is not supported in Offline Mode. Please use AI Mode for unknown documents."
     - If supported: extracts fields, validates checksums, sanitizes PII, and stores in vault.
     """
+    req_start = time.time()
     file_bytes = await file.read()
     clean_filename, ext = validate_upload_security(file, file_bytes)
     filename = clean_filename
@@ -1418,12 +1731,31 @@ async def process_offline_mode_endpoint(
         # 1. Text Layer Detection & OCR
         requested_type = (doc_type or "").strip().lower()
         init_langs = get_languages_for_doc_type(requested_type) if requested_type and requested_type != "auto" else None
+        logging_utils.log_event(logger, logging.INFO, event="ocr_started", doc_type=requested_type or "auto", filename=filename)
+        ocr_t0 = time.time()
         try:
             if ext == ".pdf":
                 doc_res = ocr_engine.process_pdf(temp_path, languages=init_langs)
             else:
                 doc_res = ocr_engine.process_file(temp_path, languages=init_langs)
+            ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
+            logging_utils.log_event(
+                logger,
+                logging.INFO,
+                event="ocr_completed",
+                duration_ms=ocr_dur_ms,
+                pages=len(doc_res.pages) if doc_res.pages else 1,
+                status="success",
+            )
         except Exception as ex:
+            ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
+            logging_utils.log_event(
+                logger,
+                logging.ERROR,
+                event="ocr_completed",
+                duration_ms=ocr_dur_ms,
+                status="failed",
+            )
             logger.error("OCR extraction exception in /api/mode/offline: %s", ex, exc_info=True)
             doc_res = OCRDocumentResult(
                 pages=[],
@@ -1511,6 +1843,16 @@ async def process_offline_mode_endpoint(
             saved_record["supported"] = True
             saved_record["ocr_completed"] = True
             saved_record["message"] = "Offline OCR completed successfully. Use AI Mode for detailed document understanding."
+            logging_utils.log_event(
+                logger,
+                logging.INFO,
+                event="document_processed",
+                document_type="Unknown Document",
+                ocr_engine="RapidOCR",
+                ai_model="none",
+                processing_time_ms=int((time.time() - req_start) * 1000),
+                status="success",
+            )
             return saved_record
 
         meta = DOC_TYPE_METADATA.get(resolved_type, {})
@@ -1627,6 +1969,16 @@ async def process_offline_mode_endpoint(
         )
         saved_record["supported"] = True
         saved_record["ocr_completed"] = True
+        logging_utils.log_event(
+            logger,
+            logging.INFO,
+            event="document_processed",
+            document_type=detected_doc_title,
+            ocr_engine="RapidOCR",
+            ai_model="none",
+            processing_time_ms=int((time.time() - req_start) * 1000),
+            status="success",
+        )
         return saved_record
 
     finally:
@@ -1641,6 +1993,7 @@ async def process_offline_mode_endpoint(
 async def process_ai_analyze_endpoint(
     file: UploadFile = File(...),
     auth: dict = Depends(authenticate_request),
+    _rate_limit: None = Depends(rate_limit_upload),
 ):
     """
     AI Mode Document Analyze Endpoint:
@@ -1649,6 +2002,7 @@ async def process_ai_analyze_endpoint(
     - AI analyzes document structure to determine document type, confidence, and reasoning.
     - Persists document in vault and returns structured AI classification result.
     """
+    req_start = time.time()
     file_bytes = await file.read()
     clean_filename, ext = validate_upload_security(file, file_bytes)
     filename = clean_filename
@@ -1659,10 +2013,21 @@ async def process_ai_analyze_endpoint(
 
     try:
         # Extract text: check PDF text layer first, fallback to OCR
+        logging_utils.log_event(logger, logging.INFO, event="ocr_started", doc_type="ai_analyzed", filename=filename)
+        ocr_t0 = time.time()
         if ext == ".pdf":
             doc_res = ocr_engine.process_pdf(temp_path)
         else:
             doc_res = ocr_engine.process_file(temp_path)
+        ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
+        logging_utils.log_event(
+            logger,
+            logging.INFO,
+            event="ocr_completed",
+            duration_ms=ocr_dur_ms,
+            pages=len(doc_res.pages) if doc_res.pages else 1,
+            status="success",
+        )
 
         ocr_required = getattr(doc_res, "ocr_required", True)
         text_source = getattr(doc_res, "text_source", "none")
@@ -1723,6 +2088,17 @@ async def process_ai_analyze_endpoint(
         if saved_record.get("ai_analysis"):
             saved_record["ai_analysis"]["document_id"] = saved_record["id"]
 
+        logging_utils.log_event(
+            logger,
+            logging.INFO,
+            event="document_processed",
+            document_type=ai_res.get("document_type", "Unknown Document"),
+            ocr_engine="RapidOCR",
+            ai_model="qwen2.5vl:3b",
+            processing_time_ms=int((time.time() - req_start) * 1000),
+            status="success",
+        )
+
         return {
             "document_id": saved_record["id"],
             "filename": saved_record["filename"],
@@ -1752,6 +2128,7 @@ async def process_ai_analyze_endpoint(
 async def process_ai_chat_endpoint(
     payload: AiChatPayload,
     auth: dict = Depends(authenticate_request),
+    _rate_limit: None = Depends(rate_limit_ai_chat),
 ):
     """
     AI Mode Interactive Chat Endpoint:

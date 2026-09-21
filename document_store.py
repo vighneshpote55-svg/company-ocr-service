@@ -26,8 +26,9 @@ from encryption import (
     DocumentEncryptionKeyMissingError,
     is_encrypted_payload,
 )
+import logging_utils
 
-logger = logging.getLogger("company_server_ocr.document_store")
+logger = logging_utils.get_logger("company_server_ocr.document_store")
 
 STORAGE_ROOT = os.getenv("DOCUMENT_STORAGE_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "uploads"))
 ORIGINAL_DIR = os.path.join(STORAGE_ROOT, "original")
@@ -35,6 +36,31 @@ PROCESSED_DIR = os.path.join(STORAGE_ROOT, "processed")
 RESULTS_DIR = os.path.join(STORAGE_ROOT, "results")
 INDEX_FILE = os.path.join(STORAGE_ROOT, "documents.json")
 TEMP_DIR = os.getenv("DOCUMENT_TEMP_DIR", os.path.join(os.path.dirname(os.path.abspath(__file__)), "temp"))
+
+
+def check_storage_health() -> Dict[str, Any]:
+    """Verify writeability and existence of all document storage directories."""
+    dirs_to_check = [STORAGE_ROOT, ORIGINAL_DIR, PROCESSED_DIR, RESULTS_DIR]
+    healthy = True
+    details = {}
+    for d in dirs_to_check:
+        try:
+            os.makedirs(d, exist_ok=True)
+            test_file = os.path.join(d, f".health_check_{uuid.uuid4().hex[:8]}")
+            with open(test_file, "w") as f:
+                f.write("ok")
+            os.remove(test_file)
+            details[os.path.basename(d) or "root"] = "writable"
+        except Exception as ex:
+            healthy = False
+            details[os.path.basename(d) or "root"] = f"error: {str(ex)}"
+    return {
+        "status": "healthy" if healthy else "degraded",
+        "healthy": healthy,
+        "details": details,
+        "storage_root": STORAGE_ROOT,
+    }
+
 
 _lock = threading.Lock()
 _active_document_id: Optional[str] = None
@@ -280,6 +306,17 @@ def save_document(
 
     # 6. Mark as active document for current session
     set_active_document(doc_id)
+
+    logging_utils.log_event(
+        logger,
+        logging.INFO,
+        event="document_persisted",
+        message=f"Document {doc_id} persisted securely",
+        document_id=doc_id,
+        file_size=len(file_bytes),
+        encrypted=True,
+        status="success",
+    )
 
     return doc_record
 
