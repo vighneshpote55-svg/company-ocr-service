@@ -20,13 +20,20 @@ import { ExtractedTextViewer } from './components/ExtractedTextViewer';
 import { JsonResultViewer } from './components/JsonResultViewer';
 import { SettingsModal } from './components/SettingsModal';
 import { ConfirmClearModal } from './components/ConfirmClearModal';
-import { LoginView } from './components/LoginView';
 import { Toast } from './components/Toast';
 import type { ToastMessage } from './components/Toast';
+import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { AuthProvider, useAuth } from './context/AuthContext';
+import { ProtectedRoute } from './components/ProtectedRoute';
+import { LoginPage } from './components/auth/LoginPage';
+import { RegisterPage } from './components/auth/RegisterPage';
+import { ForgotPasswordPage } from './components/auth/ForgotPasswordPage';
+import { ResetPasswordPage } from './components/auth/ResetPasswordPage';
 
 type InspectTab = 'fields' | 'text' | 'json';
 
-export const App: React.FC = () => {
+const DashboardApp: React.FC = () => {
+  const { logout: authLogout } = useAuth();
   const [appMode, setAppMode] = useState<AppMode>('offline');
   const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
   const [inspectTab, setInspectTab] = useState<InspectTab>('fields');
@@ -43,8 +50,6 @@ export const App: React.FC = () => {
     failed: 0,
   });
   const [documents, setDocuments] = useState<DocumentItem[]>([]);
-  const [authEnabled, setAuthEnabled] = useState<boolean>(false);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(api.isAuthenticated());
   const [isBackendConnected, setIsBackendConnected] = useState<boolean>(true);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
@@ -78,30 +83,18 @@ export const App: React.FC = () => {
   const loadData = useCallback(async () => {
     setIsRefreshing(true);
     try {
-      // 1. Check health & dynamic backend auth status
       await api.checkHealth();
       setIsBackendConnected(true);
 
-      const [authStatus, typesData, engineData, aiCfgData] = await Promise.all([
-        api.checkAuthStatus().catch(() => ({ auth_enabled: false, auth_mode: 'disabled' })),
+      const [typesData, engineData, aiCfgData] = await Promise.all([
         api.getSupportedTypes().catch(() => []),
         api.getEngineInfo().catch(() => null),
         api.getAiConfig().catch(() => null),
       ]);
 
-      const isEnabled = Boolean(authStatus.auth_enabled);
-      setAuthEnabled(isEnabled);
-      const authed = api.isAuthenticated();
-      setIsAuthenticated(authed);
-
       setSupportedTypes(typesData);
       if (engineData) setEngineInfo(engineData);
       if (aiCfgData) setAiConfig(aiCfgData);
-
-      // Only fetch protected data if not gated by enabled auth
-      if (isEnabled && !authed) {
-        return;
-      }
 
       // 2. Fetch protected stats and documents in parallel
       const [statsData, docsData] = await Promise.all([
@@ -128,11 +121,9 @@ export const App: React.FC = () => {
   }, []);
 
   useEffect(() => {
-    const unsubscribeAuth = api.onUnauthorized(() => {
-      if (api.isAuthEnabled()) {
-        setIsAuthenticated(false);
-        addToast('Session expired or unauthorized. Please sign in again.', 'info');
-      }
+    const unsubscribeAuth = api.onUnauthorized(async () => {
+      await authLogout();
+      addToast('Session expired or unauthorized. Please sign in again.', 'info');
     });
 
     loadData();
@@ -211,20 +202,6 @@ export const App: React.FC = () => {
   };
 
 
-  // Only gate the dashboard if the backend actually reports auth is enabled AND user has no valid token
-  if (authEnabled && !isAuthenticated) {
-    return (
-      <>
-        <LoginView
-          onLoginSuccess={() => {
-            setIsAuthenticated(true);
-            loadData();
-          }}
-        />
-        <Toast toasts={toasts} onDismiss={removeToast} />
-      </>
-    );
-  }
 
   // Document Inspection Component View
   const renderInspectionContent = () => {
@@ -363,15 +340,11 @@ export const App: React.FC = () => {
           refreshAiConfig();
         }}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onLogout={
-          authEnabled
-            ? () => {
-                api.logout();
-                setIsAuthenticated(false);
-                addToast('Signed out successfully.', 'info');
-              }
-            : undefined
-        }
+        onLogout={async () => {
+          await authLogout();
+          api.logout();
+          addToast('Signed out successfully.', 'info');
+        }}
         engineInfo={engineInfo}
         supportedTypes={supportedTypes}
         stats={stats}
@@ -416,6 +389,31 @@ export const App: React.FC = () => {
 
       {/* Toast Notifications */}
       <Toast toasts={toasts} onDismiss={removeToast} />
+    </ErrorBoundary>
+  );
+};
+
+export const App: React.FC = () => {
+  return (
+    <ErrorBoundary>
+      <BrowserRouter>
+        <AuthProvider>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route path="/register" element={<RegisterPage />} />
+            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route
+              path="/*"
+              element={
+                <ProtectedRoute>
+                  <DashboardApp />
+                </ProtectedRoute>
+              }
+            />
+          </Routes>
+        </AuthProvider>
+      </BrowserRouter>
     </ErrorBoundary>
   );
 };

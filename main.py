@@ -62,6 +62,9 @@ from PIL import Image
 
 from audit_logger import log_audit_event
 import document_store
+import document_repository
+import chat_repository
+import supabase_client
 import encryption
 from encryption import DocumentDecryptionError, DocumentEncryptionKeyMissingError
 from extractors import (
@@ -973,6 +976,7 @@ async def health():
     storage_health = document_store.check_storage_health()
     ollama_health = ollama_ai.check_ollama_health()
     enc_avail = encryption.is_encryption_available()
+    supa_health = supabase_client.check_supabase_health()
 
     logging_utils.log_event(
         logger,
@@ -981,6 +985,7 @@ async def health():
         status="healthy",
         storage="healthy" if storage_health.get("healthy") else "degraded",
         encryption="enabled" if enc_avail else "disabled",
+        supabase=supa_health.get("status", "unconfigured"),
     )
 
     return {
@@ -995,6 +1000,7 @@ async def health():
         "storage": "healthy" if storage_health.get("healthy") else "degraded",
         "encryption": "enabled" if enc_avail else "disabled",
         "ollama": "ready" if ollama_health.get("model_installed") else ("running" if ollama_health.get("reachable") else "offline"),
+        "supabase": supa_health.get("status", "unconfigured"),
     }
 
 
@@ -1007,9 +1013,8 @@ async def readiness_probe():
     - Storage writeability
     - Document encryption key
     - Local Ollama service & model
-    Returns HTTP 200 if core services are ready (even if Ollama is degraded/offline,
-    since Offline Mode continues to work safely without Ollama).
-    Returns HTTP 503 if core services fail (RapidOCR, storage, encryption).
+    - Supabase connectivity (if configured)
+    Returns HTTP 200 if core services are ready.
     """
     ocr_info = get_ocr_engine_info()
     rapidocr_ok = ocr_info.get("status") in ("ready", "mock_ready", "active")
@@ -1022,6 +1027,9 @@ async def readiness_probe():
     ollama_health = ollama_ai.check_ollama_health()
     ollama_ok = bool(ollama_health.get("reachable"))
     ollama_model_ok = bool(ollama_health.get("model_installed"))
+
+    supa_health = supabase_client.check_supabase_health()
+    supa_storage = supabase_client.check_storage_health()
 
     core_ok = rapidocr_ok and storage_ok and enc_ok
     all_ok = core_ok and ollama_ok and ollama_model_ok
@@ -1037,6 +1045,8 @@ async def readiness_probe():
             "encryption_key": enc_ok,
             "ollama": ollama_ok,
             "ollama_model": ollama_model_ok,
+            "supabase": supa_health.get("status", "unconfigured"),
+            "supabase_storage": supa_storage.get("status", "unconfigured"),
         },
         "details": {
             "ocr_engine": ocr_info.get("active_engine", "RapidOCR"),
@@ -1110,12 +1120,31 @@ async def get_supported_types():
     return SUPPORTED_DOC_TYPES
 
 
+@app.get("/api/auth/me")
+async def get_auth_me_endpoint(
+    auth: dict = Depends(authenticate_request),
+):
+    """
+    Returns current authenticated user identity and role from Supabase Auth & profiles.
+    Never exposes passwords, tokens, or system secrets.
+    """
+    return {
+        "id": auth.get("user_id") or auth.get("sub"),
+        "email": auth.get("email"),
+        "full_name": auth.get("full_name"),
+        "role": auth.get("role", "user"),
+    }
+
+
 @app.get("/api/stats")
 async def get_dashboard_stats(
     auth: dict = Depends(authenticate_request),
 ):
-    """Retrieve aggregate document statistics for the dashboard."""
-    return document_store.get_stats()
+    """Retrieve aggregate document statistics scoped to the authenticated user."""
+    user_id = auth.get("user_id") or auth.get("sub")
+    if supabase_client.is_supabase_configured() and user_id:
+        return document_repository.get_user_statistics(user_id)
+    return document_store.get_stats(user_id=user_id)
 
 
 @app.get("/api/documents")
@@ -1128,7 +1157,26 @@ async def list_documents_endpoint(
     offset: int = Query(0, ge=0),
     auth: dict = Depends(authenticate_request),
 ):
-    """Retrieve paginated list of uploaded documents with search and filtering."""
+    """Retrieve paginated list of documents owned exclusively by the authenticated user."""
+    user_id = auth.get("user_id") or auth.get("sub")
+
+    if supabase_client.is_supabase_configured() and user_id:
+        page = (offset // limit) + 1
+        supa_res = document_repository.get_user_documents(
+            user_id=user_id,
+            page=page,
+            limit=limit,
+            doc_type=doc_type,
+            status=status,
+            search=search,
+        )
+        return {
+            "items": supa_res.get("documents", []),
+            "total": supa_res.get("total", 0),
+            "limit": limit,
+            "offset": offset,
+        }
+
     items = document_store.list_documents(
         status_filter=status,
         ocr_required_filter=ocr_required,
@@ -1136,6 +1184,7 @@ async def list_documents_endpoint(
         search=search,
         limit=limit,
         offset=offset,
+        user_id=user_id,
     )
     all_filtered = document_store.list_documents(
         status_filter=status,
@@ -1144,6 +1193,7 @@ async def list_documents_endpoint(
         search=search,
         limit=10000,
         offset=0,
+        user_id=user_id,
     )
     return {
         "items": items,
@@ -1158,9 +1208,27 @@ async def get_document_endpoint(
     doc_id: str,
     auth: dict = Depends(authenticate_request),
 ):
-    """Retrieve full details, extracted fields, and verification results of a document."""
+    """Retrieve details of a document, strictly verifying owner authorization."""
+    user_id = auth.get("user_id") or auth.get("sub")
+
+    if supabase_client.is_supabase_configured() and user_id:
+        doc = document_repository.get_user_document(user_id, doc_id)
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{doc_id}' not found",
+            )
+        return doc
+
     doc = document_store.get_document(doc_id)
     if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{doc_id}' not found",
+        )
+    # Check ownership: User A cannot access User B's document
+    doc_user = doc.get("user_id")
+    if doc_user and user_id and doc_user != user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document '{doc_id}' not found",
@@ -1174,9 +1242,34 @@ async def get_document_file_endpoint(
     download: bool = Query(False),
     auth: dict = Depends(authenticate_request),
 ):
-    """Serve the transparently decrypted document for in-browser PDF or image preview (inline) or download."""
+    """Serve decrypted document bytes for owner inline preview or download."""
+    user_id = auth.get("user_id") or auth.get("sub")
+
+    if supabase_client.is_supabase_configured() and user_id:
+        payload = document_repository.get_document_file_payload(user_id, doc_id)
+        if not payload:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{doc_id}' not found",
+            )
+        decrypted_bytes, filename, media_type = payload
+        disposition = "attachment" if download else "inline"
+        return Response(
+            content=decrypted_bytes,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'{disposition}; filename="{filename}"'
+            },
+        )
+
     doc = document_store.get_document(doc_id)
     if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{doc_id}' not found",
+        )
+    doc_user = doc.get("user_id")
+    if doc_user and user_id and doc_user != user_id:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Document '{doc_id}' not found",
@@ -1225,7 +1318,31 @@ async def get_document_preview_endpoint(
     doc_id: str,
     auth: dict = Depends(authenticate_request),
 ):
-    """Serve the thumbnail image preview for the document."""
+    """Serve the thumbnail image preview for owner only."""
+    user_id = auth.get("user_id") or auth.get("sub")
+
+    # Verify document ownership first
+    if supabase_client.is_supabase_configured() and user_id:
+        doc = document_repository.get_user_document(user_id, doc_id)
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Preview for document '{doc_id}' not found",
+            )
+    else:
+        doc = document_store.get_document(doc_id)
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Preview for document '{doc_id}' not found",
+            )
+        doc_user = doc.get("user_id")
+        if doc_user and user_id and doc_user != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Preview for document '{doc_id}' not found",
+            )
+
     preview_path = document_store.get_document_preview_path(doc_id)
     if not preview_path or not os.path.exists(preview_path):
         raise HTTPException(
@@ -1239,8 +1356,13 @@ async def get_document_preview_endpoint(
 async def clear_all_documents_endpoint(
     auth: dict = Depends(authenticate_request),
 ):
-    """Permanently delete all documents from Document Vault, clearing files and records."""
-    deleted_count = document_store.clear_all_documents()
+    """Permanently delete all documents belonging exclusively to the authenticated user."""
+    user_id = auth.get("user_id") or auth.get("sub")
+    if supabase_client.is_supabase_configured() and user_id:
+        deleted_count = document_repository.clear_user_documents(user_id)
+    else:
+        deleted_count = document_store.clear_all_documents(user_id=user_id)
+
     return {
         "success": True,
         "deleted_count": deleted_count,
@@ -1266,8 +1388,25 @@ async def delete_document_endpoint(
     doc_id: str,
     auth: dict = Depends(authenticate_request),
 ):
-    """Permanently delete a document, its stored files, and metadata record."""
-    deleted = document_store.delete_document(doc_id)
+    """Permanently delete a document owned by the authenticated user."""
+    user_id = auth.get("user_id") or auth.get("sub")
+    if supabase_client.is_supabase_configured() and user_id:
+        deleted = document_repository.delete_user_document(user_id, doc_id)
+    else:
+        doc = document_store.get_document(doc_id)
+        if not doc:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{doc_id}' not found",
+            )
+        doc_user = doc.get("user_id")
+        if doc_user and user_id and doc_user != user_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Document '{doc_id}' not found",
+            )
+        deleted = document_store.delete_document(doc_id)
+
     if not deleted:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -1376,6 +1515,7 @@ async def upload_document_endpoint(
                 filename=filename,
                 result_data=result_payload,
                 thumbnail_bytes=thumb_bytes,
+                user_id=auth.get("user_id") or auth.get("sub"),
             )
 
             logging_utils.log_event(
@@ -1624,6 +1764,7 @@ async def upload_document_endpoint(
             filename=filename,
             result_data=result_payload,
             thumbnail_bytes=thumb_bytes,
+            user_id=auth.get("user_id") or auth.get("sub"),
         )
 
         logging_utils.log_event(
@@ -1736,8 +1877,15 @@ async def update_ai_config_endpoint(
 ):
     """
     Updates runtime AI provider configuration securely on backend.
+    Enforces admin role: normal users receive HTTP 403 Forbidden.
     Never stores keys on frontend, never returns secret keys in response.
     """
+    if auth.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to modify global AI provider configuration.",
+        )
+
     ai_providers.ai_provider_manager.update_config(
         provider=payload.provider,
         api_key=payload.api_key,
@@ -1755,9 +1903,16 @@ async def test_ai_connection_endpoint(
 ):
     """
     Tests connectivity to candidate or currently configured AI provider.
+    Enforces admin role for testing candidate configurations.
     Returns safe test result (success, provider, model, message, latency_ms).
     Never exposes secrets in response.
     """
+    if auth.get("role") != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You do not have permission to test AI provider connections.",
+        )
+
     candidate = payload.model_dump() if payload else None
     return await ai_providers.ai_provider_manager.test_connection(candidate)
 
@@ -1899,6 +2054,7 @@ async def process_offline_mode_endpoint(
                 filename=filename,
                 result_data=result_payload,
                 thumbnail_bytes=thumb_bytes,
+                user_id=auth.get("user_id") or auth.get("sub"),
             )
             saved_record["supported"] = True
             saved_record["ocr_completed"] = True
@@ -2026,6 +2182,7 @@ async def process_offline_mode_endpoint(
             filename=filename,
             result_data=result_payload,
             thumbnail_bytes=thumb_bytes,
+            user_id=auth.get("user_id") or auth.get("sub"),
         )
         saved_record["supported"] = True
         saved_record["ocr_completed"] = True
@@ -2148,6 +2305,7 @@ async def process_ai_analyze_endpoint(
             filename=filename,
             result_data=result_payload,
             thumbnail_bytes=thumb_bytes,
+            user_id=auth.get("user_id") or auth.get("sub"),
         )
         if saved_record.get("ai_analysis"):
             saved_record["ai_analysis"]["document_id"] = saved_record["id"]
@@ -2227,6 +2385,14 @@ async def process_ai_chat_endpoint(
             detail=f"Document '{target_id}' not found in vault",
         )
 
+    user_id = auth.get("user_id") or auth.get("sub")
+    doc_user = doc.get("user_id")
+    if doc_user and user_id and doc_user != user_id:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Document '{target_id}' not found in vault",
+        )
+
     doc_text = doc.get("extracted_text") or ""
     if not doc_text.strip():
         raise HTTPException(
@@ -2258,6 +2424,22 @@ async def process_ai_chat_endpoint(
                 )
             else:
                 raise
+
+        # Save conversation to chat repository
+        if user_id:
+            chat_repository.add_chat_message(
+                user_id=user_id,
+                document_id=target_id,
+                role="user",
+                content=payload.message,
+            )
+            chat_repository.add_chat_message(
+                user_id=user_id,
+                document_id=target_id,
+                role="assistant",
+                content=reply,
+            )
+
         return {"response": reply}
     except RuntimeError as ai_err:
         raise HTTPException(
@@ -2270,6 +2452,22 @@ async def process_ai_chat_endpoint(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"AI chat error: {str(ex)}",
         )
+
+
+@app.get("/api/mode/ai/chat/{doc_id}")
+async def get_ai_chat_history_endpoint(
+    doc_id: str,
+    auth: dict = Depends(authenticate_request),
+):
+    """Retrieve isolated multi-turn chat history for a document owned by the user."""
+    user_id = auth.get("user_id") or auth.get("sub")
+    doc = document_store.get_document(doc_id)
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    doc_user = doc.get("user_id")
+    if doc_user and user_id and doc_user != user_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found")
+    return {"history": chat_repository.get_chat_history(user_id or "default", doc_id)}
 
 
 # Mount frontend single page application if built

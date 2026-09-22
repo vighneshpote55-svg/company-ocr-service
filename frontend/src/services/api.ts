@@ -14,6 +14,7 @@ import type {
 } from '../types';
 export type { AIProviderConfig, AIProviderStatus, AIConnectionTestResult } from '../types';
 import { normalizeAiDocument } from '../types';
+import { getAccessToken } from './supabaseClient';
 
 const STORAGE_KEY_BASE_URL = 'ocr_app_base_url';
 const SESSION_KEY_TOKEN = 'ocr_session_jwt_token';
@@ -250,6 +251,17 @@ export class ApiService {
     const defaultHeaders = this.getHeaders();
     const mergedHeaders: Record<string, string> = { ...defaultHeaders };
 
+    // Dynamically retrieve Supabase JWT if present
+    try {
+      const supaToken = await getAccessToken();
+      const tokenToUse = supaToken || this.token;
+      if (tokenToUse) {
+        mergedHeaders['Authorization'] = `Bearer ${tokenToUse}`;
+      }
+    } catch {
+      // Fall through to existing headers
+    }
+
     if (options.headers) {
       if (typeof (options.headers as any).forEach === 'function') {
         (options.headers as Headers).forEach((value, key) => {
@@ -270,6 +282,12 @@ export class ApiService {
       throw new Error('Authentication required or session expired (HTTP 401). Please sign in.');
     }
     return res;
+  }
+
+  public async getAuthMe(): Promise<{ id: string; email: string; full_name?: string; role: string }> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/auth/me'));
+    if (!res.ok) throw new Error('Failed to load user identity');
+    return res.json();
   }
 
   public async checkHealth(): Promise<{ status: string; version: string; auth_enabled?: boolean; auth_mode?: string }> {

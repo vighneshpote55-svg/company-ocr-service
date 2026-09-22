@@ -189,6 +189,7 @@ def save_document(
     filename: str,
     result_data: Dict[str, Any],
     thumbnail_bytes: Optional[bytes] = None,
+    user_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Persist an uploaded document:
@@ -233,6 +234,7 @@ def save_document(
     doc_record = {
         "id": doc_id,
         "document_id": doc_id,
+        "user_id": user_id,
         "filename": clean_name,
         "original_filename": clean_name,
         "stored_filename": stored_filename,
@@ -436,12 +438,17 @@ def list_documents(
     search: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
+    user_id: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Query stored documents with filters."""
     items = _load_index()
 
     filtered = []
     for item in items:
+        if user_id:
+            # Check user ownership if user_id is specified
+            if item.get("user_id") != user_id:
+                continue
         if status_filter and status_filter.lower() != "all":
             if item.get("status", "").lower() != status_filter.lower():
                 continue
@@ -504,20 +511,48 @@ def delete_document(doc_id: str) -> bool:
         return True
 
 
-def clear_all_documents() -> int:
+def clear_all_documents(user_id: Optional[str] = None) -> int:
     """
-    Permanently delete all document records and their associated files:
-    - original uploads in ORIGINAL_DIR
-    - thumbnails and previews in PROCESSED_DIR
-    - result files in RESULTS_DIR
-    - resets documents.json to an empty list
-    Returns the count of deleted documents.
+    Permanently delete document records and their associated files.
+    If user_id is provided, deletes only documents belonging to user_id.
     """
     with _lock:
         items = _load_index()
-        count = len(items)
+        if user_id:
+            to_delete = [item for item in items if item.get("user_id") == user_id]
+            kept = [item for item in items if item.get("user_id") != user_id]
+            count = len(to_delete)
+            for item in to_delete:
+                doc_id = item.get("id") or item.get("document_id")
+                if doc_id:
+                    # Remove original files
+                    if os.path.isdir(ORIGINAL_DIR):
+                        for fname in os.listdir(ORIGINAL_DIR):
+                            if fname.startswith(doc_id):
+                                try:
+                                    os.remove(os.path.join(ORIGINAL_DIR, fname))
+                                except Exception:
+                                    pass
+                    # Remove thumbnail
+                    preview_file = os.path.join(PROCESSED_DIR, f"{doc_id}_thumb.png")
+                    if os.path.exists(preview_file):
+                        try:
+                            os.remove(preview_file)
+                        except Exception:
+                            pass
+                    # Remove results
+                    for res_name in (f"{doc_id}.json.enc", f"{doc_id}.json"):
+                        res_path = os.path.join(RESULTS_DIR, res_name)
+                        if os.path.exists(res_path):
+                            try:
+                                os.remove(res_path)
+                            except Exception:
+                                pass
+            _save_index(kept)
+            return count
 
-        # 1. Clean files in upload directories
+        count = len(items)
+        # Clean all files in upload directories
         for folder in (ORIGINAL_DIR, PROCESSED_DIR, RESULTS_DIR):
             if os.path.isdir(folder):
                 for fname in os.listdir(folder):
@@ -528,7 +563,7 @@ def clear_all_documents() -> int:
                         except Exception:
                             pass
 
-        # 2. Reset document index
+        # Reset document index
         _save_index([])
         return count
 
@@ -541,9 +576,11 @@ def get_document_preview_path(doc_id: str) -> Optional[str]:
     return None
 
 
-def get_stats() -> Dict[str, int]:
-    """Compute dashboard statistics."""
+def get_stats(user_id: Optional[str] = None) -> Dict[str, int]:
+    """Compute dashboard statistics, scoped by user_id if provided."""
     items = _load_index()
+    if user_id:
+        items = [d for d in items if d.get("user_id") == user_id]
     total = len(items)
     ocr_processed = sum(1 for d in items if d.get("ocr_required") is True)
     ocr_not_required = sum(1 for d in items if d.get("ocr_required") is False)

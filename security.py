@@ -214,50 +214,68 @@ async def authenticate_request(
     api_key: Optional[str] = Query(None),
 ) -> dict:
     """
-    Authenticate incoming request using either JWT Bearer token (via Authorization
-    header or ?token= query parameter) or static API Key (via X-API-Key header or
-    ?api_key= query parameter).
+    Authenticate incoming request using Supabase JWT Bearer token.
+    Provides backward-compatibility dict for existing route handlers while enforcing Supabase identity.
     """
-    mode = get_auth_mode()
-    if mode in ("disabled", "none", "off", "false"):
+    from auth_dependencies import (
+        is_auth_required,
+        verify_supabase_jwt,
+        get_user_profile_from_db,
+        DEFAULT_MOCK_USER_ID,
+    )
+
+    if not is_auth_required():
         return {
-            "sub": "anonymous",
-            "auth_method": "none",
-            "auth_mode": "disabled",
+            "sub": os.getenv("DEFAULT_DEV_USER_ID", DEFAULT_MOCK_USER_ID),
+            "user_id": os.getenv("DEFAULT_DEV_USER_ID", DEFAULT_MOCK_USER_ID),
+            "email": "dev@company.local",
+            "full_name": "Development User",
+            "role": "admin",
+            "auth_method": "dev_bypass",
         }
 
-    static_key = get_static_api_key()
-
-    # 1. If static API Key mode strictly required
-    if mode == "api_key":
-        key_candidate = x_api_key or api_key
-        if key_candidate and static_key and hmac.compare_digest(key_candidate, static_key):
-            return {"sub": "api_key_client", "auth_method": "api_key"}
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-API-Key header",
-        )
-
-    # 2. Check JWT Bearer token (from Authorization header or query parameter)
     jwt_candidate = None
-    if authorization and authorization.startswith("Bearer "):
-        jwt_candidate = authorization.split(" ", 1)[1].strip()
+    if authorization and authorization.lower().startswith("bearer "):
+        jwt_candidate = authorization[7:].strip()
     elif token:
         jwt_candidate = token.strip()
 
-    if jwt_candidate:
-        payload = verify_jwt_token(jwt_candidate)
-        payload["auth_method"] = "jwt"
-        return payload
+    if not jwt_candidate:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication credentials were not provided (Bearer JWT required).",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    # 3. Check static API Key (fallback only if AUTH_MODE == 'dual')
-    key_candidate = x_api_key or api_key
-    if mode == "dual" and key_candidate and static_key and hmac.compare_digest(key_candidate, static_key):
-        return {"sub": "api_key_client", "auth_method": "api_key"}
+    claims = verify_supabase_jwt(jwt_candidate)
+    user_id = claims.get("sub")
+    if not user_id:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid token claims: missing subject identifier.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
-    # If neither provided or matched
-    raise HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Missing or invalid authentication credentials (Bearer JWT or X-API-Key required)",
-        headers={"WWW-Authenticate": "Bearer"},
-    )
+    email = claims.get("email", "")
+    profile = get_user_profile_from_db(user_id, default_email=email)
+
+    # Check claims / metadata for role if database did not specify admin
+    role = profile.role
+    if role != "admin":
+        role_claim = (
+            claims.get("app_metadata", {}).get("role")
+            or claims.get("user_metadata", {}).get("role")
+            or claims.get("role")
+        )
+        if role_claim == "admin":
+            role = "admin"
+
+    return {
+        "sub": profile.id,
+        "user_id": profile.id,
+        "email": profile.email,
+        "full_name": profile.full_name,
+        "role": role,
+        "auth_method": "supabase_jwt",
+    }
+

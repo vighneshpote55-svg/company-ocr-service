@@ -17,6 +17,7 @@ import {
   Cpu,
 } from 'lucide-react';
 import { api, normalizeOpenRouterConfig } from '../services/api';
+import { useAuth } from '../context/AuthContext';
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -25,6 +26,8 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSaved }) => {
+  const { role } = useAuth();
+  const isAdmin = role === 'admin';
   const currentConfig = api.getConfig();
   const [baseUrl, setBaseUrl] = useState(currentConfig.baseUrl);
   const [clientId, setClientId] = useState(currentConfig.clientId || '');
@@ -496,7 +499,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             <div
               style={{
                 display: 'flex',
-                alignItems: 'center',
+                alignItems: 'baseline',
                 gap: '8px',
                 marginBottom: '14px',
                 paddingBottom: '6px',
@@ -507,9 +510,30 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                 Edit Configuration
               </span>
               <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                (Unsaved edits will not affect active AI until saved)
+                {isAdmin ? '(Unsaved edits will not affect active AI until saved)' : '(Managed by System Administrator)'}
               </span>
             </div>
+
+            {!isAdmin && (
+              <div
+                style={{
+                  padding: '12px 14px',
+                  borderRadius: '10px',
+                  backgroundColor: 'rgba(245, 158, 11, 0.1)',
+                  border: '1px solid rgba(245, 158, 11, 0.25)',
+                  color: '#d97706',
+                  fontSize: '12px',
+                  lineHeight: '1.4',
+                  marginBottom: '16px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '10px',
+                }}
+              >
+                <Lock size={16} style={{ flexShrink: 0 }} />
+                <span>Global AI Provider configuration and API keys are restricted to system administrators. Standard users cannot modify these settings.</span>
+              </div>
+            )}
 
             <div className="settings-two-col-grid">
               <div className="settings-field-col">
@@ -769,6 +793,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             type="button"
             className="btn btn-primary settings-save-btn"
             onClick={handleSave}
+            disabled={!isAdmin}
+            title={!isAdmin ? 'Only administrators can save configuration changes.' : undefined}
           >
             <Check size={16} />
             <span>Save Changes</span>

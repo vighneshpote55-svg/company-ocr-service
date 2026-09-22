@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import type { AppMode } from '../types';
 import { ModeSwitcher } from './ModeSwitcher';
+import { useAuth } from '../context/AuthContext';
 
 interface HeaderProps {
   mode: AppMode;
@@ -42,6 +43,7 @@ export const Header: React.FC<HeaderProps> = ({
   isDarkMode = false,
   onToggleTheme,
 }) => {
+  const { user, role, logout: authLogout } = useAuth();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
@@ -213,14 +215,21 @@ export const Header: React.FC<HeaderProps> = ({
             <div className="user-avatar-circle">
               <User size={15} />
             </div>
-            <span className="user-avatar-label">User Profile</span>
+            <span className="user-avatar-label">
+              {user?.full_name ? user.full_name.split(' ')[0] : (user?.email ? user.email.split('@')[0] : 'User')}
+            </span>
           </button>
 
           {showUserMenu && (
             <div className="header-dropdown-menu user-dropdown-menu">
               <div className="user-dropdown-info">
-                <div className="user-dropdown-name">Enterprise Operator</div>
-                <div className="user-dropdown-email">operator@company-ocr.internal</div>
+                <div className="flex items-center justify-between gap-2">
+                  <div className="user-dropdown-name">{user?.full_name || 'Operator'}</div>
+                  <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${role === 'admin' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-slate-800 text-slate-400'}`}>
+                    {role}
+                  </span>
+                </div>
+                <div className="user-dropdown-email">{user?.email || 'authenticated'}</div>
               </div>
               <div className="dropdown-divider" />
               <button
@@ -233,21 +242,18 @@ export const Header: React.FC<HeaderProps> = ({
                 <Settings size={15} />
                 <span>Engine & Network Configuration</span>
               </button>
-              {onLogout && (
-                <>
-                  <div className="dropdown-divider" />
-                  <button
-                    className="dropdown-menu-action text-danger"
-                    onClick={() => {
-                      setShowUserMenu(false);
-                      onLogout();
-                    }}
-                  >
-                    <LogOut size={15} />
-                    <span>Sign Out</span>
-                  </button>
-                </>
-              )}
+              <div className="dropdown-divider" />
+              <button
+                className="dropdown-menu-action text-danger"
+                onClick={async () => {
+                  setShowUserMenu(false);
+                  await authLogout();
+                  if (onLogout) onLogout();
+                }}
+              >
+                <LogOut size={15} />
+                <span>Sign Out</span>
+              </button>
             </div>
           )}
         </div>
