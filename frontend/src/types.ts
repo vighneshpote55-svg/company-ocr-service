@@ -24,10 +24,15 @@ export interface SupportedType {
 
 export interface DashboardStats {
   total: number;
+  total_documents?: number;
   ocr_processed: number;
   ocr_not_required: number;
   completed: number;
   failed: number;
+  offline_documents?: number;
+  ai_documents?: number;
+  total_storage_bytes?: number;
+  total_storage_mb?: number;
 }
 
 export interface DocumentItem {

@@ -65,15 +65,16 @@ def validate_security_configuration():
         return
 
     if mode in ("jwt", "dual"):
-        jwt_sec = os.getenv("JWT_SECRET")
+        jwt_sec = os.getenv("JWT_SECRET") or os.getenv("SUPABASE_JWT_SECRET")
         if not jwt_sec or not jwt_sec.strip():
             raise RuntimeError(
-                f"Missing required environment variable 'JWT_SECRET'. "
-                f"In AUTH_MODE='{mode}', JWT_SECRET must be explicitly set via secret management."
+                f"Missing required environment variable 'JWT_SECRET' or 'SUPABASE_JWT_SECRET'. "
+                f"In AUTH_MODE='{mode}', a JWT secret must be explicitly set via secret management."
             )
         # Load external client credentials if configured
         load_registered_clients()
-        if len(_registered_clients) == 0:
+        is_supabase_auth = bool(os.getenv("SUPABASE_JWT_SECRET") or os.getenv("SUPABASE_URL"))
+        if len(_registered_clients) == 0 and not is_supabase_auth:
             raise RuntimeError(
                 f"No client credentials registered for /auth/token. "
                 f"In AUTH_MODE='{mode}', client credentials must be configured via "

@@ -22,6 +22,8 @@ interface AuthContextType {
   logout: () => Promise<void>;
   resetPassword: (email: string) => Promise<{ error?: string }>;
   updatePassword: (newPassword: string) => Promise<{ error?: string }>;
+  updateProfile: (fullName: string) => Promise<{ error?: string }>;
+  signOutAllSessions: () => Promise<{ error?: string }>;
   refreshProfile: () => Promise<void>;
 }
 
@@ -226,6 +228,49 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     }
   };
 
+  const updateProfile = async (fullName: string) => {
+    if (!supabase || !supabaseUser) {
+      if (user) {
+        setUser({ ...user, full_name: fullName.trim() });
+      }
+      return {};
+    }
+    try {
+      const { error: authErr } = await supabase.auth.updateUser({
+        data: { full_name: fullName.trim() },
+      });
+      if (authErr) return { error: authErr.message };
+
+      try {
+        await supabase
+          .from('profiles')
+          .update({ full_name: fullName.trim(), updated_at: new Date().toISOString() })
+          .eq('id', supabaseUser.id);
+      } catch {
+        // Safe ignore if profiles table update fails
+      }
+
+      await refreshProfile();
+      return {};
+    } catch (err: unknown) {
+      return { error: (err as Error).message || 'Failed to update profile name.' };
+    }
+  };
+
+  const signOutAllSessions = async () => {
+    if (supabase) {
+      try {
+        await supabase.auth.signOut({ scope: 'global' });
+      } catch (err: unknown) {
+        return { error: (err as Error).message || 'Failed to sign out all sessions.' };
+      }
+    }
+    setSession(null);
+    setSupabaseUser(null);
+    setUser(null);
+    return {};
+  };
+
   const role: 'user' | 'admin' = user?.role || 'user';
   const isAuthenticated = Boolean(user);
 
@@ -243,6 +288,8 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         logout,
         resetPassword,
         updatePassword,
+        updateProfile,
+        signOutAllSessions,
         refreshProfile,
       }}
     >
@@ -250,6 +297,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     </AuthContext.Provider>
   );
 };
+
 
 export const useAuth = (): AuthContextType => {
   const context = useContext(AuthContext);

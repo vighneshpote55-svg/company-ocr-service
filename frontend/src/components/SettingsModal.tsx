@@ -15,6 +15,11 @@ import {
   Sparkles,
   Bot,
   Cpu,
+  User,
+  KeyRound,
+  LogOut,
+  CheckCircle2,
+  AlertCircle,
 } from 'lucide-react';
 import { api, normalizeOpenRouterConfig } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -26,7 +31,7 @@ interface SettingsModalProps {
 }
 
 export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, onSaved }) => {
-  const { role } = useAuth();
+  const { user, role, updateProfile, updatePassword, signOutAllSessions } = useAuth();
   const isAdmin = role === 'admin';
   const currentConfig = api.getConfig();
   const [baseUrl, setBaseUrl] = useState(currentConfig.baseUrl);
@@ -37,6 +42,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [connectionLatency, setConnectionLatency] = useState<number | null>(null);
+
+  // Tab State: 'ai' vs 'account'
+  const [settingsTab, setSettingsTab] = useState<'ai' | 'account'>('ai');
+
+  // Account Management State
+  const [fullNameInput, setFullNameInput] = useState(user?.full_name || '');
+  const [isUpdatingName, setIsUpdatingName] = useState(false);
+  const [nameStatus, setNameStatus] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [isUpdatingPassword, setIsUpdatingPassword] = useState(false);
+  const [passwordStatus, setPasswordStatus] = useState<{ ok: boolean; message: string } | null>(null);
+
+  const [isSigningOutAll, setIsSigningOutAll] = useState(false);
+  const [signOutAllStatus, setSignOutAllStatus] = useState<{ ok: boolean; message: string } | null>(null);
 
   // AI Model Configuration State
   const [activeAiConfig, setActiveAiConfig] = useState<any>(null);
@@ -169,6 +190,57 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
     }
   };
 
+  const handleUpdateName = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!fullNameInput.trim()) return;
+    setIsUpdatingName(true);
+    setNameStatus(null);
+    const res = await updateProfile(fullNameInput.trim());
+    setIsUpdatingName(false);
+    if (res.error) {
+      setNameStatus({ ok: false, message: res.error });
+    } else {
+      setNameStatus({ ok: true, message: 'Profile name updated successfully!' });
+    }
+  };
+
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (newPassword.length < 6) {
+      setPasswordStatus({ ok: false, message: 'Password must be at least 6 characters long.' });
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordStatus({ ok: false, message: 'Passwords do not match.' });
+      return;
+    }
+    setIsUpdatingPassword(true);
+    setPasswordStatus(null);
+    const res = await updatePassword(newPassword);
+    setIsUpdatingPassword(false);
+    if (res.error) {
+      setPasswordStatus({ ok: false, message: res.error });
+    } else {
+      setPasswordStatus({ ok: true, message: 'Password updated successfully!' });
+      setNewPassword('');
+      setConfirmPassword('');
+    }
+  };
+
+  const handleSignOutAll = async () => {
+    if (!window.confirm('Are you sure you want to sign out of all active devices and sessions?')) return;
+    setIsSigningOutAll(true);
+    setSignOutAllStatus(null);
+    const res = await signOutAllSessions();
+    setIsSigningOutAll(false);
+    if (res.error) {
+      setSignOutAllStatus({ ok: false, message: res.error });
+    } else {
+      onClose();
+      window.location.href = '/login';
+    }
+  };
+
   const handleSave = async () => {
     api.updateConfig({
       baseUrl,
@@ -240,8 +312,36 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           </button>
         </div>
 
-        {/* 4 Status Cards */}
-        <div className="settings-status-cards-grid">
+        {/* Settings Tab Selector */}
+        <div className="settings-nav-tabs">
+          <button
+            type="button"
+            className={`settings-nav-tab-btn ${settingsTab === 'ai' ? 'active' : ''}`}
+            onClick={() => setSettingsTab('ai')}
+          >
+            <Sparkles size={16} />
+            <span>AI Configuration</span>
+            {isAdmin ? (
+              <span className="settings-role-tag admin">Admin</span>
+            ) : (
+              <span className="settings-role-tag user">Read Only</span>
+            )}
+          </button>
+
+          <button
+            type="button"
+            className={`settings-nav-tab-btn ${settingsTab === 'account' ? 'active' : ''}`}
+            onClick={() => setSettingsTab('account')}
+          >
+            <User size={16} />
+            <span>Account & Security</span>
+          </button>
+        </div>
+
+        {settingsTab === 'ai' ? (
+          <>
+            {/* 4 Status Cards */}
+            <div className="settings-status-cards-grid">
           {/* 1. API Connection */}
           <div className="settings-status-card">
             <div className="status-card-top">
@@ -800,6 +900,173 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
             <span>Save Changes</span>
           </button>
         </div>
+      </>
+    ) : (
+      /* Account & Security Tab */
+      <div className="settings-account-panel">
+        {/* Profile Details Card */}
+        <div className="settings-card-container">
+          <div className="settings-card-header">
+            <div className="settings-card-icon-wrap icon-blue">
+              <User size={18} />
+            </div>
+            <div>
+              <h3 className="settings-card-title">Profile Information</h3>
+              <p className="settings-card-subtitle">Your personal account credentials and role</p>
+            </div>
+          </div>
+
+          <div className="settings-card-body">
+            <div className="settings-account-grid">
+              <div className="settings-account-info-box">
+                <span className="settings-info-label">Email Address</span>
+                <span className="settings-info-value">{user?.email || 'N/A'}</span>
+              </div>
+
+              <div className="settings-account-info-box">
+                <span className="settings-info-label">Current Role</span>
+                <div>
+                  <span className={`settings-role-tag ${role}`}>
+                    {role === 'admin' ? 'Administrator' : 'Standard User'}
+                  </span>
+                </div>
+              </div>
+            </div>
+
+            <form onSubmit={handleUpdateName} className="settings-account-form" style={{ marginTop: '1.25rem' }}>
+              <label className="settings-input-label" htmlFor="settings-full-name">
+                Full Name
+              </label>
+              <div className="settings-input-action-row">
+                <input
+                  id="settings-full-name"
+                  type="text"
+                  className="settings-input-field"
+                  value={fullNameInput}
+                  onChange={(e) => setFullNameInput(e.target.value)}
+                  placeholder="Enter your full name"
+                />
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isUpdatingName || !fullNameInput.trim()}
+                >
+                  <span>{isUpdatingName ? 'Saving...' : 'Save Name'}</span>
+                </button>
+              </div>
+
+              {nameStatus && (
+                <div className={`settings-inline-alert ${nameStatus.ok ? 'alert-success' : 'alert-error'}`}>
+                  {nameStatus.ok ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                  <span>{nameStatus.message}</span>
+                </div>
+              )}
+            </form>
+          </div>
+        </div>
+
+        {/* Change Password Card */}
+        <div className="settings-card-container">
+          <div className="settings-card-header">
+            <div className="settings-card-icon-wrap icon-purple">
+              <KeyRound size={18} />
+            </div>
+            <div>
+              <h3 className="settings-card-title">Change Password</h3>
+              <p className="settings-card-subtitle">Update your password to keep your account secure</p>
+            </div>
+          </div>
+
+          <div className="settings-card-body">
+            <form onSubmit={handleUpdatePassword} className="settings-account-form">
+              <div className="settings-two-col-grid">
+                <div className="settings-field-col">
+                  <label className="settings-input-label" htmlFor="settings-new-password">
+                    New Password
+                  </label>
+                  <input
+                    id="settings-new-password"
+                    type="password"
+                    className="settings-input-field"
+                    value={newPassword}
+                    onChange={(e) => setNewPassword(e.target.value)}
+                    placeholder="At least 6 characters"
+                  />
+                </div>
+
+                <div className="settings-field-col">
+                  <label className="settings-input-label" htmlFor="settings-confirm-password">
+                    Confirm New Password
+                  </label>
+                  <input
+                    id="settings-confirm-password"
+                    type="password"
+                    className="settings-input-field"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    placeholder="Repeat new password"
+                  />
+                </div>
+              </div>
+
+              <div style={{ marginTop: '1rem' }}>
+                <button
+                  type="submit"
+                  className="btn btn-primary"
+                  disabled={isUpdatingPassword || !newPassword}
+                >
+                  <span>{isUpdatingPassword ? 'Updating...' : 'Update Password'}</span>
+                </button>
+              </div>
+
+              {passwordStatus && (
+                <div className={`settings-inline-alert ${passwordStatus.ok ? 'alert-success' : 'alert-error'}`}>
+                  {passwordStatus.ok ? <CheckCircle2 size={14} /> : <AlertCircle size={14} />}
+                  <span>{passwordStatus.message}</span>
+                </div>
+              )}
+            </form>
+          </div>
+        </div>
+
+        {/* Session Revocation Card */}
+        <div className="settings-card-container">
+          <div className="settings-card-header">
+            <div className="settings-card-icon-wrap icon-amber">
+              <LogOut size={18} />
+            </div>
+            <div>
+              <h3 className="settings-card-title">Session Management</h3>
+              <p className="settings-card-subtitle">Revoke all active tokens across mobile and other browsers</p>
+            </div>
+          </div>
+
+          <div className="settings-card-body">
+            <p style={{ fontSize: '0.86rem', color: 'var(--text-muted)', margin: '0 0 1rem', lineHeight: '1.5' }}>
+              Lost a device or signed in from a shared computer? Clicking below immediately revokes all refresh tokens, terminating active sessions everywhere.
+            </p>
+
+            <button
+              type="button"
+              className="btn btn-danger"
+              onClick={handleSignOutAll}
+              disabled={isSigningOutAll}
+            >
+              <LogOut size={15} />
+              <span>{isSigningOutAll ? 'Revoking Sessions...' : 'Sign Out of All Devices'}</span>
+            </button>
+
+            {signOutAllStatus && (
+              <div className="settings-inline-alert alert-error" style={{ marginTop: '0.75rem' }}>
+                <AlertCircle size={14} />
+                <span>{signOutAllStatus.message}</span>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    )}
+
       </div>
     </div>
   );

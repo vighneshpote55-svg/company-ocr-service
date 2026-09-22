@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import {
   Search,
   Eye,
@@ -12,6 +12,9 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  Sparkles,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import type { DocumentItem, SupportedType, EngineInfo } from '../types';
 import { api } from '../services/api';
@@ -40,6 +43,9 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
   const [searchTerm, setSearchTerm] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
+  const [modeFilter, setModeFilter] = useState<'all' | 'offline' | 'ai'>('all');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const [pageSize, setPageSize] = useState<number>(10);
 
   const getStatusCategory = (doc: DocumentItem): 'verified' | 'review' | 'processing' | 'failed' => {
     if (doc.status === 'failed' || doc.status === 'error') {
@@ -58,50 +64,71 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
     return 'verified';
   };
 
-  const filteredDocs = documents.filter((doc) => {
-    if (searchTerm.trim()) {
-      const q = searchTerm.toLowerCase();
-      const matchName = (doc.filename || '').toLowerCase().includes(q);
-      const matchType = `${doc.document_type || ''} ${doc.doc_type || ''}`.toLowerCase().includes(q);
-      const matchText = (doc.extracted_text || '').toLowerCase().includes(q);
-      if (!matchName && !matchType && !matchText) return false;
-    }
-
-    if (typeFilter !== 'all') {
-      const target = typeFilter.toLowerCase();
-      const docType = (doc.doc_type || '').toLowerCase();
-      const docTypeName = (doc.document_type || '').toLowerCase();
-      const matchingSupported = supportedTypes.find((t) => t.id.toLowerCase() === target);
-      const supportedName = (matchingSupported?.name || '').toLowerCase();
-
-      const matchesDocType = docType === target;
-      const matchesDocTypeName =
-        Boolean(supportedName) &&
-        (docTypeName === supportedName ||
-          docTypeName.includes(supportedName) ||
-          supportedName.includes(docTypeName));
-
-      const targetSlug = target.replace(/_/g, ' ');
-      const matchesSlug = docTypeName.includes(targetSlug) || targetSlug.includes(docTypeName);
-
-      // Word token overlap between filter name/slug and docTypeName
-      const targetWords = (supportedName || targetSlug).split(/\s+/).filter((w) => w.length > 2);
-      const matchesWords = targetWords.length > 0 && targetWords.every((w) => docTypeName.includes(w));
-
-      const matchesAi = target === 'ai_analyzed' && (docType === 'ai_analyzed' || doc.doc_type === 'ai_analyzed');
-
-      if (!matchesDocType && !matchesDocTypeName && !matchesSlug && !matchesWords && !matchesAi) {
-        return false;
+  const filteredDocs = useMemo(() => {
+    return documents.filter((doc) => {
+      // 1. Search Query
+      if (searchTerm.trim()) {
+        const q = searchTerm.toLowerCase();
+        const matchName = (doc.filename || '').toLowerCase().includes(q);
+        const matchType = `${doc.document_type || ''} ${doc.doc_type || ''}`.toLowerCase().includes(q);
+        const matchText = (doc.extracted_text || '').toLowerCase().includes(q);
+        if (!matchName && !matchType && !matchText) return false;
       }
-    }
 
-    if (statusFilter !== 'all') {
-      const category = getStatusCategory(doc);
-      if (category !== statusFilter) return false;
-    }
+      // 2. Mode Filter (Offline vs AI)
+      if (modeFilter !== 'all') {
+        const isAi = (doc as any).mode === 'ai' || doc.doc_type === 'ai_analyzed' || Boolean((doc as any).ai_analysis);
+        if (modeFilter === 'offline' && isAi) return false;
+        if (modeFilter === 'ai' && !isAi) return false;
+      }
 
-    return true;
-  });
+      // 3. Type Filter
+      if (typeFilter !== 'all') {
+        const target = typeFilter.toLowerCase();
+        const docType = (doc.doc_type || '').toLowerCase();
+        const docTypeName = (doc.document_type || '').toLowerCase();
+        const matchingSupported = supportedTypes.find((t) => t.id.toLowerCase() === target);
+        const supportedName = (matchingSupported?.name || '').toLowerCase();
+
+        const matchesDocType = docType === target;
+        const matchesDocTypeName =
+          Boolean(supportedName) &&
+          (docTypeName === supportedName ||
+            docTypeName.includes(supportedName) ||
+            supportedName.includes(docTypeName));
+
+        const targetSlug = target.replace(/_/g, ' ');
+        const matchesSlug = docTypeName.includes(targetSlug) || targetSlug.includes(docTypeName);
+
+        const targetWords = (supportedName || targetSlug).split(/\s+/).filter((w) => w.length > 2);
+        const matchesWords = targetWords.length > 0 && targetWords.every((w) => docTypeName.includes(w));
+
+        const matchesAi = target === 'ai_analyzed' && (docType === 'ai_analyzed' || doc.doc_type === 'ai_analyzed');
+
+        if (!matchesDocType && !matchesDocTypeName && !matchesSlug && !matchesWords && !matchesAi) {
+          return false;
+        }
+      }
+
+      // 4. Status Filter
+      if (statusFilter !== 'all') {
+        const category = getStatusCategory(doc);
+        if (category !== statusFilter) return false;
+      }
+
+      return true;
+    });
+  }, [documents, searchTerm, modeFilter, typeFilter, statusFilter, supportedTypes]);
+
+  // Reset to page 1 whenever filters change
+  const totalItems = filteredDocs.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+  const validPage = Math.min(currentPage, totalPages);
+  const startIndex = (validPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalItems);
+  const paginatedDocs = useMemo(() => {
+    return filteredDocs.slice(startIndex, endIndex);
+  }, [filteredDocs, startIndex, endIndex]);
 
   const formatDate = (isoString: string) => {
     try {
@@ -159,6 +186,24 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
     }
   };
 
+  const renderModeBadge = (doc: DocumentItem) => {
+    const isAi = (doc as any).mode === 'ai' || doc.doc_type === 'ai_analyzed' || Boolean((doc as any).ai_analysis);
+    if (isAi) {
+      return (
+        <span className="mode-badge-pill mode-badge-ai" title="Processed with AI Intelligence">
+          <Sparkles size={12} />
+          <span>AI Mode</span>
+        </span>
+      );
+    }
+    return (
+      <span className="mode-badge-pill mode-badge-offline" title="Processed with RapidOCR">
+        <Zap size={12} />
+        <span>RapidOCR</span>
+      </span>
+    );
+  };
+
   return (
     <div className="vault-table-container">
       {/* Search and Filtering Toolbar */}
@@ -171,18 +216,38 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
             className="vault-search-input"
             placeholder="Search documents by filename, type, or content..."
             value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
+            onChange={(e) => {
+              setSearchTerm(e.target.value);
+              setCurrentPage(1);
+            }}
           />
         </div>
 
         {/* Filters and Actions Controls Group */}
         <div className="vault-controls-group">
-          {/* Filters: Document Type (170px) and Status (140px) */}
+          {/* Filters: Mode, Document Type, and Status */}
           <div className="vault-filters-group">
+            <select
+              className="vault-filter-select vault-mode-select"
+              value={modeFilter}
+              onChange={(e) => {
+                setModeFilter(e.target.value as any);
+                setCurrentPage(1);
+              }}
+              aria-label="Filter by processing mode"
+            >
+              <option value="all">All Modes</option>
+              <option value="offline">Offline (RapidOCR)</option>
+              <option value="ai">AI Intelligence</option>
+            </select>
+
             <select
               className="vault-filter-select vault-type-select"
               value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value)}
+              onChange={(e) => {
+                setTypeFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               aria-label="Filter by document type"
             >
               <option value="all">All Document Types</option>
@@ -243,6 +308,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
             <tr>
               <th style={{ width: '56px' }}>Preview</th>
               <th>Document</th>
+              <th>Mode</th>
               <th>Type</th>
               <th>Status</th>
               <th>OCR Decision</th>
@@ -254,7 +320,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
           <tbody>
             {filteredDocs.length === 0 ? (
               <tr>
-                <td colSpan={8} className="vault-empty-row">
+                <td colSpan={9} className="vault-empty-row">
                   <div className="vault-empty-state">
                     <FileText size={36} className="vault-empty-icon" />
                     <h4 className="vault-empty-title">
@@ -269,7 +335,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                 </td>
               </tr>
             ) : (
-              filteredDocs.map((doc, idx) => {
+              paginatedDocs.map((doc, idx) => {
                 const docId = doc.id || (doc as any).document_id || '';
                 const isBypassed = !doc.ocr_required;
                 const isFailed = doc.status === 'error' || doc.status === 'failed';
@@ -299,13 +365,18 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                         <img
                           src={previewUrl}
                           alt={doc.filename}
-                          className="vault-thumb-img"
+                          className="vault-preview-thumb"
+                          loading="lazy"
                           onError={(e) => {
+                            // Fallback to placeholder if thumbnail is missing
                             (e.target as HTMLElement).style.display = 'none';
+                            const sibling = (e.target as HTMLElement).nextElementSibling;
+                            if (sibling) (sibling as HTMLElement).style.display = 'flex';
                           }}
                         />
-                      ) : (
-                        <div className="vault-thumb-fallback">
+                      ) : null}
+                      {(!doc.has_preview && !previewUrl) && (
+                        <div className="vault-preview-placeholder">
                           <FileText size={18} />
                         </div>
                       )}
@@ -323,6 +394,9 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                         {((doc.file_size || 0) / 1024).toFixed(1)} KB • {doc.pages || 1} {(doc.pages || 1) === 1 ? 'page' : 'pages'}
                       </div>
                     </td>
+
+                    {/* Mode: Offline (RapidOCR) vs AI Mode */}
+                    <td>{renderModeBadge(doc)}</td>
 
                     <td>
                       <span className="doc-type-pill">
@@ -400,6 +474,58 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
           </tbody>
         </table>
       </div>
+
+      {/* Pagination Controls Bar */}
+      {filteredDocs.length > 0 && (
+        <div className="vault-pagination-bar">
+          <div className="vault-pagination-left">
+            <span className="vault-pagination-text">
+              Showing <strong>{startIndex + 1}</strong> to <strong>{endIndex}</strong> of <strong>{totalItems}</strong> documents
+            </span>
+            <div className="vault-page-size-selector">
+              <label htmlFor="vault-page-size">Per page:</label>
+              <select
+                id="vault-page-size"
+                value={pageSize}
+                onChange={(e) => {
+                  setPageSize(Number(e.target.value));
+                  setCurrentPage(1);
+                }}
+              >
+                <option value={10}>10</option>
+                <option value={25}>25</option>
+                <option value={50}>50</option>
+              </select>
+            </div>
+          </div>
+
+          <div className="vault-pagination-right">
+            <button
+              className="btn btn-secondary vault-page-nav-btn"
+              onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+              disabled={validPage <= 1}
+              aria-label="Previous Page"
+            >
+              <ChevronLeft size={16} />
+              <span>Prev</span>
+            </button>
+
+            <span className="vault-page-indicator">
+              Page <strong>{validPage}</strong> of <strong>{totalPages}</strong>
+            </span>
+
+            <button
+              className="btn btn-secondary vault-page-nav-btn"
+              onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+              disabled={validPage >= totalPages}
+              aria-label="Next Page"
+            >
+              <span>Next</span>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

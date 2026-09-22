@@ -5003,3 +5003,400 @@ p, span, div {
   }
 }
 
+/* ==========================================================================
+   Phase 5: 2-Column Split AI Document Intelligence Workspace
+   ========================================================================== */
+.ai-workspace-split-2col {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(380px, 0.85fr);
+  gap: 1.75rem;
+  align-items: start;
+  width: 100%;
+}
+
+.ai-left-workspace-column {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+  min-width: 0;
+}
+
+.ai-preview-card-wrap {
+  width: 100%;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+}
+
+.ai-right-chat-column {
+  position: sticky;
+  top: 85px;
+  height: calc(100vh - 110px);
+  min-height: 600px;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-sticky-chat-wrapper {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.ai-sticky-chat-wrapper .ai-chat-assistant-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-card);
+  background-color: var(--bg-card);
+  overflow: hidden;
+}
+
+.ai-sticky-chat-wrapper .ai-chat-messages-area {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 250px;
+}
+
+@media (max-width: 1200px) {
+  .ai-workspace-split-2col {
+    grid-template-columns: 1fr;
+  }
+  .ai-right-chat-column {
+    position: static;
+    height: auto;
+    min-height: 520px;
+  }
+}
+
+/* ==========================================================================
+   Phase 7: Personalized Dashboard Welcome Banner
+   ========================================================================== */
+.dashboard-welcome-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1.25rem;
+  padding: 1.25rem 1.65rem;
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.08) 0%, rgba(124, 58, 237, 0.06) 100%);
+  border: 1px solid rgba(99, 102, 241, 0.2);
+  border-radius: var(--radius-card);
+  margin-bottom: 1.75rem;
+}
+
+.welcome-banner-title {
+  font-size: 1.35rem;
+  font-weight: 800;
+  color: var(--text-main);
+  letter-spacing: -0.015em;
+  margin: 0;
+}
+
+.welcome-banner-subtitle {
+  font-size: 0.88rem;
+  color: var(--text-muted);
+  margin-top: 0.25rem;
+}
+
+.welcome-banner-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-full);
+  background-color: rgba(99, 102, 241, 0.12);
+  border: 1px solid rgba(99, 102, 241, 0.3);
+  color: #818cf8;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+/* ==========================================================================
+   Phase 6: Vault Mode Badges & Pagination Controls
+   ========================================================================== */
+.mode-badge-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.65rem;
+  border-radius: var(--radius-full);
+  font-size: 0.76rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.mode-badge-offline {
+  background-color: rgba(22, 163, 74, 0.12);
+  border: 1px solid rgba(22, 163, 74, 0.3);
+  color: #16a34a;
+}
+
+[data-theme="dark"] .mode-badge-offline, html.dark .mode-badge-offline {
+  background-color: rgba(22, 163, 74, 0.2);
+  border-color: rgba(22, 163, 74, 0.4);
+  color: #4ade80;
+}
+
+.mode-badge-ai {
+  background-color: rgba(124, 58, 237, 0.12);
+  border: 1px solid rgba(124, 58, 237, 0.3);
+  color: #7c3aed;
+}
+
+[data-theme="dark"] .mode-badge-ai, html.dark .mode-badge-ai {
+  background-color: rgba(124, 58, 237, 0.2);
+  border-color: rgba(124, 58, 237, 0.4);
+  color: #c084fc;
+}
+
+.vault-mode-select {
+  min-width: 140px;
+}
+
+.vault-pagination-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 1rem 1.25rem;
+  border-top: 1px solid var(--border-subtle);
+  background-color: var(--bg-surface);
+  border-bottom-left-radius: var(--radius-card);
+  border-bottom-right-radius: var(--radius-card);
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+
+.vault-pagination-left {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.vault-pagination-text {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.vault-pagination-text strong {
+  color: var(--text-main);
+}
+
+.vault-page-size-selector {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+}
+
+.vault-page-size-selector select {
+  padding: 0.25rem 0.5rem;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border-subtle);
+  background-color: var(--bg-card);
+  color: var(--text-main);
+  font-size: 0.82rem;
+}
+
+.vault-pagination-right {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.vault-page-nav-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.82rem;
+}
+
+.vault-page-indicator {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+}
+
+.vault-page-indicator strong {
+  color: var(--text-main);
+}
+
+/* ==========================================================================
+   Phase 8: Settings Modal Tabs & Account Management Styling
+   ========================================================================== */
+.settings-nav-tabs {
+  display: flex;
+  gap: 0.75rem;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 0.85rem;
+  margin-bottom: 1.25rem;
+}
+
+.settings-nav-tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.55rem 1.15rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  font-size: 0.88rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+
+.settings-nav-tab-btn:hover {
+  background-color: var(--bg-card);
+  color: var(--text-main);
+}
+
+.settings-nav-tab-btn.active {
+  background-color: var(--primary-light);
+  color: var(--primary);
+  border-color: rgba(37, 99, 235, 0.4);
+}
+
+.settings-role-tag {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: var(--radius-full);
+  letter-spacing: 0.02em;
+}
+
+.settings-role-tag.admin {
+  background-color: rgba(124, 58, 237, 0.15);
+  color: #a855f7;
+  border: 1px solid rgba(124, 58, 237, 0.3);
+}
+
+.settings-role-tag.user {
+  background-color: rgba(100, 116, 139, 0.15);
+  color: #94a3b8;
+  border: 1px solid rgba(100, 116, 139, 0.3);
+}
+
+.settings-account-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.settings-card-container {
+  background-color: var(--bg-subtle);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 1.35rem 1.5rem;
+}
+
+.settings-card-header {
+  display: flex;
+  align-items: center;
+  gap: 0.85rem;
+  margin-bottom: 1.15rem;
+}
+
+.settings-card-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 9px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.settings-card-icon-wrap.icon-blue {
+  background-color: var(--primary-light);
+  color: var(--primary);
+}
+
+.settings-card-icon-wrap.icon-purple {
+  background-color: var(--accent-purple-light);
+  color: var(--accent-purple);
+}
+
+.settings-card-icon-wrap.icon-amber {
+  background-color: var(--warning-bg);
+  color: var(--warning);
+}
+
+.settings-card-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text-main);
+  margin: 0;
+}
+
+.settings-card-subtitle {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+
+.settings-account-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 1.25rem;
+}
+
+.settings-account-info-box {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.85rem 1rem;
+  background-color: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+
+.settings-info-label {
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.settings-info-value {
+  font-size: 0.92rem;
+  font-weight: 600;
+  color: var(--text-main);
+  font-family: var(--font-mono);
+}
+
+.settings-input-action-row {
+  display: flex;
+  gap: 0.75rem;
+}
+
+.settings-input-action-row .settings-input-field {
+  flex: 1;
+}
+
+.settings-inline-alert {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-top: 0.65rem;
+  font-size: 0.82rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: var(--radius-xs);
+}
+
+.settings-inline-alert.alert-success {
+  background-color: var(--success-bg);
+  color: var(--success);
+  border: 1px solid var(--success-border);
+}
+
+.settings-inline-alert.alert-error {
+  background-color: var(--error-bg);
+  color: var(--danger);
+  border: 1px solid var(--error-border);
+}
+
+

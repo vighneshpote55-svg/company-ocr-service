@@ -19,16 +19,23 @@ import jwt
 import pytest
 from fastapi.testclient import TestClient
 
-TEST_JWT_SECRET = "super-secret-supabase-jwt-test-key-32chars!"
-os.environ["SUPABASE_JWT_SECRET"] = TEST_JWT_SECRET
-os.environ["AUTH_ENABLED"] = "true"
-os.environ["AUTH_MODE"] = "jwt"
-os.environ["DOCUMENT_ENCRYPTION_KEY"] = "f4949e05975053d959987df0e8b210e0007662e69073599d21935540d5e91ea9"
-
 from main import app
 import document_store
 
 client = TestClient(app)
+
+TEST_JWT_SECRET = "super-secret-supabase-jwt-test-key-32chars!"
+
+@pytest.fixture(scope="module", autouse=True)
+def setup_isolation_env():
+    old_env = dict(os.environ)
+    os.environ["SUPABASE_JWT_SECRET"] = TEST_JWT_SECRET
+    os.environ["AUTH_ENABLED"] = "true"
+    os.environ["AUTH_MODE"] = "jwt"
+    os.environ["DOCUMENT_ENCRYPTION_KEY"] = "f4949e05975053d959987df0e8b210e0007662e69073599d21935540d5e91ea9"
+    yield
+    os.environ.clear()
+    os.environ.update(old_env)
 
 USER_A_ID = "11111111-aaaa-aaaa-aaaa-111111111111"
 USER_B_ID = "22222222-bbbb-bbbb-bbbb-222222222222"

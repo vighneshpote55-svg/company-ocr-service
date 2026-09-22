@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
+import { ShieldCheck } from 'lucide-react';
 import type { AppMode, DashboardStats as StatsType, DocumentItem, EngineInfo, SupportedType, AIProviderConfig } from '../types';
+import { useAuth } from '../context/AuthContext';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import type { NavTab } from './Sidebar';
@@ -66,6 +68,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   onClearSelectedDoc,
   inspectContent,
 }) => {
+  const { user } = useAuth();
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -156,7 +159,23 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           ) : (
             /* 3. Primary Dashboard: Stats -> Centered Main Workspace -> Recent Ingestions */
             <div className="dashboard-view-wrapper">
-              {/* Dashboard Metric Cards (4 cards: Total, Verified, Review, Storage) */}
+              {/* Personalized Welcome Banner */}
+              <div className="dashboard-welcome-banner">
+                <div className="welcome-banner-text">
+                  <h2 className="welcome-banner-title">
+                    Welcome back, {user?.full_name || user?.email?.split('@')[0] || 'Member'} 👋
+                  </h2>
+                  <p className="welcome-banner-subtitle">
+                    Multi-tenant workspace with isolated Document Vault, deterministic RapidOCR, and contextual AI reasoning.
+                  </p>
+                </div>
+                <div className="welcome-banner-badge">
+                  <ShieldCheck size={16} />
+                  <span>Secure Tenant Isolation</span>
+                </div>
+              </div>
+
+              {/* Dashboard Metric Cards (4 cards: Total, Offline, AI, Storage) */}
               <DashboardStats
                 stats={stats}
                 engineInfo={engineInfo}

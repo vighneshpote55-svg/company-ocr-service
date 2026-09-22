@@ -11,19 +11,40 @@ import os
 from typing import Any, Dict, Optional
 import logging_utils
 
+from dotenv import load_dotenv
+load_dotenv()
+
 logger = logging_utils.get_logger("company_server_ocr.supabase")
 
-SUPABASE_URL = os.getenv("SUPABASE_URL", "").strip()
-SUPABASE_SECRET_KEY = os.getenv("SUPABASE_SECRET_KEY", os.getenv("SUPABASE_KEY", "")).strip()
-SUPABASE_STORAGE_BUCKET = os.getenv("SUPABASE_STORAGE_BUCKET", "company-documents").strip()
-SUPABASE_JWT_SECRET = os.getenv("SUPABASE_JWT_SECRET", "").strip()
+
+def get_supabase_url() -> str:
+    return os.getenv("SUPABASE_URL", "").strip()
+
+
+def get_supabase_key() -> str:
+    return os.getenv("SUPABASE_SECRET_KEY", os.getenv("SUPABASE_KEY", "")).strip()
+
+
+def get_supabase_bucket() -> str:
+    return os.getenv("SUPABASE_STORAGE_BUCKET", "company-documents").strip()
+
+
+def get_supabase_jwt_secret() -> str:
+    """Dynamically get the JWT secret from environment."""
+    return os.getenv("SUPABASE_JWT_SECRET", "").strip() or os.getenv("JWT_SECRET", "").strip()
+
+
+SUPABASE_URL = get_supabase_url()
+SUPABASE_SECRET_KEY = get_supabase_key()
+SUPABASE_STORAGE_BUCKET = get_supabase_bucket()
+SUPABASE_JWT_SECRET = get_supabase_jwt_secret()
 
 _supabase_client = None
 
 
 def is_supabase_configured() -> bool:
     """Return True if Supabase URL and Secret Key are both present."""
-    return bool(SUPABASE_URL and SUPABASE_SECRET_KEY)
+    return bool(get_supabase_url() and get_supabase_key())
 
 
 def get_supabase_client():

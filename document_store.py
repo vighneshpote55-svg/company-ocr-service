@@ -199,6 +199,7 @@ def save_document(
     - Update documents.json index
     """
     doc_id = str(uuid.uuid4())
+    user_id = user_id or os.getenv("DEFAULT_DEV_USER_ID", "00000000-0000-0000-0000-000000000001")
     clean_name = sanitize_filename(filename)
     ext = os.path.splitext(clean_name)[1].lower() or ".bin"
     # Never use original filename on disk: randomize with UUID v4 and .enc extension
@@ -446,8 +447,9 @@ def list_documents(
     filtered = []
     for item in items:
         if user_id:
-            # Check user ownership if user_id is specified
-            if item.get("user_id") != user_id:
+            dev_user_id = os.getenv("DEFAULT_DEV_USER_ID", "00000000-0000-0000-0000-000000000001")
+            is_dev = (user_id == dev_user_id)
+            if item.get("user_id") != user_id and not (is_dev and not item.get("user_id")):
                 continue
         if status_filter and status_filter.lower() != "all":
             if item.get("status", "").lower() != status_filter.lower():
@@ -519,8 +521,13 @@ def clear_all_documents(user_id: Optional[str] = None) -> int:
     with _lock:
         items = _load_index()
         if user_id:
-            to_delete = [item for item in items if item.get("user_id") == user_id]
-            kept = [item for item in items if item.get("user_id") != user_id]
+            dev_user_id = os.getenv("DEFAULT_DEV_USER_ID", "00000000-0000-0000-0000-000000000001")
+            is_dev = (user_id == dev_user_id)
+            to_delete = [
+                item for item in items
+                if item.get("user_id") == user_id or (is_dev and not item.get("user_id"))
+            ]
+            kept = [item for item in items if item not in to_delete]
             count = len(to_delete)
             for item in to_delete:
                 doc_id = item.get("id") or item.get("document_id")
@@ -580,20 +587,31 @@ def get_stats(user_id: Optional[str] = None) -> Dict[str, int]:
     """Compute dashboard statistics, scoped by user_id if provided."""
     items = _load_index()
     if user_id:
-        items = [d for d in items if d.get("user_id") == user_id]
+        dev_user_id = os.getenv("DEFAULT_DEV_USER_ID", "00000000-0000-0000-0000-000000000001")
+        is_dev = (user_id == dev_user_id)
+        items = [d for d in items if d.get("user_id") == user_id or (is_dev and not d.get("user_id"))]
     total = len(items)
     ocr_processed = sum(1 for d in items if d.get("ocr_required") is True)
     ocr_not_required = sum(1 for d in items if d.get("ocr_required") is False)
     failed = sum(1 for d in items if d.get("status") in ("error", "failed"))
     completed = sum(1 for d in items if d.get("status") in ("success", "completed", "low_confidence", "warning"))
+    offline_count = sum(1 for d in items if d.get("mode") == "offline" or (not d.get("mode") and d.get("ocr_required") is not False))
+    ai_count = sum(1 for d in items if d.get("mode") == "ai")
+    total_bytes = sum(int(d.get("file_size") or 0) for d in items)
 
     return {
         "total": total,
+        "total_documents": total,
         "ocr_processed": ocr_processed,
         "ocr_not_required": ocr_not_required,
         "completed": completed,
         "failed": failed,
+        "offline_documents": offline_count,
+        "ai_documents": ai_count,
+        "total_storage_bytes": total_bytes,
+        "total_storage_mb": round(total_bytes / (1024 * 1024), 2),
     }
+
 
 
 def migrate_unencrypted_documents() -> int:

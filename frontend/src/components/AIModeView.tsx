@@ -430,16 +430,16 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
             </div>
           </div>
 
-          {/* 2-Column Workspace Layout (Part 3 & Part 9) */}
-          <div className="ai-workspace-grid">
-            {/* LEFT COLUMN: Document Preview (Part 1 & 8) */}
-            <div className="ai-preview-column">
-              <DocumentPreview document={analyzedDoc as any} />
-            </div>
+          {/* 2-Column Split AI Document Intelligence Workspace */}
+          <div className="ai-workspace-split-2col">
+            {/* LEFT COLUMN: Document Preview + Extracted Field Tabs & Intelligence */}
+            <div className="ai-left-workspace-column">
+              {/* 1. Document Preview */}
+              <div className="ai-preview-card-wrap">
+                <DocumentPreview document={analyzedDoc as any} />
+              </div>
 
-            {/* RIGHT COLUMN: AI Analysis, Key Findings, Tabs (Part 3, 6, 7) */}
-            <div className="ai-analysis-column">
-              {/* 1. Document Summary */}
+              {/* 2. Document Summary */}
               {analyzedDoc.summary && (
                 <AISummaryCard
                   summary={analyzedDoc.summary}
@@ -447,15 +447,15 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
                 />
               )}
 
-              {/* 2. Key Findings & Reasoning */}
+              {/* 3. Key Findings & Reasoning */}
               <AIKeyFindingsCard
                 reasoning={analyzedDoc.reasoning || analyzedDoc.evidence}
                 documentType={analyzedDoc.document_type}
                 extractedFields={analyzedDoc.extracted_fields}
               />
 
-              {/* 3. Tabbed Inspector (Extracted Fields, Extracted Text, Raw JSON) */}
-              <div className="inspect-panel" style={{ marginTop: '1.25rem' }}>
+              {/* 4. Tabbed Inspector (Extracted Fields, Extracted Text, Raw JSON) */}
+              <div className="inspect-panel" style={{ marginTop: '0.5rem' }}>
                 <div className="tabs-nav">
                   <button
                     type="button"
@@ -511,8 +511,8 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
                 </div>
               </div>
 
-              {/* 4. Quick Actions */}
-              <div style={{ marginTop: '1.25rem' }}>
+              {/* 5. Quick Actions */}
+              <div style={{ marginTop: '0.5rem' }}>
                 <AIQuickActions
                   document={analyzedDoc}
                   onTriggerPrompt={handleSendMessage}
@@ -520,22 +520,25 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
                 />
               </div>
             </div>
-          </div>
 
-          {/* BOTTOM: Full-Width Grounded Contextual AI Chat (Part 10) */}
-          <div className="ai-chat-row" style={{ marginTop: '1.5rem' }}>
-            <AIChatPanel
-              document={analyzedDoc}
-              messages={messages}
-              isAiThinking={isAiThinking}
-              onSendMessage={handleSendMessage}
-              onSwitchToOffline={onSwitchToOffline}
-              onNotify={onNotify}
-              providerLabel={providerLabel}
-            />
+            {/* RIGHT COLUMN: Sticky Grounded Contextual AI Chat */}
+            <div className="ai-right-chat-column">
+              <div className="ai-sticky-chat-wrapper">
+                <AIChatPanel
+                  document={analyzedDoc}
+                  messages={messages}
+                  isAiThinking={isAiThinking}
+                  onSendMessage={handleSendMessage}
+                  onSwitchToOffline={onSwitchToOffline}
+                  onNotify={onNotify}
+                  providerLabel={providerLabel}
+                />
+              </div>
+            </div>
           </div>
         </div>
       )}
+
     </div>
   );
 };

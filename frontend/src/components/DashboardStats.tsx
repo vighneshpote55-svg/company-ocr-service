@@ -1,5 +1,5 @@
 import React from 'react';
-import { Files, CheckCircle2, AlertTriangle, HardDrive } from 'lucide-react';
+import { Files, Zap, Sparkles, HardDrive } from 'lucide-react';
 import type { DashboardStats as StatsType, EngineInfo, DocumentItem } from '../types';
 import { StatCard } from './StatCard';
 
@@ -23,24 +23,24 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
   onNavigateTab,
   documents,
 }) => {
-  const verifiedCount =
-    documents && documents.length > 0
-      ? documents.filter((d) => d.status === 'completed' && d.checksum_valid !== false).length
-      : stats.completed;
+  const offlineCount =
+    typeof stats.offline_documents === 'number'
+      ? stats.offline_documents
+      : documents && documents.length > 0
+      ? documents.filter((d) => (d as any).mode === 'offline' || d.ocr_required).length
+      : stats.ocr_processed || 0;
 
-  const reviewRequiredCount =
-    documents && documents.length > 0
-      ? documents.filter(
-          (d) =>
-            d.status === 'failed' ||
-            d.status === 'low_confidence' ||
-            d.status === 'warning' ||
-            d.checksum_valid === false
-        ).length
-      : stats.failed;
+  const aiCount =
+    typeof stats.ai_documents === 'number'
+      ? stats.ai_documents
+      : documents && documents.length > 0
+      ? documents.filter((d) => (d as any).mode === 'ai').length
+      : 0;
 
   const totalStorageBytes =
-    documents && documents.length > 0
+    typeof stats.total_storage_bytes === 'number'
+      ? stats.total_storage_bytes
+      : documents && documents.length > 0
       ? documents.reduce((acc, d) => acc + (d.file_size || 0), 0)
       : 0;
 
@@ -56,37 +56,37 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
       {/* 1. Total Documents */}
       <StatCard
         label="Total Documents"
-        value={stats.total}
+        value={stats.total_documents ?? stats.total}
         subtext="Indexed in Document Vault"
         icon={<Files size={20} />}
         iconBg="rgba(37, 99, 235, 0.12)"
         iconColor="var(--primary)"
         onClick={() => onNavigateTab?.('repository')}
-        badge={{ text: 'Live Index', type: 'info' }}
+        badge={{ text: 'Live Vault', type: 'info' }}
       />
 
-      {/* 2. Verified */}
+      {/* 2. Offline Mode (RapidOCR) */}
       <StatCard
-        label="Verified"
-        value={verifiedCount}
-        subtext="Passed all checksum validations"
-        icon={<CheckCircle2 size={20} />}
+        label="Offline Processed"
+        value={offlineCount}
+        subtext="RapidOCR deterministic engine"
+        icon={<Zap size={20} />}
         iconBg="rgba(22, 163, 74, 0.12)"
         iconColor="var(--success)"
         onClick={() => onNavigateTab?.('repository')}
-        badge={{ text: 'Verified', type: 'success' }}
+        badge={{ text: 'RapidOCR', type: 'success' }}
       />
 
-      {/* 3. Review Required */}
+      {/* 3. AI Mode (Intelligence) */}
       <StatCard
-        label="Review Required"
-        value={reviewRequiredCount}
-        subtext="Warnings or low confidence"
-        icon={<AlertTriangle size={20} />}
-        iconBg="rgba(234, 88, 12, 0.12)"
-        iconColor="var(--warning)"
+        label="AI Intelligence"
+        value={aiCount}
+        subtext="Local Qwen / External reasoning"
+        icon={<Sparkles size={20} />}
+        iconBg="rgba(124, 58, 237, 0.12)"
+        iconColor="var(--accent-purple)"
         onClick={() => onNavigateTab?.('repository')}
-        badge={{ text: 'Attention', type: 'warning' }}
+        badge={{ text: 'AI Mode', type: 'warning' }}
       />
 
       {/* 4. Storage Used */}
@@ -95,10 +95,11 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
         value={storageDisplay}
         subtext="Encrypted document store"
         icon={<HardDrive size={20} />}
-        iconBg="rgba(124, 58, 237, 0.12)"
-        iconColor="var(--accent-purple)"
-        badge={{ text: 'AES-256', type: 'neutral' }}
+        iconBg="rgba(99, 102, 241, 0.12)"
+        iconColor="#6366f1"
+        badge={{ text: 'AES-256-GCM', type: 'neutral' }}
       />
     </div>
   );
 };
+

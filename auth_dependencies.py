@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field
 from fastapi import Depends, HTTPException, Header, Query, Request, status
 import jwt
 import logging_utils
-from supabase_client import get_supabase_client, SUPABASE_JWT_SECRET, is_supabase_configured
+from supabase_client import get_supabase_client, get_supabase_jwt_secret, is_supabase_configured
 
 logger = logging_utils.get_logger("company_server_ocr.auth")
 
@@ -62,11 +62,12 @@ def verify_supabase_jwt(token: str) -> dict:
     Raises HTTPException(401) on failure.
     """
     # 1. Local JWT Secret Verification
-    if SUPABASE_JWT_SECRET:
+    jwt_secret = get_supabase_jwt_secret()
+    if jwt_secret:
         try:
             payload = jwt.decode(
                 token,
-                SUPABASE_JWT_SECRET,
+                jwt_secret,
                 algorithms=["HS256"],
                 options={"verify_aud": False, "verify_exp": True}
             )
