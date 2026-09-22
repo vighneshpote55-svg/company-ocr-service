@@ -4,6 +4,8 @@
 
 export type DocumentStatus = 'completed' | 'low_confidence' | 'warning' | 'failed' | 'error' | 'processing';
 
+export type VerificationStatus = 'verified' | 'review_required' | 'unsupported' | string;
+
 export type TextSource = 'embedded_pdf_text' | 'paddle_ocr' | 'rapid_ocr' | string;
 
 export interface EngineInfo {
@@ -76,6 +78,13 @@ export interface DocumentItem {
   is_local_ai?: boolean;
   model_used?: string;
   ai_analysis?: any;
+  verification_status?: VerificationStatus;
+  review_required?: boolean;
+  risk_score?: number;
+  suspicious_signals?: Array<string | { signal: string; severity?: string; description?: string }>;
+  human_review_reason?: string | null;
+  verified_by_ai?: boolean;
+  verification_timestamp?: string;
 }
 
 export interface UploadProgress {
@@ -127,6 +136,13 @@ export interface AiAnalysisResult {
   ocr_required?: boolean;
   created_at?: string;
   has_preview?: boolean;
+  verification_status?: VerificationStatus;
+  review_required?: boolean;
+  risk_score?: number;
+  suspicious_signals?: Array<string | { signal: string; severity?: string; description?: string }>;
+  human_review_reason?: string | null;
+  verified_by_ai?: boolean;
+  verification_timestamp?: string;
 }
 
 export interface ChatMessage {
@@ -280,6 +296,33 @@ export function normalizeAiDocument(raw: any): DocumentItem & AiAnalysisResult {
   const file_url = raw.file_url || (id && id !== 'undefined' && id !== 'null' ? `/api/documents/${id}/file` : '');
   const preview_url = raw.preview_url !== undefined ? raw.preview_url : (id && id !== 'undefined' && id !== 'null' ? `/api/documents/${id}/preview` : '');
 
+  // 9. Resolve Authenticity & Verification fields (Phase 9)
+  let verification_status: VerificationStatus = 'verified';
+  if (raw.verification_status) {
+    verification_status = raw.verification_status;
+  } else if (isUnknown || doc_type === 'unknown') {
+    verification_status = 'unsupported';
+  } else if (raw.review_required || (typeof raw.risk_score === 'number' && raw.risk_score >= 30)) {
+    verification_status = 'review_required';
+  }
+
+  const review_required = raw.review_required !== undefined
+    ? Boolean(raw.review_required)
+    : (verification_status === 'review_required');
+
+  const risk_score = typeof raw.risk_score === 'number'
+    ? Math.min(100, Math.max(0, raw.risk_score))
+    : (verification_status === 'review_required' ? 45 : 0);
+
+  const rawSignals = Array.isArray(raw.suspicious_signals) ? raw.suspicious_signals : [];
+  const suspicious_signals = rawSignals.map((s: any) =>
+    typeof s === 'string' ? s : (s?.description || s?.signal || JSON.stringify(s))
+  );
+
+  const human_review_reason = raw.human_review_reason || (review_required ? 'Visible inconsistencies detected.' : null);
+  const verified_by_ai = raw.verified_by_ai !== undefined ? Boolean(raw.verified_by_ai) : true;
+  const verification_timestamp = raw.verification_timestamp || raw.created_at || new Date().toISOString();
+
   return {
     id,
     document_id: id,
@@ -315,5 +358,12 @@ export function normalizeAiDocument(raw: any): DocumentItem & AiAnalysisResult {
     is_local_ai: raw.is_local_ai !== undefined ? Boolean(raw.is_local_ai) : true,
     model_used: raw.model_used || 'qwen2.5vl:3b',
     ai_analysis: raw.ai_analysis || null,
+    verification_status,
+    review_required,
+    risk_score,
+    suspicious_signals,
+    human_review_reason,
+    verified_by_ai,
+    verification_timestamp,
   };
 }

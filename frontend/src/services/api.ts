@@ -14,7 +14,7 @@ import type {
 } from '../types';
 export type { AIProviderConfig, AIProviderStatus, AIConnectionTestResult } from '../types';
 import { normalizeAiDocument } from '../types';
-import { getAccessToken } from './supabaseClient';
+import { getAccessToken, supabase } from './supabaseClient';
 
 const STORAGE_KEY_BASE_URL = 'ocr_app_base_url';
 const SESSION_KEY_TOKEN = 'ocr_session_jwt_token';
@@ -118,6 +118,79 @@ export class ApiService {
   public setBaseUrl(url: string) {
     this.baseUrl = url.replace(/\/+$/, '');
     saveStoredBaseUrl(this.baseUrl);
+  }
+
+  private refreshPromise: Promise<string | null> | null = null;
+
+  /**
+   * Retrieves current valid Supabase access token, falling back to cached token or apiKey.
+   */
+  public async getValidAccessToken(): Promise<string | null> {
+    if (supabase) {
+      try {
+        const { data } = await supabase.auth.getSession();
+        if (data.session?.access_token) {
+          this.token = data.session.access_token;
+          return data.session.access_token;
+        }
+      } catch {
+        // Fall through
+      }
+    }
+    const token = await getAccessToken();
+    if (token) {
+      this.token = token;
+      return token;
+    }
+    return this.token;
+  }
+
+  /**
+   * Handle HTTP 401:
+   * 1. Verify whether a valid session still exists in Supabase.
+   * 2. Attempt session refresh via supabase.auth.refreshSession().
+   * 3. Only sign out / notifyUnauthorized() if session is genuinely invalid or refresh fails.
+   */
+  public async handleAuthFailureAndRefresh(): Promise<string | null> {
+    if (this.refreshPromise) {
+      return this.refreshPromise;
+    }
+
+    this.refreshPromise = (async () => {
+      try {
+        if (!supabase) {
+          this.notifyUnauthorized();
+          return null;
+        }
+
+        // 1. Verify whether a valid session still exists
+        const { data: sessionData } = await supabase.auth.getSession();
+        if (!sessionData?.session) {
+          this.notifyUnauthorized();
+          return null;
+        }
+
+        // 2. Attempt session refresh
+        const { data: refreshData, error: refreshError } = await supabase.auth.refreshSession();
+        if (refreshError || !refreshData.session?.access_token) {
+          console.warn('[API] Supabase session refresh failed:', refreshError?.message);
+          this.notifyUnauthorized();
+          return null;
+        }
+
+        const newToken = refreshData.session.access_token;
+        this.setToken(newToken);
+        return newToken;
+      } catch (err) {
+        console.warn('[API] Exception during session refresh attempt:', err);
+        this.notifyUnauthorized();
+        return null;
+      } finally {
+        this.refreshPromise = null;
+      }
+    })();
+
+    return this.refreshPromise;
   }
 
   public getBaseUrl(): string {
@@ -253,7 +326,7 @@ export class ApiService {
 
     // Dynamically retrieve Supabase JWT if present
     try {
-      const supaToken = await getAccessToken();
+      const supaToken = await this.getValidAccessToken();
       const tokenToUse = supaToken || this.token;
       if (tokenToUse) {
         mergedHeaders['Authorization'] = `Bearer ${tokenToUse}`;
@@ -276,10 +349,19 @@ export class ApiService {
       }
     }
 
-    const res = await fetch(url, { ...options, headers: mergedHeaders });
+    let res = await fetch(url, { ...options, headers: mergedHeaders });
     if (res.status === 401) {
-      this.notifyUnauthorized();
-      throw new Error('Authentication required or session expired (HTTP 401). Please sign in.');
+      // Attempt session refresh before failing
+      const refreshedToken = await this.handleAuthFailureAndRefresh();
+      if (refreshedToken) {
+        mergedHeaders['Authorization'] = `Bearer ${refreshedToken}`;
+        res = await fetch(url, { ...options, headers: mergedHeaders });
+      }
+
+      if (res.status === 401) {
+        this.notifyUnauthorized();
+        throw new Error('Authentication required or session expired (HTTP 401). Please sign in.');
+      }
     }
     return res;
   }
@@ -425,66 +507,82 @@ export class ApiService {
     onProgress?: (percent: number) => void,
     mode: 'offline' | 'ai' = 'offline'
   ): Promise<DocumentItem> {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('mode', mode);
-    if (docType && docType !== 'auto') {
-      formData.append('doc_type', docType);
-    }
-    if (expectedData) {
-      formData.append('expected_data', expectedData);
-    }
+    const initialToken = await this.getValidAccessToken();
 
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', this.getUrl('/api/upload'));
+    const doUpload = (tokenToUse: string | null): Promise<DocumentItem> => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('mode', mode);
+      if (docType && docType !== 'auto') {
+        formData.append('doc_type', docType);
+      }
+      if (expectedData) {
+        formData.append('expected_data', expectedData);
+      }
 
-      if (this.authEnabled) {
-        if (this.token) {
-          xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', this.getUrl('/api/upload'));
+
+        if (tokenToUse) {
+          xhr.setRequestHeader('Authorization', `Bearer ${tokenToUse}`);
         } else if (this.apiKey) {
           xhr.setRequestHeader('X-API-Key', this.apiKey);
         }
-      }
 
-      xhr.upload.onprogress = (evt) => {
-        if (evt.lengthComputable && onProgress) {
-          const pct = Math.round((evt.loaded / evt.total) * 60);
-          onProgress(pct);
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status === 401) {
-          this.notifyUnauthorized();
-          reject(new Error('Session expired or unauthorized. Please sign in again.'));
-          return;
-        }
-
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            if (onProgress) onProgress(100);
-            const data = JSON.parse(xhr.responseText);
-            resolve(data);
-          } catch (e) {
-            reject(new Error('Invalid JSON returned by server'));
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable && onProgress) {
+            const pct = Math.round((evt.loaded / evt.total) * 60);
+            onProgress(pct);
           }
-        } else {
-          try {
-            const err = JSON.parse(xhr.responseText);
-            reject(new Error(err.detail || `Upload failed: ${xhr.statusText}`));
-          } catch {
-            reject(new Error(`Upload failed with status ${xhr.status}`));
+        };
+
+        xhr.onload = async () => {
+          if (xhr.status === 401) {
+            // Attempt session refresh before rejecting
+            const refreshedToken = await this.handleAuthFailureAndRefresh();
+            if (refreshedToken) {
+              try {
+                const retried = await doUpload(refreshedToken);
+                resolve(retried);
+                return;
+              } catch (retryErr) {
+                reject(retryErr);
+                return;
+              }
+            }
+            this.notifyUnauthorized();
+            reject(new Error('Session expired or unauthorized. Please sign in again.'));
+            return;
           }
-        }
-      };
 
-      xhr.onerror = () => {
-        reject(new Error('Network error during upload'));
-      };
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              if (onProgress) onProgress(100);
+              const data = JSON.parse(xhr.responseText);
+              resolve(data);
+            } catch (e) {
+              reject(new Error('Invalid JSON returned by server'));
+            }
+          } else {
+            try {
+              const err = JSON.parse(xhr.responseText);
+              reject(new Error(err.detail || `Upload failed: ${xhr.statusText}`));
+            } catch {
+              reject(new Error(`Upload failed with status ${xhr.status}`));
+            }
+          }
+        };
 
-      xhr.send(formData);
-    });
+        xhr.onerror = () => {
+          reject(new Error('Network error during upload'));
+        };
+
+        xhr.send(formData);
+      });
+    };
+
+    return doUpload(initialToken);
   }
 
   public async getAiStatus(): Promise<AiStatusResponse> {
@@ -501,66 +599,82 @@ export class ApiService {
     expectedData?: string,
     onProgress?: (percent: number) => void
   ): Promise<OfflineUploadResult> {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('mode', 'offline');
-    if (docType && docType !== 'auto') {
-      formData.append('doc_type', docType);
-    }
-    if (expectedData) {
-      formData.append('expected_data', expectedData);
-    }
+    const initialToken = await this.getValidAccessToken();
 
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', this.getUrl('/api/mode/offline'));
+    const doUpload = (tokenToUse: string | null): Promise<OfflineUploadResult> => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('mode', 'offline');
+      if (docType && docType !== 'auto') {
+        formData.append('doc_type', docType);
+      }
+      if (expectedData) {
+        formData.append('expected_data', expectedData);
+      }
 
-      if (this.authEnabled) {
-        if (this.token) {
-          xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', this.getUrl('/api/mode/offline'));
+
+        if (tokenToUse) {
+          xhr.setRequestHeader('Authorization', `Bearer ${tokenToUse}`);
         } else if (this.apiKey) {
           xhr.setRequestHeader('X-API-Key', this.apiKey);
         }
-      }
 
-      xhr.upload.onprogress = (evt) => {
-        if (evt.lengthComputable && onProgress) {
-          const pct = Math.round((evt.loaded / evt.total) * 60);
-          onProgress(pct);
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status === 401) {
-          this.notifyUnauthorized();
-          reject(new Error('Session expired or unauthorized. Please sign in again.'));
-          return;
-        }
-
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            if (onProgress) onProgress(100);
-            const data = JSON.parse(xhr.responseText);
-            resolve(data);
-          } catch (e) {
-            reject(new Error('Invalid JSON returned by server'));
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable && onProgress) {
+            const pct = Math.round((evt.loaded / evt.total) * 60);
+            onProgress(pct);
           }
-        } else {
-          try {
-            const err = JSON.parse(xhr.responseText);
-            reject(new Error(err.detail || `Upload failed: ${xhr.statusText}`));
-          } catch {
-            reject(new Error(`Upload failed with status ${xhr.status}`));
+        };
+
+        xhr.onload = async () => {
+          if (xhr.status === 401) {
+            // Attempt session refresh before rejecting
+            const refreshedToken = await this.handleAuthFailureAndRefresh();
+            if (refreshedToken) {
+              try {
+                const retried = await doUpload(refreshedToken);
+                resolve(retried);
+                return;
+              } catch (retryErr) {
+                reject(retryErr);
+                return;
+              }
+            }
+            this.notifyUnauthorized();
+            reject(new Error('Session expired or unauthorized. Please sign in again.'));
+            return;
           }
-        }
-      };
 
-      xhr.onerror = () => {
-        reject(new Error('Network error during upload'));
-      };
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              if (onProgress) onProgress(100);
+              const data = JSON.parse(xhr.responseText);
+              resolve(data);
+            } catch (e) {
+              reject(new Error('Invalid JSON returned by server'));
+            }
+          } else {
+            try {
+              const err = JSON.parse(xhr.responseText);
+              reject(new Error(err.detail || `Upload failed: ${xhr.statusText}`));
+            } catch {
+              reject(new Error(`Upload failed with status ${xhr.status}`));
+            }
+          }
+        };
 
-      xhr.send(formData);
-    });
+        xhr.onerror = () => {
+          reject(new Error('Network error during upload'));
+        };
+
+        xhr.send(formData);
+      });
+    };
+
+    return doUpload(initialToken);
   }
 
   public async getOllamaStatus(): Promise<OllamaStatusResponse> {
@@ -632,61 +746,77 @@ export class ApiService {
     file: File,
     onProgress?: (percent: number) => void
   ): Promise<AiAnalysisResult> {
-    const formData = new FormData();
-    formData.append('file', file);
-    formData.append('mode', 'ai');
+    const initialToken = await this.getValidAccessToken();
 
-    return new Promise((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      xhr.open('POST', this.getUrl('/api/mode/ai/analyze'));
+    const doUpload = (tokenToUse: string | null): Promise<AiAnalysisResult> => {
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('mode', 'ai');
 
-      if (this.authEnabled) {
-        if (this.token) {
-          xhr.setRequestHeader('Authorization', `Bearer ${this.token}`);
+      return new Promise((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', this.getUrl('/api/mode/ai/analyze'));
+
+        if (tokenToUse) {
+          xhr.setRequestHeader('Authorization', `Bearer ${tokenToUse}`);
         } else if (this.apiKey) {
           xhr.setRequestHeader('X-API-Key', this.apiKey);
         }
-      }
 
-      xhr.upload.onprogress = (evt) => {
-        if (evt.lengthComputable && onProgress) {
-          const pct = Math.round((evt.loaded / evt.total) * 50);
-          onProgress(pct);
-        }
-      };
-
-      xhr.onload = () => {
-        if (xhr.status === 401) {
-          this.notifyUnauthorized();
-          reject(new Error('Session expired or unauthorized. Please sign in again.'));
-          return;
-        }
-
-        if (xhr.status >= 200 && xhr.status < 300) {
-          try {
-            if (onProgress) onProgress(100);
-            const data = JSON.parse(xhr.responseText);
-            const normalized = normalizeAiDocument(data);
-            resolve(normalized);
-          } catch (e) {
-            reject(new Error('Invalid JSON returned by server'));
+        xhr.upload.onprogress = (evt) => {
+          if (evt.lengthComputable && onProgress) {
+            const pct = Math.round((evt.loaded / evt.total) * 50);
+            onProgress(pct);
           }
-        } else {
-          try {
-            const err = JSON.parse(xhr.responseText);
-            reject(new Error(err.detail || `AI Analysis failed: ${xhr.statusText}`));
-          } catch {
-            reject(new Error(`AI Analysis failed with status ${xhr.status}`));
+        };
+
+        xhr.onload = async () => {
+          if (xhr.status === 401) {
+            // Attempt session refresh before rejecting
+            const refreshedToken = await this.handleAuthFailureAndRefresh();
+            if (refreshedToken) {
+              try {
+                const retried = await doUpload(refreshedToken);
+                resolve(retried);
+                return;
+              } catch (retryErr) {
+                reject(retryErr);
+                return;
+              }
+            }
+            this.notifyUnauthorized();
+            reject(new Error('Session expired or unauthorized. Please sign in again.'));
+            return;
           }
-        }
-      };
 
-      xhr.onerror = () => {
-        reject(new Error('Network error during AI analysis upload'));
-      };
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              if (onProgress) onProgress(100);
+              const data = JSON.parse(xhr.responseText);
+              const normalized = normalizeAiDocument(data);
+              resolve(normalized);
+            } catch (e) {
+              reject(new Error('Invalid JSON returned by server'));
+            }
+          } else {
+            try {
+              const err = JSON.parse(xhr.responseText);
+              reject(new Error(err.detail || `AI Analysis failed: ${xhr.statusText}`));
+            } catch {
+              reject(new Error(`AI Analysis failed with status ${xhr.status}`));
+            }
+          }
+        };
 
-      xhr.send(formData);
-    });
+        xhr.onerror = () => {
+          reject(new Error('Network error during AI analysis upload'));
+        };
+
+        xhr.send(formData);
+      });
+    };
+
+    return doUpload(initialToken);
   }
 
   public async chatAiDocument(

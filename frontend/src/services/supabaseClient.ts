@@ -8,8 +8,10 @@
 
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
+const globalProc = typeof globalThis !== 'undefined' ? (globalThis as any).process : undefined;
+const env = (typeof import.meta !== 'undefined' && (import.meta as any).env) || globalProc?.env || {};
+const supabaseUrl: string = env.VITE_SUPABASE_URL || '';
+const supabaseAnonKey: string = env.VITE_SUPABASE_ANON_KEY || '';
 
 export const isSupabaseConfigured = Boolean(supabaseUrl && supabaseAnonKey);
 

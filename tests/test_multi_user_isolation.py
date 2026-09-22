@@ -33,7 +33,11 @@ def setup_isolation_env():
     os.environ["AUTH_ENABLED"] = "true"
     os.environ["AUTH_MODE"] = "jwt"
     os.environ["DOCUMENT_ENCRYPTION_KEY"] = "f4949e05975053d959987df0e8b210e0007662e69073599d21935540d5e91ea9"
+    import supabase_client
+    orig_is_configured = supabase_client.is_supabase_configured
+    supabase_client.is_supabase_configured = lambda: False
     yield
+    supabase_client.is_supabase_configured = orig_is_configured
     os.environ.clear()
     os.environ.update(old_env)
 

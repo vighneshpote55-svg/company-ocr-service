@@ -52,13 +52,20 @@ def create_document(
     extracted_fields: Optional[Dict[str, Any]] = None,
     ai_analysis: Optional[Dict[str, Any]] = None,
     verification_status: Optional[str] = None,
+    review_required: bool = False,
+    risk_score: float = 0.0,
+    suspicious_signals: Optional[List[Any]] = None,
+    human_review_reason: Optional[str] = None,
+    verified_by_ai: bool = False,
 ) -> Dict[str, Any]:
     """
-    Persist an uploaded document, its encrypted file, OCR data, extracted fields, and AI analysis.
+    Persist an uploaded document, its encrypted file, OCR data, extracted fields, AI analysis, and authenticity assessment.
     Enforces that user_id is saved as the document owner.
     """
     doc_id = str(uuid.uuid4())
     checksum = _calculate_sha256(file_bytes)
+    checksum_sha256 = checksum
+    file_size = len(file_bytes)
     now_iso = datetime.now(timezone.utc).isoformat()
 
     # 1. Encrypt the file data
@@ -82,70 +89,152 @@ def create_document(
                     "original_filename": original_filename,
                     "file_type": file_type,
                     "storage_path": storage_path,
-                    "doc_type": doc_type or "unknown",
+                    "doc_type": doc_type,
                     "mode": mode,
                     "status": status,
-                    "file_size": len(file_bytes),
-                    "checksum_sha256": checksum,
+                    "file_size": file_size,
+                    "checksum_sha256": checksum_sha256,
+                    "verification_status": verification_status,
+                    "review_required": review_required,
+                    "risk_score": risk_score,
+                    "suspicious_signals": suspicious_signals,
+                    "human_review_reason": human_review_reason,
+                    "verified_by_ai": verified_by_ai,
+                    "verification_timestamp": now_iso,
                     "created_at": now_iso,
                     "updated_at": now_iso,
                 }
-                client.table("documents").insert(doc_row).execute()
 
-                # Insert into document_files
-                file_row = {
-                    "document_id": doc_id,
-                    "user_id": user_id,
-                    "bucket_name": SUPABASE_STORAGE_BUCKET,
-                    "storage_path": storage_path,
-                    "encryption_algorithm": "AES-256-GCM",
-                    "file_size": len(encrypted_bytes),
-                    "created_at": now_iso,
-                }
-                client.table("document_files").insert(file_row).execute()
-
-                # Insert into ocr_results if present
-                if ocr_result:
-                    ocr_row = {
-                        "document_id": doc_id,
-                        "user_id": user_id,
-                        "raw_text": ocr_result.get("text") or ocr_result.get("raw_text", ""),
-                        "detected_type": ocr_result.get("detected_type") or doc_type,
-                        "confidence": ocr_result.get("confidence") or 0.0,
-                        "page_count": ocr_result.get("pages_processed") or ocr_result.get("page_count", 1),
-                        "raw_results": ocr_result,
-                        "created_at": now_iso,
-                    }
-                    client.table("ocr_results").insert(ocr_row).execute()
-
-                # Insert into extracted_fields if present
-                if extracted_fields:
-                    fields_row = {
-                        "document_id": doc_id,
-                        "user_id": user_id,
-                        "fields": extracted_fields,
-                        "verification_status": verification_status or status,
-                        "created_at": now_iso,
-                    }
-                    client.table("extracted_fields").insert(fields_row).execute()
-
-                # Insert into ai_analyses if present
-                if ai_analysis:
-                    ai_row = {
-                        "document_id": doc_id,
-                        "user_id": user_id,
-                        "provider": ai_analysis.get("provider", "unknown"),
-                        "model": ai_analysis.get("model", "unknown"),
-                        "summary": ai_analysis.get("summary", ""),
-                        "classification": ai_analysis.get("classification") or doc_type,
-                        "raw_analysis": ai_analysis,
-                        "created_at": now_iso,
-                    }
-                    client.table("ai_analyses").insert(ai_row).execute()
-
-                # Also save to local document_store for caching and backward compatibility
                 try:
-                    document_store.save_document(
+                    # 1. Insert into documents table (with fallback if schema migration not yet applied in Supabase)
+                    try:
+                        client.table("documents").insert(doc_row).execute()
+                    except Exception as insert_err:
+                        err_msg = str(insert_err)
+                        if "schema cache" in err_msg or "PGRST204" in err_msg or "column" in err_msg:
+                            logger.warning(
+                                f"Documents table missing new authenticity columns in Supabase schema cache; falling back to base columns: {insert_err}"
+                            )
+                            base_doc_row = {
+                                "id": doc_id,
+                                "user_id": user_id,
+                                "original_filename": original_filename,
+                                "file_type": file_type,
+                                "storage_path": storage_path,
+                                "doc_type": doc_type,
+                                "mode": mode,
+                                "status": status,
+                                "file_size": file_size,
+                                "checksum_sha256": checksum_sha256,
+                                "created_at": now_iso,
+                                "updated_at": now_iso,
+                            }
+                            client.table("documents").insert(base_doc_row).execute()
+                        else:
+                            raise
+
+                    # 2. Insert into document_files (storage metadata)
+                    file_row = {
+                        "document_id": doc_id,
+                        "user_id": user_id,
+                        "bucket_name": SUPABASE_STORAGE_BUCKET,
+                        "storage_path": storage_path,
+                        "encryption_algorithm": "AES-256-GCM",
+                        "file_size": file_size,
+                        "created_at": now_iso,
+                    }
+                    client.table("document_files").insert(file_row).execute()
+
+                    # 3. Phase 9.7: Insert into authenticity_checks table
+                    try:
+                        auth_check_row = {
+                            "document_id": doc_id,
+                            "user_id": user_id,
+                            "risk_score": risk_score,
+                            "verification_status": verification_status,
+                            "suspicious_signals": suspicious_signals,
+                            "created_at": now_iso,
+                        }
+                        client.table("authenticity_checks").insert(auth_check_row).execute()
+                    except Exception as ex_auth:
+                        logger.warning(f"Could not insert into authenticity_checks table: {ex_auth}")
+
+                    # 4. Insert into ocr_results if present
+                    if ocr_result:
+                        ocr_row = {
+                            "document_id": doc_id,
+                            "user_id": user_id,
+                            "raw_text": ocr_result.get("text", ""),
+                            "detected_type": doc_type,
+                            "confidence": ocr_result.get("confidence") or 0.0,
+                            "page_count": ocr_result.get("pages_processed") or ocr_result.get("page_count", 1),
+                            "raw_results": ocr_result,
+                            "created_at": now_iso,
+                        }
+                        client.table("ocr_results").insert(ocr_row).execute()
+
+                    # 5. Insert into extracted_fields if present
+                    if extracted_fields:
+                        fields_row = {
+                            "document_id": doc_id,
+                            "user_id": user_id,
+                            "fields": extracted_fields,
+                            "verification_status": verification_status or status,
+                            "created_at": now_iso,
+                        }
+                        client.table("extracted_fields").insert(fields_row).execute()
+
+                    # 6. Insert into ai_analyses if present
+                    if ai_analysis:
+                        ai_row = {
+                            "document_id": doc_id,
+                            "user_id": user_id,
+                            "provider": ai_analysis.get("provider", "unknown"),
+                            "model": ai_analysis.get("model", "unknown"),
+                            "summary": ai_analysis.get("summary", ""),
+                            "classification": ai_analysis.get("classification") or doc_type,
+                            "raw_analysis": ai_analysis,
+                            "created_at": now_iso,
+                        }
+                        client.table("ai_analyses").insert(ai_row).execute()
+
+                    # Also save to local document_store for caching and backward compatibility
+                    try:
+                        document_store.save_document(
+                            doc_id=doc_id,
+                            original_filename=original_filename,
+                            file_data=file_bytes,
+                            file_type=file_type,
+                            doc_type=doc_type,
+                            mode=mode,
+                            status=status,
+                            ocr_result=ocr_result,
+                            extracted_fields=extracted_fields,
+                            ai_analysis=ai_analysis,
+                            user_id=user_id,
+                            verification_status=verification_status,
+                            review_required=review_required,
+                            risk_score=risk_score,
+                            suspicious_signals=suspicious_signals,
+                            human_review_reason=human_review_reason,
+                            verified_by_ai=verified_by_ai,
+                        )
+                    except Exception as ex:
+                        logger.debug(f"Local document store cache write skipped: {ex}")
+
+                    saved = get_user_document(user_id, doc_id)
+                    if saved:
+                        return saved
+                    return doc_row
+                except Exception as ex:
+                    logger.error(f"Failed to persist document to Supabase: {type(ex).__name__} - {str(ex)}")
+                    raise
+
+            except Exception as ex:
+                err_msg = str(ex)
+                if "23503" in err_msg or "foreign key" in err_msg.lower():
+                    logger.warning(f"User ID {user_id} not present in Supabase auth.users; falling back to local document store: {ex}")
+                    return document_store.save_document(
                         doc_id=doc_id,
                         original_filename=original_filename,
                         file_data=file_bytes,
@@ -157,12 +246,13 @@ def create_document(
                         extracted_fields=extracted_fields,
                         ai_analysis=ai_analysis,
                         user_id=user_id,
+                        verification_status=verification_status,
+                        review_required=review_required,
+                        risk_score=risk_score,
+                        suspicious_signals=suspicious_signals,
+                        human_review_reason=human_review_reason,
+                        verified_by_ai=verified_by_ai,
                     )
-                except Exception as ex:
-                    logger.debug(f"Local document store cache write skipped: {ex}")
-
-                return get_user_document(user_id, doc_id) or doc_row
-            except Exception as ex:
                 logger.error(f"Failed to persist document to Supabase: {type(ex).__name__} - {str(ex)}")
                 raise
 
@@ -202,25 +292,44 @@ def get_user_documents(
         client = get_supabase_client()
         if client:
             try:
-                query = client.table("documents").select(
-                    "id, user_id, original_filename, file_type, doc_type, mode, status, file_size, checksum_sha256, created_at, updated_at, "
+                full_columns = (
+                    "id, user_id, original_filename, file_type, doc_type, mode, status, file_size, checksum_sha256, "
+                    "verification_status, review_required, risk_score, suspicious_signals, human_review_reason, verified_by_ai, verification_timestamp, "
+                    "created_at, updated_at, "
                     "ocr_results(raw_text, detected_type, confidence, page_count), "
                     "extracted_fields(fields, verification_status), "
-                    "ai_analyses(provider, model, summary, classification)",
-                    count="exact"
-                ).eq("user_id", user_id)
+                    "ai_analyses(provider, model, summary, classification)"
+                )
+                base_columns = (
+                    "id, user_id, original_filename, file_type, doc_type, mode, status, file_size, checksum_sha256, "
+                    "created_at, updated_at, "
+                    "ocr_results(raw_text, detected_type, confidence, page_count), "
+                    "extracted_fields(fields, verification_status), "
+                    "ai_analyses(provider, model, summary, classification)"
+                )
 
-                if mode:
-                    query = query.eq("mode", mode)
-                if doc_type:
-                    query = query.eq("doc_type", doc_type)
-                if status:
-                    query = query.eq("status", status)
-                if search:
-                    query = query.ilike("original_filename", f"%{search}%")
+                def build_query(cols):
+                    q = client.table("documents").select(cols, count="exact").eq("user_id", user_id)
+                    if mode:
+                        q = q.eq("mode", mode)
+                    if doc_type:
+                        q = q.eq("doc_type", doc_type)
+                    if status:
+                        q = q.eq("status", status)
+                    if search:
+                        q = q.ilike("original_filename", f"%{search}%")
+                    offset = (page - 1) * limit
+                    return q.order("created_at", desc=True).range(offset, offset + limit - 1)
 
-                offset = (page - 1) * limit
-                res = query.order("created_at", desc=True).range(offset, offset + limit - 1).execute()
+                try:
+                    res = build_query(full_columns).execute()
+                except Exception as ex_full:
+                    err_str = str(ex_full)
+                    if "schema cache" in err_str or "PGRST204" in err_str or "column" in err_str:
+                        logger.warning("Supabase documents table missing authenticity columns in schema cache; querying base columns.")
+                        res = build_query(base_columns).execute()
+                    else:
+                        raise
 
                 items = []
                 for row in res.data or []:
@@ -236,6 +345,13 @@ def get_user_documents(
                         "status": row.get("status"),
                         "file_size": row.get("file_size"),
                         "checksum": row.get("checksum_sha256"),
+                        "verification_status": row.get("verification_status") or "verified",
+                        "review_required": bool(row.get("review_required", False)),
+                        "risk_score": float(row.get("risk_score") or 0),
+                        "suspicious_signals": row.get("suspicious_signals") or [],
+                        "human_review_reason": row.get("human_review_reason"),
+                        "verified_by_ai": bool(row.get("verified_by_ai", False)),
+                        "verification_timestamp": row.get("verification_timestamp"),
                         "created_at": row.get("created_at"),
                         "updated_at": row.get("updated_at"),
                     }
@@ -283,12 +399,30 @@ def get_user_document(user_id: str, document_id: str) -> Optional[Dict[str, Any]
         client = get_supabase_client()
         if client:
             try:
-                res = client.table("documents").select(
-                    "id, user_id, original_filename, file_type, doc_type, mode, status, file_size, checksum_sha256, storage_path, created_at, updated_at, "
+                full_cols = (
+                    "id, user_id, original_filename, file_type, doc_type, mode, status, file_size, checksum_sha256, storage_path, "
+                    "verification_status, review_required, risk_score, suspicious_signals, human_review_reason, verified_by_ai, verification_timestamp, "
+                    "created_at, updated_at, "
                     "ocr_results(raw_text, detected_type, confidence, page_count, raw_results), "
                     "extracted_fields(fields, verification_status), "
                     "ai_analyses(provider, model, summary, classification, raw_analysis)"
-                ).eq("id", document_id).eq("user_id", user_id).limit(1).execute()
+                )
+                base_cols = (
+                    "id, user_id, original_filename, file_type, doc_type, mode, status, file_size, checksum_sha256, storage_path, "
+                    "created_at, updated_at, "
+                    "ocr_results(raw_text, detected_type, confidence, page_count, raw_results), "
+                    "extracted_fields(fields, verification_status), "
+                    "ai_analyses(provider, model, summary, classification, raw_analysis)"
+                )
+                try:
+                    res = client.table("documents").select(full_cols).eq("id", document_id).eq("user_id", user_id).limit(1).execute()
+                except Exception as ex_full:
+                    err_str = str(ex_full)
+                    if "schema cache" in err_str or "PGRST204" in err_str or "column" in err_str:
+                        logger.warning("Supabase documents table missing authenticity columns in schema cache; querying base columns.")
+                        res = client.table("documents").select(base_cols).eq("id", document_id).eq("user_id", user_id).limit(1).execute()
+                    else:
+                        raise
 
                 if res.data and len(res.data) > 0:
                     row = res.data[0]
@@ -305,12 +439,24 @@ def get_user_document(user_id: str, document_id: str) -> Optional[Dict[str, Any]
                         "file_size": row.get("file_size"),
                         "checksum": row.get("checksum_sha256"),
                         "storage_path": row.get("storage_path"),
+                        "verification_status": row.get("verification_status") or "verified",
+                        "review_required": bool(row.get("review_required", False)),
+                        "risk_score": float(row.get("risk_score") or 0),
+                        "suspicious_signals": row.get("suspicious_signals") or [],
+                        "human_review_reason": row.get("human_review_reason"),
+                        "verified_by_ai": bool(row.get("verified_by_ai", False)),
+                        "verification_timestamp": row.get("verification_timestamp"),
                         "created_at": row.get("created_at"),
                         "updated_at": row.get("updated_at"),
                     }
+                    item["file_url"] = f"/api/documents/{row.get('id')}/file"
+                    item["preview_url"] = f"/api/documents/{row.get('id')}/preview"
+                    item["pages"] = 1
                     if row.get("ocr_results"):
                         ocr = row["ocr_results"]
                         item["ocr_result"] = ocr[0] if isinstance(ocr, list) and len(ocr) > 0 else ocr
+                        if isinstance(item["ocr_result"], dict):
+                            item["pages"] = item["ocr_result"].get("page_count", 1)
                     if row.get("extracted_fields"):
                         ef = row["extracted_fields"]
                         item["extracted_fields"] = ef[0].get("fields", {}) if isinstance(ef, list) and len(ef) > 0 else ef.get("fields", {})

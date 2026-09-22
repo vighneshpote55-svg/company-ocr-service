@@ -58,10 +58,28 @@ def reset_provider_env(monkeypatch):
     ai_providers.ai_provider_manager.reload_from_env()
 
 
+from auth_dependencies import get_current_user, UserProfile
+from security import authenticate_request
+
+
 @pytest.fixture
 def client():
+    app.dependency_overrides[get_current_user] = lambda: UserProfile(
+        id="c80c0b46-3bc0-4c6f-9db0-741341f7ad32",
+        email="admin@company.com",
+        role="admin",
+        full_name="Admin User",
+    )
+    app.dependency_overrides[authenticate_request] = lambda: {
+        "user_id": "c80c0b46-3bc0-4c6f-9db0-741341f7ad32",
+        "email": "admin@company.com",
+        "role": "admin",
+        "sub": "c80c0b46-3bc0-4c6f-9db0-741341f7ad32",
+    }
     with TestClient(app) as test_client:
         yield test_client
+    app.dependency_overrides.pop(get_current_user, None)
+    app.dependency_overrides.pop(authenticate_request, None)
 
 
 def _create_sample_image(text_lines):

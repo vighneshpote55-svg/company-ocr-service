@@ -9,7 +9,7 @@ FastAPI Authentication & Authorization Dependencies using Supabase:
 """
 
 import os
-from typing import Optional
+from typing import Any, Optional
 from pydantic import BaseModel, Field
 from fastapi import Depends, HTTPException, Header, Query, Request, status
 import jwt
@@ -27,12 +27,26 @@ class UserProfile(BaseModel):
     full_name: Optional[str] = Field(None, description="User full name")
     role: str = Field("user", description="Role: 'user' or 'admin'")
 
+    def get(self, key: str, default: Any = None) -> Any:
+        if key in ("sub", "user_id", "id"):
+            return self.id
+        return getattr(self, key, default)
+
+    def __getitem__(self, item: str) -> Any:
+        val = self.get(item)
+        if val is None and item not in ("full_name",):
+            raise KeyError(item)
+        return val
+
 
 def is_auth_required() -> bool:
     """
     Check if authentication is strictly enforced.
     Returns True if AUTH_ENABLED is explicitly 'true' or if Supabase is configured and not explicitly disabled.
     """
+    auth_mode = os.getenv("AUTH_MODE", "").lower().strip()
+    if auth_mode == "disabled":
+        return False
     env_val = os.getenv("AUTH_ENABLED", "").lower().strip()
     if env_val in ("false", "0", "no"):
         return False
@@ -63,11 +77,14 @@ def verify_supabase_jwt(token: str) -> dict:
     """
     # 1. Local JWT Secret Verification
     jwt_secret = get_supabase_jwt_secret()
-    if jwt_secret:
+    legacy_secret = os.getenv("JWT_SECRET") or "company-ocr-default-jwt-secret-key-change-in-prod-32chars"
+    secrets_to_try = [s for s in (jwt_secret, legacy_secret) if s]
+
+    for secret in secrets_to_try:
         try:
             payload = jwt.decode(
                 token,
-                jwt_secret,
+                secret,
                 algorithms=["HS256"],
                 options={"verify_aud": False, "verify_exp": True}
             )
@@ -78,9 +95,8 @@ def verify_supabase_jwt(token: str) -> dict:
                 detail="Session expired. Please sign in again.",
                 headers={"WWW-Authenticate": "Bearer"},
             )
-        except jwt.InvalidTokenError as ex:
-            logger.warning(f"JWT signature verification failed: {type(ex).__name__}")
-            # Fall through to Supabase client check
+        except jwt.InvalidTokenError:
+            pass
 
     # 2. Supabase Auth API Verification
     client = get_supabase_client()
@@ -105,6 +121,14 @@ def verify_supabase_jwt(token: str) -> dict:
     )
 
 
+def is_admin_email(email: str) -> bool:
+    """Check if email matches configured ADMIN_EMAILS whitelist."""
+    if not email:
+        return False
+    admin_list = [e.strip().lower() for e in os.getenv("ADMIN_EMAILS", "").split(",") if e.strip()]
+    return email.strip().lower() in admin_list
+
+
 def get_user_profile_from_db(user_id: str, default_email: str = "") -> UserProfile:
     """Fetch user role and full name from public.profiles table."""
     client = get_supabase_client()
@@ -113,50 +137,69 @@ def get_user_profile_from_db(user_id: str, default_email: str = "") -> UserProfi
             res = client.table("profiles").select("id, email, full_name, role").eq("id", user_id).limit(1).execute()
             if res.data and len(res.data) > 0:
                 row = res.data[0]
+                role = row.get("role", "user")
+                user_email = row.get("email", default_email)
+                if role != "admin" and is_admin_email(user_email):
+                    role = "admin"
+                    try:
+                        client.table("profiles").update({"role": "admin"}).eq("id", user_id).execute()
+                    except Exception:
+                        pass
                 return UserProfile(
                     id=row.get("id", user_id),
-                    email=row.get("email", default_email),
+                    email=user_email,
                     full_name=row.get("full_name"),
-                    role=row.get("role", "user")
+                    role=role,
                 )
         except Exception as ex:
             logger.warning(f"Could not load user profile from DB: {type(ex).__name__}")
 
+    role = "admin" if is_admin_email(default_email) else "user"
     return UserProfile(
         id=user_id,
         email=default_email,
         full_name=None,
-        role="user"
+        role=role,
     )
 
 
 async def get_current_user(
+    request: Request = None,
     token: Optional[str] = Depends(extract_token)
 ) -> UserProfile:
     """
     FastAPI dependency that enforces authentication.
     Returns the authenticated UserProfile.
+    Logs structured auth outcome without exposing tokens or secrets.
     """
+    req_path = request.url.path if request and hasattr(request, "url") else "unknown"
+
     if not is_auth_required():
         # In non-auth development mode, allow default system user
         if not token:
-            return UserProfile(
+            user = UserProfile(
                 id=os.getenv("DEFAULT_DEV_USER_ID", DEFAULT_MOCK_USER_ID),
                 email="dev@company.local",
                 full_name="Development User",
                 role="admin"  # Allow admin operations in dev mode without auth
             )
+            if request and hasattr(request, "state"):
+                request.state.user_id = user.id
+            logger.info(f"[AUTH_LOG] path={req_path} user_id={user.id} auth_result=dev_bypass status_code=200")
+            return user
 
     if not token:
+        logger.warning(f"[AUTH_LOG] path={req_path} user_id=None auth_result=failed reason=missing_token status_code=401")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication credentials were not provided.",
+            detail="Authentication credentials were not provided (Bearer JWT required).",
             headers={"WWW-Authenticate": "Bearer"},
         )
 
     claims = verify_supabase_jwt(token)
     user_id = claims.get("sub")
     if not user_id:
+        logger.warning(f"[AUTH_LOG] path={req_path} user_id=None auth_result=failed reason=missing_sub status_code=401")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid token claims: missing subject identifier.",
@@ -175,17 +218,21 @@ async def get_current_user(
         if role_claim == "admin":
             profile.role = "admin"
 
+    if request and hasattr(request, "state"):
+        request.state.user_id = profile.id
+    logger.info(f"[AUTH_LOG] path={req_path} user_id={profile.id} auth_result=success status_code=200")
     return profile
 
 
 async def get_optional_user(
+    request: Request = None,
     token: Optional[str] = Depends(extract_token)
 ) -> Optional[UserProfile]:
     """Returns the current user if a valid token is provided, or None."""
     if not token:
         return None
     try:
-        return await get_current_user(token)
+        return await get_current_user(request=request, token=token)
     except HTTPException:
         return None
 

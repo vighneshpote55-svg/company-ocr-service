@@ -22,6 +22,11 @@ from main import app
 import document_store
 
 
+@pytest.fixture(autouse=True)
+def setup_storage_env(monkeypatch):
+    monkeypatch.setenv("AUTH_ENABLED", "false")
+
+
 @pytest.fixture
 def client():
     with TestClient(app) as test_client:

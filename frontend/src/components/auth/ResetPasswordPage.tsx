@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { Shield, ArrowRight, AlertCircle, CheckCircle2 } from 'lucide-react';
+import { Lock, Eye, EyeOff, ArrowRight, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
 
 export const ResetPasswordPage: React.FC = () => {
   const [password, setPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -49,94 +50,105 @@ export const ResetPasswordPage: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center px-4 sm:px-6 lg:px-8">
-      <div className="w-full max-w-md space-y-8">
-        <div className="text-center">
-          <div className="inline-flex items-center justify-center w-14 h-14 rounded-2xl bg-gradient-to-tr from-indigo-600 to-purple-600 shadow-lg shadow-indigo-500/20 mb-4">
-            <Shield className="w-8 h-8 text-white" />
+    <div>
+      <h2 className="auth-card-title">Set New Password</h2>
+      <p className="auth-card-desc">Choose a strong password with at least 8 characters.</p>
+
+      {success ? (
+        <div style={{ textAlign: 'center', padding: '10px 0' }}>
+          <div className="auth-alert-success" style={{ marginBottom: '20px', textAlign: 'left' }}>
+            <CheckCircle2 className="w-5 h-5 flex-shrink-0" />
+            <span>Password updated successfully! Redirecting to sign in...</span>
           </div>
-          <h2 className="text-2xl font-bold tracking-tight text-white">
-            Set New Password
-          </h2>
-          <p className="mt-1 text-sm text-slate-400">
-            Choose a strong password with at least 8 characters
-          </p>
+          <Link to="/login" className="auth-submit-btn" style={{ textDecoration: 'none' }}>
+            <span>Sign In Now</span>
+            <ArrowRight className="w-4 h-4" />
+          </Link>
         </div>
-
-        <div className="bg-slate-900 border border-slate-800 rounded-2xl p-8 shadow-xl shadow-black/40">
-          {success ? (
-            <div className="text-center space-y-6">
-              <div className="w-12 h-12 rounded-full bg-emerald-500/10 text-emerald-400 flex items-center justify-center mx-auto">
-                <CheckCircle2 className="w-6 h-6" />
-              </div>
-              <p className="text-sm text-slate-300">
-                Password updated successfully! Redirecting to sign in...
-              </p>
+      ) : (
+        <>
+          {error && (
+            <div className="auth-alert-error" style={{ marginBottom: '18px' }} role="alert">
+              <AlertCircle className="w-5 h-5 flex-shrink-0" />
+              <span>{error}</span>
             </div>
-          ) : (
-            <form className="space-y-6" onSubmit={handleSubmit}>
-              {error && (
-                <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/30 flex items-start space-x-3 text-red-400 text-sm">
-                  <AlertCircle className="w-5 h-5 flex-shrink-0 mt-0.5" />
-                  <span>{error}</span>
-                </div>
-              )}
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">
-                  New Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Minimum 8 characters"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-300 mb-2">
-                  Confirm New Password
-                </label>
-                <input
-                  type="password"
-                  required
-                  value={confirmPassword}
-                  onChange={(e) => setConfirmPassword(e.target.value)}
-                  placeholder="Repeat new password"
-                  className="w-full px-4 py-3 bg-slate-950 border border-slate-800 rounded-xl text-white placeholder-slate-500 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent transition-all"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3 px-4 bg-gradient-to-r from-indigo-600 to-indigo-500 hover:from-indigo-500 hover:to-indigo-400 text-white font-medium rounded-xl shadow-lg shadow-indigo-600/30 flex items-center justify-center space-x-2 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {loading ? (
-                  <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                ) : (
-                  <>
-                    <span>Update Password</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </>
-                )}
-              </button>
-            </form>
           )}
 
-          <div className="mt-6 pt-6 border-t border-slate-800/80 text-center">
-            <Link
-              to="/login"
-              className="text-sm text-indigo-400 hover:text-indigo-300 font-medium transition-colors"
-            >
-              Back to Sign In
+          <form onSubmit={handleSubmit} className="auth-form" noValidate>
+            <div className="auth-field-group">
+              <label className="auth-label" htmlFor="reset-new-password">
+                New Password
+              </label>
+              <div className="auth-input-container">
+                <Lock className="auth-input-icon" />
+                <input
+                  id="reset-new-password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  autoFocus
+                  className="auth-input"
+                  placeholder="Minimum 8 characters"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  disabled={loading}
+                  required
+                />
+                <button
+                  type="button"
+                  className="auth-password-toggle"
+                  onClick={() => setShowPassword(!showPassword)}
+                  aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <div className="auth-field-group">
+              <label className="auth-label" htmlFor="reset-confirm-password">
+                Confirm New Password
+              </label>
+              <div className="auth-input-container">
+                <Lock className="auth-input-icon" />
+                <input
+                  id="reset-confirm-password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="new-password"
+                  className="auth-input"
+                  placeholder="Re-enter new password"
+                  value={confirmPassword}
+                  onChange={(e) => setConfirmPassword(e.target.value)}
+                  disabled={loading}
+                  required
+                />
+              </div>
+            </div>
+
+            <button type="submit" className="auth-submit-btn" disabled={loading}>
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span>Updating Password...</span>
+                </>
+              ) : (
+                <>
+                  <span>Update Password</span>
+                  <ArrowRight className="w-4 h-4" />
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="auth-card-footer">
+            <Link to="/login" className="auth-link">
+              Back to sign in
             </Link>
           </div>
-        </div>
-      </div>
+        </>
+      )}
     </div>
   );
 };
+
+export default ResetPasswordPage;

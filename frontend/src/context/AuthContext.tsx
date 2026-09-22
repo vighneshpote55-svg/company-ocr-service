@@ -2,6 +2,7 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
 import type { Session, User } from '@supabase/supabase-js';
 import { supabase, isSupabaseConfigured } from '../services/supabaseClient';
+import { api } from '../services/api';
 
 export interface UserProfile {
   id: string;
@@ -99,6 +100,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
     // 1. Check initial session
     supabase.auth.getSession().then(({ data: { session: initSession } }) => {
       setSession(initSession);
+      if (initSession?.access_token) {
+        api.setToken(initSession.access_token);
+      } else {
+        api.setToken(null);
+      }
       if (initSession?.user) {
         setSupabaseUser(initSession.user);
         fetchProfile(initSession.user).then((p) => {
@@ -116,6 +122,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, newSession) => {
       setSession(newSession);
+      if (newSession?.access_token) {
+        api.setToken(newSession.access_token);
+      } else {
+        api.setToken(null);
+      }
       if (newSession?.user) {
         setSupabaseUser(newSession.user);
         const p = await fetchProfile(newSession.user);
@@ -193,6 +204,7 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
         // Safe swallow
       }
     }
+    api.setToken(null);
     setSession(null);
     setSupabaseUser(null);
     setUser(null);

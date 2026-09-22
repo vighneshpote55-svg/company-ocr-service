@@ -380,6 +380,35 @@ async def chat_with_document(
             return summary
         return f"This document was analyzed and identified as a {doc_type}."
 
+    # 1b. Authenticity & Document Integrity Query (Phase 9.10)
+    is_authenticity_query = any(k in q for k in [
+        "is this document genuine", "is this document authentic", "is this authentic",
+        "is it genuine", "is it authentic", "is this genuine", "is this fake",
+        "has this been altered", "has this document been altered", "is this document forged",
+        "document authenticity", "check authenticity", "is this document valid"
+    ])
+    if is_authenticity_query:
+        verif_status = (stored_analysis.get("verification_status") if stored_analysis else None) or "verified"
+        risk_score = (stored_analysis.get("risk_score") if stored_analysis else None) or 0
+        suspicious_signals = (stored_analysis.get("suspicious_signals") if stored_analysis else None) or []
+
+        if verif_status == "review_required" or risk_score >= 30:
+            signals_str = ", ".join(suspicious_signals) if suspicious_signals else "different font sizes and unusual alignment"
+            return (
+                f"I found visible inconsistencies that require manual review, including {signals_str}. "
+                f"Based on these findings, the document is marked Review Required, but I cannot conclude that it is fraudulent."
+            )
+        elif verif_status == "unsupported":
+            return (
+                f"This document is marked Unsupported. Offline authenticity verification is not available for "
+                f"unsupported document types, but full visual text and structural features have been extracted."
+            )
+        else:
+            return (
+                f"No significant visible inconsistencies or checksum errors were detected in this document. "
+                f"The document is marked Verified, though external verification through the official issuer registry is recommended for full legal validation."
+            )
+
     # 2. Quick Action: Extract Key Information (Only fields actually found)
     is_extract = any(k in q for k in ["extract all key", "extract key", "key entities", "key information", "structured fields", "identification numbers"])
     if is_extract:

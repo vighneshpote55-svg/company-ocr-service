@@ -13,6 +13,7 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
+  HelpCircle,
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
@@ -47,19 +48,24 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
 
-  const getStatusCategory = (doc: DocumentItem): 'verified' | 'review' | 'processing' | 'failed' => {
+  const getStatusCategory = (doc: DocumentItem): 'verified' | 'review_required' | 'unsupported' | 'processing' | 'failed' => {
     if (doc.status === 'failed' || doc.status === 'error') {
       return 'failed';
     }
     if (doc.status === 'processing') {
       return 'processing';
     }
+    if (doc.verification_status === 'unsupported' || (doc.doc_type === 'unknown' && doc.status === 'low_confidence')) {
+      return 'unsupported';
+    }
     if (
+      doc.verification_status === 'review_required' ||
+      Boolean(doc.review_required) ||
+      (typeof doc.risk_score === 'number' && doc.risk_score >= 30) ||
       doc.status === 'warning' ||
-      doc.status === 'low_confidence' ||
       doc.checksum_valid === false
     ) {
-      return 'review';
+      return 'review_required';
     }
     return 'verified';
   };
@@ -113,7 +119,11 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
       // 4. Status Filter
       if (statusFilter !== 'all') {
         const category = getStatusCategory(doc);
-        if (category !== statusFilter) return false;
+        if (statusFilter === 'review' && category === 'review_required') {
+          // backwards compatibility with 'review'
+        } else if (category !== statusFilter) {
+          return false;
+        }
       }
 
       return true;
@@ -150,19 +160,33 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
     switch (category) {
       case 'verified':
         return (
-          <span className="status-badge-saas badge-verified" title="Verified Clean Document">
+          <span className="status-badge-saas badge-verified" data-testid="status-badge-verified" title="Verified Clean Document">
             <CheckCircle2 size={13} />
             <span>Verified</span>
           </span>
         );
-      case 'review':
+      case 'review_required':
         return (
           <span
             className="status-badge-saas badge-review"
-            title={doc.reason || doc.checksum_reason || 'Review Required'}
+            data-testid="status-badge-review-required"
+            title={doc.human_review_reason || doc.reason || doc.checksum_reason || 'Review Required'}
+            style={{ backgroundColor: 'rgba(249, 115, 22, 0.15)', color: '#fb923c', border: '1px solid rgba(249, 115, 22, 0.3)' }}
           >
             <AlertTriangle size={13} />
-            <span>Review</span>
+            <span>Review Required</span>
+          </span>
+        );
+      case 'unsupported':
+        return (
+          <span
+            className="status-badge-saas badge-unsupported"
+            data-testid="status-badge-unsupported"
+            title={doc.reason || 'Unsupported Document Type'}
+            style={{ backgroundColor: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8', border: '1px solid rgba(148, 163, 184, 0.3)' }}
+          >
+            <HelpCircle size={13} />
+            <span>Unsupported</span>
           </span>
         );
       case 'processing':
@@ -268,8 +292,8 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
             >
               <option value="all">All Statuses</option>
               <option value="verified">Verified (Green)</option>
-              <option value="review">Review (Orange)</option>
-              <option value="processing">Processing (Blue)</option>
+              <option value="review_required">Review Required (Orange)</option>
+              <option value="unsupported">Unsupported (Gray)</option>
               <option value="failed">Failed (Red)</option>
             </select>
           </div>

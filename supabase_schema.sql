@@ -53,13 +53,31 @@ CREATE TABLE IF NOT EXISTS public.documents (
     status TEXT NOT NULL DEFAULT 'uploaded',
     file_size BIGINT,
     checksum_sha256 TEXT,
+    verification_status TEXT DEFAULT 'verified',
+    review_required BOOLEAN DEFAULT FALSE,
+    risk_score NUMERIC DEFAULT 0,
+    suspicious_signals JSONB DEFAULT '[]'::jsonb,
+    human_review_reason TEXT,
+    verified_by_ai BOOLEAN DEFAULT FALSE,
+    verification_timestamp TIMESTAMPTZ DEFAULT NOW(),
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+-- Migration support for existing documents table
+ALTER TABLE public.documents
+ADD COLUMN IF NOT EXISTS verification_status TEXT DEFAULT 'verified',
+ADD COLUMN IF NOT EXISTS review_required BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS risk_score NUMERIC DEFAULT 0,
+ADD COLUMN IF NOT EXISTS suspicious_signals JSONB DEFAULT '[]'::jsonb,
+ADD COLUMN IF NOT EXISTS human_review_reason TEXT,
+ADD COLUMN IF NOT EXISTS verified_by_ai BOOLEAN DEFAULT FALSE,
+ADD COLUMN IF NOT EXISTS verification_timestamp TIMESTAMPTZ DEFAULT NOW();
+
 CREATE INDEX IF NOT EXISTS idx_documents_user_id ON public.documents(user_id);
 CREATE INDEX IF NOT EXISTS idx_documents_created_at ON public.documents(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_documents_status ON public.documents(status);
+CREATE INDEX IF NOT EXISTS idx_documents_verification_status ON public.documents(verification_status);
 
 
 -- 3. Document Files Table (metadata for encrypted stored objects)
@@ -167,6 +185,22 @@ CREATE TABLE IF NOT EXISTS public.ai_provider_configs (
 );
 
 
+-- 9. Authenticity Checks Table
+CREATE TABLE IF NOT EXISTS public.authenticity_checks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    document_id UUID REFERENCES public.documents(id) ON DELETE CASCADE,
+    user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE,
+    risk_score NUMERIC DEFAULT 0,
+    verification_status TEXT DEFAULT 'verified',
+    suspicious_signals JSONB DEFAULT '[]'::jsonb,
+    human_review_reason TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_authenticity_checks_doc_id ON public.authenticity_checks(document_id);
+CREATE INDEX IF NOT EXISTS idx_authenticity_checks_user_id ON public.authenticity_checks(user_id);
+
+
 -- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- ==============================================================================
@@ -178,6 +212,7 @@ ALTER TABLE public.document_files ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ocr_results ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.extracted_fields ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_analyses ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.authenticity_checks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_sessions ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.chat_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.ai_provider_configs ENABLE ROW LEVEL SECURITY;
@@ -283,6 +318,19 @@ CREATE POLICY "Users can insert own chat messages" ON public.chat_messages
 
 DROP POLICY IF EXISTS "Users can delete own chat messages" ON public.chat_messages;
 CREATE POLICY "Users can delete own chat messages" ON public.chat_messages
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Authenticity Checks
+DROP POLICY IF EXISTS "Users can view own authenticity checks" ON public.authenticity_checks;
+CREATE POLICY "Users can view own authenticity checks" ON public.authenticity_checks
+    FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can insert own authenticity checks" ON public.authenticity_checks;
+CREATE POLICY "Users can insert own authenticity checks" ON public.authenticity_checks
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete own authenticity checks" ON public.authenticity_checks;
+CREATE POLICY "Users can delete own authenticity checks" ON public.authenticity_checks
     FOR DELETE USING (auth.uid() = user_id);
 
 -- AI Provider Configs: Any authenticated user can view (safe read), only admins can modify

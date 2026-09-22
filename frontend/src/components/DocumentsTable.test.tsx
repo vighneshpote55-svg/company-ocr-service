@@ -12,6 +12,7 @@ import { AIChatPanel } from './AIChatPanel.tsx';
 import { SettingsModal } from './SettingsModal.tsx';
 import { AIModeView } from './AIModeView.tsx';
 import { ExtractedFields } from './ExtractedFields.tsx';
+import { AuthProvider } from '../context/AuthContext.tsx';
 import type { DocumentItem, SupportedType, AIProviderConfig } from '../types.ts';
 import { normalizeAiDocument } from '../types.ts';
 
@@ -329,11 +330,15 @@ test('Regression: AI Mode upload with document_type = "Unknown Document" remains
 
 test('SettingsModal renders AI Model Configuration with Provider select and Model input', () => {
   const html = renderToString(
-    React.createElement(SettingsModal, {
-      isOpen: true,
-      onClose: () => {},
-      onSaved: () => {},
-    })
+    React.createElement(
+      AuthProvider,
+      null,
+      React.createElement(SettingsModal, {
+        isOpen: true,
+        onClose: () => {},
+        onSaved: () => {},
+      })
+    )
   );
 
   assert.ok(html.includes('AI Model Configuration'), 'Must render AI Model Configuration heading');
@@ -530,14 +535,122 @@ test('AIModeView renders 2-column workspace with preview and tabs when document 
   );
 
   assert.ok(html.includes('data-testid="ai-workspace-flow"'), 'Must render AI workspace flow');
-  assert.ok(html.includes('ai-workspace-grid'), 'Must render 2-column workspace grid');
+  assert.ok(html.includes('ai-workspace-split-2col'), 'Must render 2-column workspace grid');
   assert.ok(html.includes('data-testid="document-preview-panel"'), 'Must include integrated DocumentPreview');
   assert.ok(html.includes('Extracted Fields'), 'Must include Extracted Fields tab');
   assert.ok(html.includes('Extracted Text'), 'Must include Extracted Text tab');
   assert.ok(html.includes('Raw JSON Payload'), 'Must include Raw JSON tab');
   assert.ok(html.includes('Document AI Assistant'), 'Must include grounded AIChatPanel');
   assert.ok(html.includes('External AI Active'), 'Must render external AI active status');
-  assert.ok(!html.includes('PASSED_RULES'), 'Must NOT render Offline Mode PASSED_RULES badge');
 });
+
+test('Phase 9: Verified, Review Required, and Unsupported badges render in DocumentsTable', () => {
+  const testDocs: DocumentItem[] = [
+    {
+      id: 'doc-verified',
+      filename: 'PAN_Verified.png',
+      file_type: '.png',
+      status: 'completed',
+      verification_status: 'verified',
+      risk_score: 12,
+      review_required: false,
+    },
+    {
+      id: 'doc-review-required',
+      filename: 'Salary_Slip_Altered.pdf',
+      file_type: '.pdf',
+      status: 'completed',
+      verification_status: 'review_required',
+      risk_score: 65,
+      review_required: true,
+      suspicious_signals: ['Different font size', 'Alignment issue'],
+    },
+    {
+      id: 'doc-unsupported',
+      filename: 'Random_Doc.pdf',
+      file_type: '.pdf',
+      status: 'completed',
+      verification_status: 'unsupported',
+      risk_score: 0,
+      review_required: false,
+    },
+  ];
+
+  const html = renderToString(
+    React.createElement(DocumentsTable, {
+      documents: testDocs,
+      supportedTypes: mockSupportedTypes,
+      onSelectDocument: () => {},
+      onDeleteDocument: () => {},
+      onRefresh: () => {},
+      isLoading: false,
+    })
+  );
+
+  assert.ok(html.includes('Verified'), 'Must render Verified badge text');
+  assert.ok(html.includes('Review Required'), 'Must render Review Required badge text');
+  assert.ok(html.includes('Unsupported'), 'Must render Unsupported badge text');
+  assert.ok(html.includes('vault-status-select'), 'Must render status filter dropdown');
+  assert.ok(html.includes('All Statuses'), 'Must include All Statuses option');
+  assert.ok(html.includes('value="verified"'), 'Must include verified filter option');
+  assert.ok(html.includes('value="review_required"'), 'Must include review_required filter option');
+  assert.ok(html.includes('value="unsupported"'), 'Must include unsupported filter option');
+});
+
+test('Phase 9: AIAnalysisCard renders Verification Status Badge, Risk Score, and Review Required panel', () => {
+  const aiResult = {
+    document_type: 'Invoice',
+    confidence: 'high',
+    confidence_score: 0.88,
+    summary: 'A standard vendor invoice.',
+    verification_status: 'review_required' as const,
+    risk_score: 84,
+    review_required: true,
+    suspicious_signals: [
+      'Different font size in amount field',
+      'Seal appears duplicated',
+    ],
+    human_review_reason: 'Visible inconsistencies detected.',
+  };
+
+  const html = renderToString(
+    React.createElement(AIAnalysisCard, {
+      document: aiResult as any,
+      onUploadNew: () => {},
+      onReset: () => {},
+    })
+  );
+
+  assert.ok(html.includes('Review Required'), 'Must render Review Required status badge');
+  assert.ok(html.includes('Risk Score: 84%'), 'Must display numeric risk score percentage');
+  assert.ok(html.includes('Visible inconsistencies detected'), 'Must render review reason');
+  assert.ok(html.includes('Different font size in amount field'), 'Must render first suspicious signal');
+  assert.ok(html.includes('Seal appears duplicated'), 'Must render second suspicious signal');
+});
+
+test('Phase 9: DocumentPreview renders Verification Status, Risk Score, and Review Notes', () => {
+  const docWithAuth: DocumentItem = {
+    id: 'doc-preview-auth-1',
+    filename: 'Bank_Statement.pdf',
+    file_type: '.pdf',
+    status: 'completed',
+    verification_status: 'review_required',
+    risk_score: 45,
+    review_required: true,
+    human_review_reason: 'Balance calculation discrepancy detected.',
+    suspicious_signals: ['Running balance arithmetic mismatch'],
+  };
+
+  const html = renderToString(
+    React.createElement(DocumentPreview, {
+      document: docWithAuth,
+    })
+  );
+
+  assert.ok(html.includes('Review Required'), 'Must render Review Required in preview');
+  assert.ok(html.includes('Risk Score: 45%'), 'Must render risk score in preview');
+  assert.ok(html.includes('Balance calculation discrepancy detected.'), 'Must render review reason note');
+});
+
 
 

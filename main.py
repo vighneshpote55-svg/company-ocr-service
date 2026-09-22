@@ -96,6 +96,7 @@ from security import (
     validate_security_configuration,
     verify_client_credentials,
 )
+from auth_dependencies import get_current_user, UserProfile
 from verifier import (
     check_doc_type_mismatch,
     classify_document_content,
@@ -107,6 +108,7 @@ from verifier import (
     validate_document_checksums,
     DOC_TYPE_METADATA,
 )
+from authenticity_checker import authenticity_manager
 
 # Configuration & Constants
 TEMP_DIR = os.getenv("OCR_TEMP_DIR", os.path.join(tempfile.gettempdir(), "company_ocr_temp"))
@@ -1122,7 +1124,7 @@ async def get_supported_types():
 
 @app.get("/api/auth/me")
 async def get_auth_me_endpoint(
-    auth: dict = Depends(authenticate_request),
+    auth: UserProfile = Depends(get_current_user),
 ):
     """
     Returns current authenticated user identity and role from Supabase Auth & profiles.
@@ -1415,13 +1417,71 @@ async def delete_document_endpoint(
     return {"success": True, "id": doc_id, "message": "Document deleted successfully"}
 
 
+def persist_document(
+    file_bytes: bytes,
+    filename: str,
+    result_data: Dict[str, Any],
+    thumbnail_bytes: Optional[bytes] = None,
+    user_id: Optional[str] = None,
+    mode: str = "offline",
+) -> Dict[str, Any]:
+    """
+    Persist document record:
+    - If Supabase is configured and user_id is present: writes to Supabase PostgreSQL & Private Storage via document_repository.
+    - If Supabase write fails: raises HTTPException 503 (Fail-Fast as per user decision).
+    - Otherwise: writes to local encrypted document_store.
+    """
+    user_id = user_id or os.getenv("DEFAULT_DEV_USER_ID", "00000000-0000-0000-0000-000000000001")
+    ext = os.path.splitext(filename)[1].lower() or ".bin"
+
+    if supabase_client.is_supabase_configured() and user_id:
+        try:
+            return document_repository.create_document(
+                user_id=user_id,
+                original_filename=filename,
+                file_bytes=file_bytes,
+                file_type=ext,
+                doc_type=result_data.get("doc_type") or result_data.get("document_type"),
+                mode=mode,
+                status=result_data.get("status", "completed"),
+                ocr_result={
+                    "raw_text": result_data.get("extracted_text", ""),
+                    "detected_type": result_data.get("doc_type"),
+                    "confidence": result_data.get("confidence", 1.0),
+                    "page_count": result_data.get("pages", 1),
+                },
+                extracted_fields=result_data.get("extracted_fields") or result_data.get("fields", {}),
+                ai_analysis=result_data.get("ai_analysis"),
+                verification_status=result_data.get("verification_status") or result_data.get("status"),
+                review_required=result_data.get("review_required", False),
+                risk_score=result_data.get("risk_score", 0.0),
+                suspicious_signals=result_data.get("suspicious_signals", []),
+                human_review_reason=result_data.get("human_review_reason"),
+                verified_by_ai=result_data.get("verified_by_ai", False),
+            )
+        except Exception as ex:
+            logger.error(f"Failed to persist document to Supabase: {ex}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Database or storage service unavailable. Please try again.",
+            )
+
+    return document_store.save_document(
+        file_bytes=file_bytes,
+        filename=filename,
+        result_data=result_data,
+        thumbnail_bytes=thumbnail_bytes,
+        user_id=user_id,
+    )
+
+
 @app.post("/api/upload")
 async def upload_document_endpoint(
     file: UploadFile = File(...),
     mode: Optional[str] = Form("offline"),
     doc_type: Optional[str] = Form(None),
     expected_data: Optional[str] = Form(None),
-    auth: dict = Depends(authenticate_request),
+    auth: UserProfile = Depends(get_current_user),
     _rate_limit: None = Depends(rate_limit_upload),
 ):
     """
@@ -1495,6 +1555,17 @@ async def upload_document_endpoint(
                     merged_fields[k] = v
             ai_res["extracted_fields"] = merged_fields
 
+            # Authenticity Assessment (AI Mode)
+            ai_auth = ai_res.get("authenticity") or ai_res.get("authenticity_assessment")
+            authenticity = authenticity_manager.assess_document(
+                doc_type="ai_analyzed",
+                ocr_lines=doc_res.pages[0].lines if doc_res.pages else [],
+                extracted_fields=merged_fields,
+                raw_text=extracted_text,
+                ai_authenticity_result=ai_auth,
+                is_supported=True,
+            )
+
             result_payload = {
                 "doc_type": "ai_analyzed",
                 "document_type": ai_res.get("document_type", "Unknown Document"),
@@ -1508,14 +1579,21 @@ async def upload_document_endpoint(
                 "field_confidences": {},
                 "extracted_text": extracted_text,
                 "ai_analysis": ai_res,
+                "verification_status": authenticity["verification_status"],
+                "risk_score": authenticity["risk_score"],
+                "review_required": authenticity["review_required"],
+                "suspicious_signals": authenticity["suspicious_signals"],
+                "human_review_reason": authenticity["human_review_reason"],
+                "verified_by_ai": True,
             }
 
-            saved_record = document_store.save_document(
+            saved_record = persist_document(
                 file_bytes=file_bytes,
                 filename=filename,
                 result_data=result_payload,
                 thumbnail_bytes=thumb_bytes,
                 user_id=auth.get("user_id") or auth.get("sub"),
+                mode="ai",
             )
 
             logging_utils.log_event(
@@ -1526,6 +1604,8 @@ async def upload_document_endpoint(
                 ocr_engine="RapidOCR",
                 ai_model="qwen2.5vl:3b",
                 processing_time_ms=int((time.time() - req_start) * 1000),
+                verification_status=authenticity["verification_status"],
+                risk_score=authenticity["risk_score"],
                 status="success",
             )
 
@@ -1547,6 +1627,12 @@ async def upload_document_endpoint(
                 "processing_time_seconds": ai_res.get("processing_time_seconds"),
                 "model_used": ai_res.get("model_used", "qwen2.5vl:3b"),
                 "is_local_ai": True,
+                "verification_status": authenticity["verification_status"],
+                "risk_score": authenticity["risk_score"],
+                "review_required": authenticity["review_required"],
+                "suspicious_signals": authenticity["suspicious_signals"],
+                "human_review_reason": authenticity["human_review_reason"],
+                "verified_by_ai": True,
             }
 
         # ====================================================================
@@ -1727,7 +1813,26 @@ async def upload_document_endpoint(
         else:
             sanitized_fields = {"document_type": "Unknown Document"}
 
-        # 5. Determine Overall Status
+        # 5. Authenticity Assessment (Offline Mode)
+        qr_fields = {}
+        if first_page_img:
+            try:
+                qrs = decode_qr_from_image(first_page_img)
+                for q in qrs:
+                    qr_fields.update(parse_qr_payload(resolved_type, q))
+            except Exception:
+                pass
+
+        authenticity = authenticity_manager.assess_document(
+            doc_type=resolved_type,
+            image=first_page_img,
+            ocr_lines=doc_res.pages[0].lines if doc_res.pages else [],
+            extracted_fields=raw_fields,
+            raw_text=doc_res.full_text,
+            qr_fields=qr_fields,
+            is_supported=(resolved_type != "unknown"),
+        )
+
         doc_status = determine_document_status(
             checksum_valid=checksum_valid,
             average_confidence=doc_res.average_confidence,
@@ -1756,15 +1861,22 @@ async def upload_document_endpoint(
             "checksum_valid": checksum_valid,
             "checksum_reason": checksum_reason,
             "cross_check": cross_check_results,
+            "verification_status": authenticity["verification_status"],
+            "risk_score": authenticity["risk_score"],
+            "review_required": authenticity["review_required"],
+            "suspicious_signals": authenticity["suspicious_signals"],
+            "human_review_reason": authenticity["human_review_reason"],
+            "verified_by_ai": False,
         }
 
         # 8. Persist to Document Store
-        saved_record = document_store.save_document(
+        saved_record = persist_document(
             file_bytes=file_bytes,
             filename=filename,
             result_data=result_payload,
             thumbnail_bytes=thumb_bytes,
             user_id=auth.get("user_id") or auth.get("sub"),
+            mode="offline",
         )
 
         logging_utils.log_event(
@@ -1775,6 +1887,8 @@ async def upload_document_endpoint(
             ocr_engine="RapidOCR",
             ai_model="none",
             processing_time_ms=int((time.time() - req_start) * 1000),
+            verification_status=authenticity["verification_status"],
+            risk_score=authenticity["risk_score"],
             status="success",
         )
 
@@ -1922,7 +2036,7 @@ async def process_offline_mode_endpoint(
     file: UploadFile = File(...),
     doc_type: Optional[str] = Form(None),
     expected_data: Optional[str] = Form(None),
-    auth: dict = Depends(authenticate_request),
+    auth: UserProfile = Depends(get_current_user),
     _rate_limit: None = Depends(rate_limit_upload),
 ):
     """
@@ -2027,6 +2141,10 @@ async def process_offline_mode_endpoint(
             # 100% OCR is performed, text preserved, thumbnail generated, and stored in Document Vault
             thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
             doc_status = "low_confidence" if doc_res.average_confidence < 0.6 else "completed"
+            authenticity = authenticity_manager.assess_document(
+                doc_type="unknown",
+                is_supported=False,
+            )
             result_payload = {
                 "doc_type": "unknown",
                 "document_type": "Unknown Document",
@@ -2048,17 +2166,29 @@ async def process_offline_mode_endpoint(
                 "cross_check": None,
                 "ocr_completed": True,
                 "message": "Offline OCR completed successfully. Use AI Mode for detailed document understanding.",
+                "verification_status": "unsupported",
+                "risk_score": 0,
+                "review_required": False,
+                "suspicious_signals": [],
+                "human_review_reason": "Unsupported document type.",
+                "verified_by_ai": False,
             }
-            saved_record = document_store.save_document(
+            saved_record = persist_document(
                 file_bytes=file_bytes,
                 filename=filename,
                 result_data=result_payload,
                 thumbnail_bytes=thumb_bytes,
                 user_id=auth.get("user_id") or auth.get("sub"),
+                mode="offline",
             )
             saved_record["supported"] = True
             saved_record["ocr_completed"] = True
             saved_record["message"] = "Offline OCR completed successfully. Use AI Mode for detailed document understanding."
+            saved_record["verification_status"] = "unsupported"
+            saved_record["risk_score"] = 0
+            saved_record["review_required"] = False
+            saved_record["suspicious_signals"] = []
+            saved_record["human_review_reason"] = "Unsupported document type."
             logging_utils.log_event(
                 logger,
                 logging.INFO,
@@ -2067,6 +2197,8 @@ async def process_offline_mode_endpoint(
                 ocr_engine="RapidOCR",
                 ai_model="none",
                 processing_time_ms=int((time.time() - req_start) * 1000),
+                verification_status="unsupported",
+                risk_score=0,
                 status="success",
             )
             return saved_record
@@ -2149,6 +2281,26 @@ async def process_offline_mode_endpoint(
             checksum_valid = False
             checksum_reason = f"Extraction error: {str(ex)}"
 
+        # 5. Authenticity Assessment
+        qr_fields = {}
+        if first_page_img:
+            try:
+                qrs = decode_qr_from_image(first_page_img)
+                for q in qrs:
+                    qr_fields.update(parse_qr_payload(resolved_type, q))
+            except Exception:
+                pass
+
+        authenticity = authenticity_manager.assess_document(
+            doc_type=resolved_type,
+            image=first_page_img,
+            ocr_lines=doc_res.pages[0].lines if doc_res.pages else [],
+            extracted_fields=raw_fields,
+            raw_text=doc_res.full_text,
+            qr_fields=qr_fields,
+            is_supported=True,
+        )
+
         doc_status = determine_document_status(
             checksum_valid=checksum_valid,
             average_confidence=doc_res.average_confidence,
@@ -2175,17 +2327,30 @@ async def process_offline_mode_endpoint(
             "checksum_valid": checksum_valid,
             "checksum_reason": checksum_reason,
             "cross_check": cross_check_results,
+            "verification_status": authenticity["verification_status"],
+            "risk_score": authenticity["risk_score"],
+            "review_required": authenticity["review_required"],
+            "suspicious_signals": authenticity["suspicious_signals"],
+            "human_review_reason": authenticity["human_review_reason"],
+            "verified_by_ai": False,
         }
 
-        saved_record = document_store.save_document(
+        saved_record = persist_document(
             file_bytes=file_bytes,
             filename=filename,
             result_data=result_payload,
             thumbnail_bytes=thumb_bytes,
             user_id=auth.get("user_id") or auth.get("sub"),
+            mode="offline",
         )
         saved_record["supported"] = True
         saved_record["ocr_completed"] = True
+        saved_record["verification_status"] = authenticity["verification_status"]
+        saved_record["risk_score"] = authenticity["risk_score"]
+        saved_record["review_required"] = authenticity["review_required"]
+        saved_record["suspicious_signals"] = authenticity["suspicious_signals"]
+        saved_record["human_review_reason"] = authenticity["human_review_reason"]
+        saved_record["verified_by_ai"] = False
         logging_utils.log_event(
             logger,
             logging.INFO,
@@ -2194,6 +2359,8 @@ async def process_offline_mode_endpoint(
             ocr_engine="RapidOCR",
             ai_model="none",
             processing_time_ms=int((time.time() - req_start) * 1000),
+            verification_status=authenticity["verification_status"],
+            risk_score=authenticity["risk_score"],
             status="success",
         )
         return saved_record
@@ -2209,7 +2376,7 @@ async def process_offline_mode_endpoint(
 @app.post("/api/mode/ai/analyze")
 async def process_ai_analyze_endpoint(
     file: UploadFile = File(...),
-    auth: dict = Depends(authenticate_request),
+    auth: UserProfile = Depends(get_current_user),
     _rate_limit: None = Depends(rate_limit_upload),
 ):
     """
@@ -2273,6 +2440,42 @@ async def process_ai_analyze_endpoint(
         thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
         evidence_list = ai_res.get("evidence") or ai_res.get("reasoning", [])
 
+        # Authenticity Assessment (AI Mode Analyze)
+        first_page_img: Optional[Image.Image] = None
+        if doc_res.pages and doc_res.pages[0].image:
+            first_page_img = doc_res.pages[0].image
+        elif ext == ".pdf":
+            pdf_imgs = render_pdf_pages_to_images(temp_path)
+            if pdf_imgs:
+                first_page_img = pdf_imgs[0]
+        else:
+            try:
+                with Image.open(temp_path) as img:
+                    first_page_img = img.convert("RGB").copy()
+            except Exception:
+                pass
+
+        qr_fields = {}
+        if first_page_img:
+            try:
+                qrs = decode_qr_from_image(first_page_img)
+                for q in qrs:
+                    qr_fields.update(parse_qr_payload("auto", q))
+            except Exception:
+                pass
+
+        ai_auth = ai_res.get("authenticity") or ai_res.get("authenticity_assessment")
+        authenticity = authenticity_manager.assess_document(
+            doc_type="ai_analyzed",
+            image=first_page_img,
+            ocr_lines=doc_res.pages[0].lines if doc_res.pages else [],
+            extracted_fields=ai_res.get("extracted_fields", {}),
+            raw_text=extracted_text,
+            qr_fields=qr_fields,
+            ai_authenticity_result=ai_auth,
+            is_supported=True,
+        )
+
         result_payload = {
             "doc_type": "ai_analyzed",
             "document_type": ai_res.get("document_type", "Unknown Document"),
@@ -2289,6 +2492,12 @@ async def process_ai_analyze_endpoint(
             "evidence": evidence_list,
             "is_local_ai": ai_res.get("is_local_ai", True),
             "model_used": ai_res.get("model_used", "qwen2.5vl:3b"),
+            "verification_status": authenticity["verification_status"],
+            "risk_score": authenticity["risk_score"],
+            "review_required": authenticity["review_required"],
+            "suspicious_signals": authenticity["suspicious_signals"],
+            "human_review_reason": authenticity["human_review_reason"],
+            "verified_by_ai": True,
             "ai_analysis": {
                 "document_type": ai_res.get("document_type", "Unknown Document"),
                 "confidence": ai_res.get("confidence", "high"),
@@ -2297,15 +2506,21 @@ async def process_ai_analyze_endpoint(
                 "extracted_fields": ai_res.get("extracted_fields", {}),
                 "is_local_ai": ai_res.get("is_local_ai", True),
                 "model_used": ai_res.get("model_used", "qwen2.5vl:3b"),
+                "verification_status": authenticity["verification_status"],
+                "risk_score": authenticity["risk_score"],
+                "review_required": authenticity["review_required"],
+                "suspicious_signals": authenticity["suspicious_signals"],
+                "human_review_reason": authenticity["human_review_reason"],
             },
         }
 
-        saved_record = document_store.save_document(
+        saved_record = persist_document(
             file_bytes=file_bytes,
             filename=filename,
             result_data=result_payload,
             thumbnail_bytes=thumb_bytes,
             user_id=auth.get("user_id") or auth.get("sub"),
+            mode="ai",
         )
         if saved_record.get("ai_analysis"):
             saved_record["ai_analysis"]["document_id"] = saved_record["id"]
@@ -2322,6 +2537,8 @@ async def process_ai_analyze_endpoint(
             ai_provider="ollama" if is_local else "external",
             ai_model=used_model,
             processing_time_ms=int((time.time() - req_start) * 1000),
+            verification_status=authenticity["verification_status"],
+            risk_score=authenticity["risk_score"],
             status="success",
         )
 
@@ -2342,6 +2559,12 @@ async def process_ai_analyze_endpoint(
             "extracted_text": extracted_text,
             "is_local_ai": is_local,
             "model_used": used_model,
+            "verification_status": authenticity["verification_status"],
+            "risk_score": authenticity["risk_score"],
+            "review_required": authenticity["review_required"],
+            "suspicious_signals": authenticity["suspicious_signals"],
+            "human_review_reason": authenticity["human_review_reason"],
+            "verified_by_ai": True,
         }
 
     finally:
@@ -2355,7 +2578,7 @@ async def process_ai_analyze_endpoint(
 @app.post("/api/mode/ai/chat")
 async def process_ai_chat_endpoint(
     payload: AiChatPayload,
-    auth: dict = Depends(authenticate_request),
+    auth: UserProfile = Depends(get_current_user),
     _rate_limit: None = Depends(rate_limit_ai_chat),
 ):
     """

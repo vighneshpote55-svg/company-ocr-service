@@ -10,6 +10,7 @@ import {
 import type { DocumentItem, SupportedType, DashboardStats as StatsType, EngineInfo, AppMode, AIProviderConfig } from './types';
 import { normalizeAiDocument } from './types';
 import { api } from './services/api';
+import { supabase } from './services/supabaseClient';
 import { DashboardLayout } from './components/DashboardLayout';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import type { NavTab } from './components/Sidebar';
@@ -25,6 +26,7 @@ import type { ToastMessage } from './components/Toast';
 import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
+import { AuthLayout } from './components/AuthLayout';
 import { LoginPage } from './components/auth/LoginPage';
 import { RegisterPage } from './components/auth/RegisterPage';
 import { ForgotPasswordPage } from './components/auth/ForgotPasswordPage';
@@ -122,6 +124,21 @@ const DashboardApp: React.FC = () => {
 
   useEffect(() => {
     const unsubscribeAuth = api.onUnauthorized(async () => {
+      // Before signing out, verify if a valid Supabase session exists and attempt refresh
+      if (supabase) {
+        try {
+          const { data } = await supabase.auth.getSession();
+          if (data?.session) {
+            const { data: refreshData, error } = await supabase.auth.refreshSession();
+            if (!error && refreshData.session?.access_token) {
+              api.setToken(refreshData.session.access_token);
+              return; // Session restored, do not sign out!
+            }
+          }
+        } catch {
+          // Fall through to logout
+        }
+      }
       await authLogout();
       addToast('Session expired or unauthorized. Please sign in again.', 'info');
     });
@@ -399,10 +416,12 @@ export const App: React.FC = () => {
       <BrowserRouter>
         <AuthProvider>
           <Routes>
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/register" element={<RegisterPage />} />
-            <Route path="/forgot-password" element={<ForgotPasswordPage />} />
-            <Route path="/reset-password" element={<ResetPasswordPage />} />
+            <Route element={<AuthLayout />}>
+              <Route path="/login" element={<LoginPage />} />
+              <Route path="/register" element={<RegisterPage />} />
+              <Route path="/forgot-password" element={<ForgotPasswordPage />} />
+              <Route path="/reset-password" element={<ResetPasswordPage />} />
+            </Route>
             <Route
               path="/*"
               element={

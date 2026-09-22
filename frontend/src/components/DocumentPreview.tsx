@@ -8,6 +8,9 @@ import {
   RotateCcw,
   Image as ImageIcon,
   AlertCircle,
+  AlertTriangle,
+  CheckCircle2,
+  HelpCircle,
   Loader2,
   FileCheck,
 } from 'lucide-react';
@@ -32,6 +35,13 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
   const ext = (filename.includes('.') ? filename.slice(filename.lastIndexOf('.')).toLowerCase() : (document?.file_type || '')).toLowerCase();
   const isPdf = ext === '.pdf';
   const isImage = ['.png', '.jpg', '.jpeg', '.webp'].includes(ext);
+
+  // Authenticity & Verification status
+  const verifStatus = document?.verification_status || (document?.review_required ? 'review_required' : (document?.status === 'warning' || document?.status === 'low_confidence' ? 'review_required' : 'verified'));
+  const riskScore = typeof document?.risk_score === 'number' ? document.risk_score : (verifStatus === 'review_required' ? 45 : 0);
+  const isReviewRequired = verifStatus === 'review_required' || Boolean(document?.review_required);
+  const isUnsupported = verifStatus === 'unsupported';
+  const reviewNotes = document?.human_review_reason || (isReviewRequired ? 'Visible inconsistencies detected.' : null);
 
   // Authenticated endpoints through ApiService
   const fileUrl = docId ? api.getFileUrl(docId) : '';
@@ -253,19 +263,45 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
           borderTop: '1px solid var(--border-subtle)',
           backgroundColor: 'var(--bg-surface)',
           display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'center',
+          flexDirection: 'column',
+          gap: '0.4rem',
           fontSize: '0.75rem',
           color: 'var(--text-muted)',
         }}
       >
-        <span>
-          Format: <strong style={{ textTransform: 'uppercase' }}>{(ext || '.bin').replace('.', '').toUpperCase()}</strong>
-          {isPdf && ` • ${pageCount} ${pageCount === 1 ? 'Page' : 'Pages'}`}
-        </span>
-        <span>
-          Storage ID: <code style={{ fontFamily: 'var(--font-mono)' }}>{docId.slice(0, 8)}...</code>
-        </span>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.5rem' }}>
+          <span>
+            Format: <strong style={{ textTransform: 'uppercase' }}>{(ext || '.bin').replace('.', '').toUpperCase()}</strong>
+            {isPdf && ` • ${pageCount} ${pageCount === 1 ? 'Page' : 'Pages'}`}
+          </span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            {/* Verification Status Badge */}
+            {isReviewRequired ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.15rem 0.5rem', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 600, backgroundColor: 'rgba(249, 115, 22, 0.15)', color: '#fb923c' }}>
+                <AlertTriangle size={11} />
+                <span>{`Review Required • Risk Score: ${riskScore}%`}</span>
+              </span>
+            ) : isUnsupported ? (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.15rem 0.5rem', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 600, backgroundColor: 'rgba(148, 163, 184, 0.15)', color: '#94a3b8' }}>
+                <HelpCircle size={11} />
+                <span>Unsupported</span>
+              </span>
+            ) : (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '0.3rem', padding: '0.15rem 0.5rem', borderRadius: '12px', fontSize: '0.7rem', fontWeight: 600, backgroundColor: 'rgba(34, 197, 94, 0.15)', color: '#4ade80' }}>
+                <CheckCircle2 size={11} />
+                <span>{`Verified • Risk Score: ${riskScore}%`}</span>
+              </span>
+            )}
+            <span>
+              ID: <code style={{ fontFamily: 'var(--font-mono)' }}>{docId.slice(0, 8)}...</code>
+            </span>
+          </div>
+        </div>
+        {reviewNotes && isReviewRequired && (
+          <div style={{ fontSize: '0.72rem', color: '#fb923c', backgroundColor: 'rgba(249, 115, 22, 0.08)', padding: '0.3rem 0.6rem', borderRadius: '4px' }}>
+            <strong>Review Notes:</strong> {reviewNotes}
+          </div>
+        )}
       </div>
     </div>
   );

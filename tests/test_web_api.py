@@ -29,7 +29,9 @@ from security import create_access_token
 @pytest.fixture(autouse=True)
 def reset_app_security(monkeypatch):
     import main
+    import supabase_client
     main._startup_security_error = None
+    monkeypatch.setattr(supabase_client, "is_supabase_configured", lambda: False)
     monkeypatch.delenv("AUTH_ENABLED", raising=False)
     monkeypatch.setenv("AUTH_MODE", "disabled")
     monkeypatch.delenv("JWT_SECRET", raising=False)

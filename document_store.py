@@ -138,6 +138,10 @@ def get_canonical_analysis(doc_id: Optional[str] = None) -> Optional[Dict[str, A
         "summary": doc.get("summary") or (doc.get("ai_analysis") or {}).get("summary") or "",
         "evidence": doc.get("evidence") or (doc.get("ai_analysis") or {}).get("evidence") or [],
         "extracted_fields": canonical_fields,
+        "verification_status": doc.get("verification_status") or "verified",
+        "risk_score": doc.get("risk_score") or 0,
+        "suspicious_signals": doc.get("suspicious_signals") or [],
+        "human_review_reason": doc.get("human_review_reason"),
     }
 
 
@@ -253,6 +257,12 @@ def save_document(
         "confidence": result_data.get("confidence", 1.0),
         "pages": result_data.get("pages", 1),
         "reason": result_data.get("reason"),
+        "verification_status": result_data.get("verification_status") or "verified",
+        "review_required": bool(result_data.get("review_required", False)),
+        "risk_score": float(result_data.get("risk_score") or 0),
+        "suspicious_signals": result_data.get("suspicious_signals") or [],
+        "human_review_reason": result_data.get("human_review_reason"),
+        "verified_by_ai": bool(result_data.get("verified_by_ai", False)),
         "checksum_valid": result_data.get("checksum_valid", False if result_data.get("status") == "warning" else True),
         "checksum_reason": result_data.get("checksum_reason", result_data.get("reason")),
         "cross_check": result_data.get("cross_check"),
