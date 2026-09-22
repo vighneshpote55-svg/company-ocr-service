@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional
 import logging_utils
 
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv(override=True)
 
 logger = logging_utils.get_logger("company_server_ocr.supabase")
 

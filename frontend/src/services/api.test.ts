@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { ApiService, normalizeOpenRouterConfig } from './api.ts';
+import { normalizeAiDocument } from '../types.ts';
 
 test('ApiService handles authDisabled state correctly', async () => {
   const api = new ApiService();
@@ -317,6 +318,127 @@ test('normalizeOpenRouterConfig extracts model from openrouter webpage URL', () 
   assert.equal(res.baseUrl, 'https://openrouter.ai/api/v1');
   assert.equal(res.model, 'nvidia/nemotron-3-ultra-550b-a55b:free');
 });
+
+test('ApiService getDocumentFile attaches Bearer token and returns Blob', async () => {
+  const api = new ApiService();
+  api.setAuthEnabled(true, 'jwt');
+  api.setToken('mock-preview-jwt');
+
+  let capturedUrl = '';
+  let capturedHeaders: Record<string, string> = {};
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedHeaders = opts?.headers || {};
+    return {
+      status: 200,
+      ok: true,
+      blob: async () => new Blob(['%PDF-1.4 mock pdf content'], { type: 'application/pdf' }),
+    } as any;
+  };
+
+  try {
+    const blob = await api.getDocumentFile('doc_preview_123');
+    assert.equal(capturedUrl, 'http://localhost:8000/api/documents/doc_preview_123/file');
+    assert.equal(capturedHeaders['Authorization'], 'Bearer mock-preview-jwt');
+    assert.equal(blob.type, 'application/pdf');
+    assert.ok(blob.size > 0);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ApiService getThumbnail attaches Bearer token and returns Blob', async () => {
+  const api = new ApiService();
+  api.setAuthEnabled(true, 'jwt');
+  api.setToken('mock-thumb-jwt');
+
+  let capturedUrl = '';
+  let capturedHeaders: Record<string, string> = {};
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url: any, opts: any) => {
+    capturedUrl = String(url);
+    capturedHeaders = opts?.headers || {};
+    return {
+      status: 200,
+      ok: true,
+      blob: async () => new Blob(['mock png bytes'], { type: 'image/png' }),
+    } as any;
+  };
+
+  try {
+    const blob = await api.getThumbnail('doc_thumb_123');
+    assert.equal(capturedUrl, 'http://localhost:8000/api/documents/doc_thumb_123/thumbnail');
+    assert.equal(capturedHeaders['Authorization'], 'Bearer mock-thumb-jwt');
+    assert.equal(blob.type, 'image/png');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('ApiService handles 401 by attempting session refresh and retrying once', async () => {
+  const api = new ApiService();
+  api.setAuthEnabled(true, 'jwt');
+  api.setToken('expired-initial-jwt');
+
+  let fetchCount = 0;
+  let headersHistory: any[] = [];
+  const originalFetch = globalThis.fetch;
+
+  // Mock handleAuthFailureAndRefresh
+  api.handleAuthFailureAndRefresh = async () => {
+    api.setToken('refreshed-new-jwt');
+    return 'refreshed-new-jwt';
+  };
+
+  globalThis.fetch = async (url: any, opts: any) => {
+    fetchCount++;
+    headersHistory.push({ ...(opts?.headers || {}) });
+    if (fetchCount === 1) {
+      return {
+        status: 401,
+        ok: false,
+        json: async () => ({ detail: 'Token expired' }),
+      } as any;
+    }
+    return {
+      status: 200,
+      ok: true,
+      json: async () => ({ id: 'doc_123', status: 'completed' }),
+    } as any;
+  };
+
+  try {
+    const doc = await api.getDocument('doc_123');
+    assert.equal(fetchCount, 2);
+    assert.equal(headersHistory[0]['Authorization'], 'Bearer expired-initial-jwt');
+    assert.equal(headersHistory[1]['Authorization'], 'Bearer refreshed-new-jwt');
+    assert.equal(doc.id, 'doc_123');
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
+
+test('normalizeAiDocument preserves OCR extracted text across all field formats', () => {
+  // Case 1: extracted_text present
+  const doc1 = normalizeAiDocument({ id: '1', filename: 'doc1.pdf', extracted_text: 'Hello world from OCR' });
+  assert.equal(doc1.extracted_text, 'Hello world from OCR');
+  assert.equal(doc1.raw_text, 'Hello world from OCR');
+
+  // Case 2: ocr_result.raw_text present
+  const doc2 = normalizeAiDocument({ id: '2', filename: 'doc2.pdf', ocr_result: { raw_text: 'Text inside ocr_result' } });
+  assert.equal(doc2.extracted_text, 'Text inside ocr_result');
+  assert.equal(doc2.raw_text, 'Text inside ocr_result');
+
+  // Case 3: ocr_text present
+  const doc3 = normalizeAiDocument({ id: '3', filename: 'doc3.pdf', ocr_text: 'Text in ocr_text' });
+  assert.equal(doc3.extracted_text, 'Text in ocr_text');
+
+  // Case 4: raw_text present
+  const doc4 = normalizeAiDocument({ id: '4', filename: 'doc4.pdf', raw_text: 'Text in raw_text' });
+  assert.equal(doc4.extracted_text, 'Text in raw_text');
+});
+
 
 
 

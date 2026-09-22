@@ -164,7 +164,7 @@ def create_document(
                         ocr_row = {
                             "document_id": doc_id,
                             "user_id": user_id,
-                            "raw_text": ocr_result.get("text", ""),
+                            "raw_text": ocr_result.get("raw_text") or ocr_result.get("text", ""),
                             "detected_type": doc_type,
                             "confidence": ocr_result.get("confidence") or 0.0,
                             "page_count": ocr_result.get("pages_processed") or ocr_result.get("page_count", 1),
@@ -358,6 +358,11 @@ def get_user_documents(
                     if row.get("ocr_results"):
                         ocr = row["ocr_results"]
                         item["ocr_result"] = ocr[0] if isinstance(ocr, list) and len(ocr) > 0 else ocr
+                        if isinstance(item["ocr_result"], dict):
+                            raw_ocr = item["ocr_result"].get("raw_text") or item["ocr_result"].get("text", "")
+                            item["extracted_text"] = raw_ocr
+                            item["raw_text"] = raw_ocr
+                            item["ocr_text"] = raw_ocr
                     if row.get("extracted_fields"):
                         ef = row["extracted_fields"]
                         item["extracted_fields"] = ef[0].get("fields", {}) if isinstance(ef, list) and len(ef) > 0 else ef.get("fields", {})
@@ -457,6 +462,10 @@ def get_user_document(user_id: str, document_id: str) -> Optional[Dict[str, Any]
                         item["ocr_result"] = ocr[0] if isinstance(ocr, list) and len(ocr) > 0 else ocr
                         if isinstance(item["ocr_result"], dict):
                             item["pages"] = item["ocr_result"].get("page_count", 1)
+                            raw_ocr = item["ocr_result"].get("raw_text") or item["ocr_result"].get("text", "")
+                            item["extracted_text"] = raw_ocr
+                            item["raw_text"] = raw_ocr
+                            item["ocr_text"] = raw_ocr
                     if row.get("extracted_fields"):
                         ef = row["extracted_fields"]
                         item["extracted_fields"] = ef[0].get("fields", {}) if isinstance(ef, list) and len(ef) > 0 else ef.get("fields", {})

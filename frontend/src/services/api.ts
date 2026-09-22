@@ -123,7 +123,8 @@ export class ApiService {
   private refreshPromise: Promise<string | null> | null = null;
 
   /**
-   * Retrieves current valid Supabase access token, falling back to cached token or apiKey.
+   * Retrieves current valid Supabase access token, falling back to cached token or refreshSession.
+   * Never reads tokens directly from localStorage.
    */
   public async getValidAccessToken(): Promise<string | null> {
     if (supabase) {
@@ -133,8 +134,14 @@ export class ApiService {
           this.token = data.session.access_token;
           return data.session.access_token;
         }
+        // Fallback: attempt refreshSession()
+        const { data: refreshData } = await supabase.auth.refreshSession();
+        if (refreshData.session?.access_token) {
+          this.token = refreshData.session.access_token;
+          return refreshData.session.access_token;
+        }
       } catch {
-        // Fall through
+        // Fall through to cached token
       }
     }
     const token = await getAccessToken();
@@ -477,6 +484,49 @@ export class ApiService {
     });
     if (!res.ok) throw new Error('Document not found');
     return res.json();
+  }
+
+  /**
+   * Fetches decrypted document file bytes as a Blob with Supabase Bearer JWT authentication.
+   */
+  public async getDocumentFile(docId: string): Promise<Blob> {
+    const res = await this.fetchWithAuth(this.getUrl(`/api/documents/${docId}/file`));
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to fetch document file' }));
+      throw new Error(err.detail || `Failed to fetch document file (HTTP ${res.status})`);
+    }
+    return res.blob();
+  }
+
+  /**
+   * Fetches document thumbnail preview bytes as a Blob with Supabase Bearer JWT authentication.
+   */
+  public async getThumbnail(docId: string): Promise<Blob> {
+    const res = await this.fetchWithAuth(this.getUrl(`/api/documents/${docId}/thumbnail`));
+    if (!res.ok) {
+      // Fallback to /preview endpoint
+      const previewRes = await this.fetchWithAuth(this.getUrl(`/api/documents/${docId}/preview`));
+      if (!previewRes.ok) {
+        throw new Error(`Failed to fetch thumbnail (HTTP ${res.status})`);
+      }
+      return previewRes.blob();
+    }
+    return res.blob();
+  }
+
+  /**
+   * Downloads decrypted document file securely using Bearer JWT.
+   */
+  public async downloadDocument(docId: string, filename?: string): Promise<void> {
+    const blob = await this.getDocumentFile(docId);
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = filename || `document_${docId}`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(blobUrl);
   }
 
   public async deleteDocument(docId: string): Promise<boolean> {

@@ -28,7 +28,7 @@ from pypdf import PdfReader
 
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 import ai_service
 import ollama_ai
@@ -1157,10 +1157,10 @@ async def list_documents_endpoint(
     status: Optional[str] = Query(None),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    auth: dict = Depends(authenticate_request),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Retrieve paginated list of documents owned exclusively by the authenticated user."""
-    user_id = auth.get("user_id") or auth.get("sub")
+    user_id = current_user.id
 
     if supabase_client.is_supabase_configured() and user_id:
         page = (offset // limit) + 1
@@ -1208,10 +1208,10 @@ async def list_documents_endpoint(
 @app.get("/api/documents/{doc_id}")
 async def get_document_endpoint(
     doc_id: str,
-    auth: dict = Depends(authenticate_request),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Retrieve details of a document, strictly verifying owner authorization."""
-    user_id = auth.get("user_id") or auth.get("sub")
+    user_id = current_user.id
 
     if supabase_client.is_supabase_configured() and user_id:
         doc = document_repository.get_user_document(user_id, doc_id)
@@ -1242,10 +1242,11 @@ async def get_document_endpoint(
 async def get_document_file_endpoint(
     doc_id: str,
     download: bool = Query(False),
-    auth: dict = Depends(authenticate_request),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Serve decrypted document bytes for owner inline preview or download."""
-    user_id = auth.get("user_id") or auth.get("sub")
+    req_start = time.time()
+    user_id = current_user.id
 
     if supabase_client.is_supabase_configured() and user_id:
         payload = document_repository.get_document_file_payload(user_id, doc_id)
@@ -1256,6 +1257,8 @@ async def get_document_file_endpoint(
             )
         decrypted_bytes, filename, media_type = payload
         disposition = "attachment" if download else "inline"
+        duration_ms = int((time.time() - req_start) * 1000)
+        logger.info(f"[DOC_FILE] user_id={user_id} document_id={doc_id} status=200 duration_ms={duration_ms}")
         return Response(
             content=decrypted_bytes,
             media_type=media_type,
@@ -1306,6 +1309,8 @@ async def get_document_file_endpoint(
     }
     media_type = media_types.get(ext, "application/octet-stream")
     disposition = "attachment" if download else "inline"
+    duration_ms = int((time.time() - req_start) * 1000)
+    logger.info(f"[DOC_FILE] user_id={user_id} document_id={doc_id} status=200 duration_ms={duration_ms}")
     return Response(
         content=decrypted_bytes,
         media_type=media_type,
@@ -1315,13 +1320,14 @@ async def get_document_file_endpoint(
     )
 
 
+@app.get("/api/documents/{doc_id}/thumbnail")
 @app.get("/api/documents/{doc_id}/preview")
 async def get_document_preview_endpoint(
     doc_id: str,
-    auth: dict = Depends(authenticate_request),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Serve the thumbnail image preview for owner only."""
-    user_id = auth.get("user_id") or auth.get("sub")
+    user_id = current_user.id
 
     # Verify document ownership first
     if supabase_client.is_supabase_configured() and user_id:
@@ -1346,20 +1352,45 @@ async def get_document_preview_endpoint(
             )
 
     preview_path = document_store.get_document_preview_path(doc_id)
-    if not preview_path or not os.path.exists(preview_path):
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Preview for document '{doc_id}' not found",
-        )
-    return FileResponse(preview_path, media_type="image/png")
+    if preview_path and os.path.exists(preview_path):
+        return FileResponse(preview_path, media_type="image/png")
+
+    # Fallback: if preview image is missing from local disk (e.g. Supabase storage), render on the fly from decrypted bytes
+    if supabase_client.is_supabase_configured() and user_id:
+        payload = document_repository.get_document_file_payload(user_id, doc_id)
+        if payload:
+            decrypted_bytes, filename, media_type = payload
+            if media_type.startswith("image/"):
+                try:
+                    img = Image.open(io.BytesIO(decrypted_bytes))
+                    img.thumbnail((300, 300))
+                    buf = io.BytesIO()
+                    img.save(buf, format="PNG")
+                    return Response(content=buf.getvalue(), media_type="image/png")
+                except Exception:
+                    return Response(content=decrypted_bytes, media_type=media_type)
+            elif media_type == "application/pdf":
+                try:
+                    doc_pdf = fitz.open(stream=decrypted_bytes, filetype="pdf")
+                    if len(doc_pdf) > 0:
+                        page = doc_pdf[0]
+                        pix = page.get_pixmap(dpi=100)
+                        return Response(content=pix.tobytes("png"), media_type="image/png")
+                except Exception:
+                    pass
+
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Preview for document '{doc_id}' not found",
+    )
 
 
 @app.delete("/api/documents/clear")
 async def clear_all_documents_endpoint(
-    auth: dict = Depends(authenticate_request),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Permanently delete all documents belonging exclusively to the authenticated user."""
-    user_id = auth.get("user_id") or auth.get("sub")
+    user_id = current_user.id
     if supabase_client.is_supabase_configured() and user_id:
         deleted_count = document_repository.clear_user_documents(user_id)
     else:
@@ -1388,10 +1419,10 @@ async def manual_cleanup_endpoint(
 @app.delete("/api/documents/{doc_id}")
 async def delete_document_endpoint(
     doc_id: str,
-    auth: dict = Depends(authenticate_request),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Permanently delete a document owned by the authenticated user."""
-    user_id = auth.get("user_id") or auth.get("sub")
+    user_id = current_user.id
     if supabase_client.is_supabase_configured() and user_id:
         deleted = document_repository.delete_user_document(user_id, doc_id)
     else:

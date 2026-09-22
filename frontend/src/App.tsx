@@ -294,7 +294,7 @@ const DashboardApp: React.FC = () => {
                 onClick={() => setInspectTab('text')}
               >
                 <FileText size={16} />
-                <span>Extracted Text ({selectedDoc.extracted_text?.length || 0} chars)</span>
+                <span>Extracted Text ({(selectedDoc.extracted_text || '').length.toLocaleString()} characters)</span>
               </button>
 
               <button

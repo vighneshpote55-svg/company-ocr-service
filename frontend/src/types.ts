@@ -62,6 +62,8 @@ export interface DocumentItem {
   raw_fields?: Record<string, any>;
   field_confidences: Record<string, number>;
   extracted_text: string;
+  raw_text?: string;
+  ocr_text?: string;
   checksum_valid?: boolean;
   checksum_reason?: string | null;
   cross_check?: {
@@ -126,6 +128,8 @@ export interface AiAnalysisResult {
   pages: number;
   text_source: string;
   extracted_text: string;
+  raw_text?: string;
+  ocr_text?: string;
   is_local_ai?: boolean;
   model_used?: string;
   processing_time_seconds?: number;
@@ -346,7 +350,33 @@ export function normalizeAiDocument(raw: any): DocumentItem & AiAnalysisResult {
     fields: extracted_fields,
     raw_fields: extracted_fields,
     field_confidences: (typeof raw.field_confidences === 'object' && raw.field_confidences !== null) ? raw.field_confidences : {},
-    extracted_text: typeof raw.extracted_text === 'string' ? raw.extracted_text : (raw.text || ''),
+    extracted_text: (
+      (typeof raw.extracted_text === 'string' && raw.extracted_text) ||
+      (typeof raw.raw_text === 'string' && raw.raw_text) ||
+      (typeof raw.ocr_text === 'string' && raw.ocr_text) ||
+      (typeof raw.text === 'string' && raw.text) ||
+      (typeof raw.ocr_result?.raw_text === 'string' && raw.ocr_result.raw_text) ||
+      (typeof raw.ocr_result?.text === 'string' && raw.ocr_result.text) ||
+      ''
+    ),
+    raw_text: (
+      (typeof raw.raw_text === 'string' && raw.raw_text) ||
+      (typeof raw.extracted_text === 'string' && raw.extracted_text) ||
+      (typeof raw.ocr_text === 'string' && raw.ocr_text) ||
+      (typeof raw.text === 'string' && raw.text) ||
+      (typeof raw.ocr_result?.raw_text === 'string' && raw.ocr_result.raw_text) ||
+      (typeof raw.ocr_result?.text === 'string' && raw.ocr_result.text) ||
+      ''
+    ),
+    ocr_text: (
+      (typeof raw.ocr_text === 'string' && raw.ocr_text) ||
+      (typeof raw.extracted_text === 'string' && raw.extracted_text) ||
+      (typeof raw.raw_text === 'string' && raw.raw_text) ||
+      (typeof raw.text === 'string' && raw.text) ||
+      (typeof raw.ocr_result?.raw_text === 'string' && raw.ocr_result.raw_text) ||
+      (typeof raw.ocr_result?.text === 'string' && raw.ocr_result.text) ||
+      ''
+    ),
     checksum_valid: raw.checksum_valid !== undefined ? Boolean(raw.checksum_valid) : undefined,
     checksum_reason: raw.checksum_reason || null,
     cross_check: raw.cross_check || null,

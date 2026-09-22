@@ -138,3 +138,85 @@ def test_ai_chat_requires_auth():
         json={"document_id": "test-doc-id", "message": "hello"},
     )
     assert res.status_code == 401
+
+
+def test_document_file_unauthenticated_returns_401():
+    res = client.get("/api/documents/some-doc-id/file")
+    assert res.status_code == 401
+    assert "Bearer JWT required" in res.json().get("detail", "")
+
+
+def test_document_file_authenticated_and_bytes_match():
+    user_id = "c80c0b46-3bc0-4c6f-9db0-741341f7ad32"
+    token = make_test_jwt(user_id, "vighneshpote.info@gmail.com", role="user")
+    png_bytes = _make_valid_png()
+
+    # Upload document
+    upload_res = client.post(
+        "/api/upload",
+        files={"file": ("pan.png", png_bytes, "image/png")},
+        data={"mode": "offline", "doc_type": "pan"},
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["id"]
+
+    # 1. Fetch file with valid auth
+    file_res = client.get(
+        f"/api/documents/{doc_id}/file",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert file_res.status_code == 200
+    assert file_res.headers["content-type"] == "image/png"
+    assert "inline" in file_res.headers.get("content-disposition", "")
+    assert file_res.content == png_bytes
+
+    # 2. Download endpoint with ?download=true
+    download_res = client.get(
+        f"/api/documents/{doc_id}/file?download=true",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert download_res.status_code == 200
+    assert "attachment" in download_res.headers.get("content-disposition", "")
+    assert download_res.content == png_bytes
+
+    # 3. Thumbnail / Preview endpoint
+    thumb_res = client.get(
+        f"/api/documents/{doc_id}/thumbnail",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert thumb_res.status_code == 200
+    assert thumb_res.headers["content-type"] == "image/png"
+
+
+def test_document_file_wrong_user_returns_404():
+    user_a = "c80c0b46-3bc0-4c6f-9db0-741341f7ad32"
+    user_b = "11111111-2222-3333-4444-555555555555"
+    token_a = make_test_jwt(user_a, "user_a@company.com", role="user")
+    token_b = make_test_jwt(user_b, "user_b@company.com", role="user")
+    png_bytes = _make_valid_png()
+
+    # User A uploads
+    upload_res = client.post(
+        "/api/upload",
+        files={"file": ("pan.png", png_bytes, "image/png")},
+        data={"mode": "offline", "doc_type": "pan"},
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert upload_res.status_code == 200
+    doc_id = upload_res.json()["id"]
+
+    # User B attempts to access User A's file -> 404
+    file_res = client.get(
+        f"/api/documents/{doc_id}/file",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert file_res.status_code == 404
+
+    # User B attempts to access User A's thumbnail -> 404
+    thumb_res = client.get(
+        f"/api/documents/{doc_id}/thumbnail",
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert thumb_res.status_code == 404
+

@@ -472,7 +472,7 @@ export const AIModeView: React.FC<AIModeViewProps> = ({
                     onClick={() => setActiveTab('text')}
                   >
                     <FileText size={16} />
-                    <span>Extracted Text ({(analyzedDoc.extracted_text || '').length} chars)</span>
+                    <span>Extracted Text ({(analyzedDoc.extracted_text || '').length.toLocaleString()} characters)</span>
                   </button>
 
                   <button

@@ -425,7 +425,7 @@ test('AIModeView reflects local config correctly when mode is local', () => {
   assert.ok(!html.includes('External AI Active'), 'Must NOT display External AI Active when mode is local');
 });
 
-test('DocumentPreview renders native PDF preview with decrypted endpoint', () => {
+test('DocumentPreview renders preview panel with filename, page count, and loading spinner', () => {
   const pdfDoc: DocumentItem = {
     id: 'pdf-doc-1234',
     filename: 'Customer_Agreement.pdf',
@@ -440,14 +440,13 @@ test('DocumentPreview renders native PDF preview with decrypted endpoint', () =>
   const html = renderToString(React.createElement(DocumentPreview, { document: pdfDoc }));
 
   assert.ok(html.includes('data-testid="document-preview-panel"'), 'Must render preview panel');
-  assert.ok(html.includes('/api/documents/pdf-doc-1234/file'), 'Must use authenticated decrypted file endpoint');
   assert.ok(html.includes('Customer_Agreement.pdf'), 'Must render document filename');
   assert.ok(html.includes('3 Pages'), 'Must display multi-page count');
-  assert.ok(html.includes('type="application/pdf"'), 'Must use native PDF object');
-  assert.ok(!html.includes('/api/documents/undefined/file'), 'Must NEVER produce undefined URL');
+  assert.ok(html.includes('Loading document preview...'), 'Must render loading overlay during authenticated blob retrieval');
+  assert.ok(!html.includes('Bearer JWT required'), 'Must never render raw 401 JSON error');
 });
 
-test('DocumentPreview renders image preview with zoom controls', () => {
+test('DocumentPreview renders image preview panel with format info and download button', () => {
   const imgDoc: DocumentItem = {
     id: 'img-doc-5678',
     filename: 'PAN_Card.png',
@@ -461,10 +460,46 @@ test('DocumentPreview renders image preview with zoom controls', () => {
 
   const html = renderToString(React.createElement(DocumentPreview, { document: imgDoc }));
 
-  assert.ok(html.includes('preview-img'), 'Must render image element');
-  assert.ok(html.includes('/api/documents/img-doc-5678/file'), 'Must use authenticated decrypted file endpoint');
-  assert.ok(html.includes('Zoom in'), 'Must include Zoom In button for images');
-  assert.ok(html.includes('Zoom out'), 'Must include Zoom Out button for images');
+  assert.ok(html.includes('data-testid="document-preview-panel"'), 'Must render preview panel');
+  assert.ok(html.includes('PAN_Card.png'), 'Must render filename');
+  assert.ok(html.includes('PNG'), 'Must display format');
+  assert.ok(html.includes('Download document file'), 'Must include download button');
+});
+
+test('DocumentPreview error state UI renders clean failure card without raw JSON', () => {
+  const brokenDoc: DocumentItem = {
+    id: 'broken-doc-id',
+    filename: 'Corrupted.pdf',
+    file_type: '.pdf',
+    status: 'completed',
+  };
+
+  const html = renderToString(React.createElement(DocumentPreview, { document: brokenDoc }));
+  assert.ok(html.includes('data-testid="document-preview-panel"'));
+  assert.ok(!html.includes('Authentication credentials were not provided'));
+  assert.ok(!html.includes('"detail":'));
+});
+
+test('OCR text is preserved when document preview is initialized or fails', () => {
+  const docWithOcr: DocumentItem = {
+    id: 'doc-with-ocr-1',
+    filename: 'PAN_With_OCR.pdf',
+    file_type: '.pdf',
+    status: 'completed',
+    extracted_text: 'INCOME TAX DEPARTMENT GOVT OF INDIA PERMANENT ACCOUNT NUMBER ABCDE1234F',
+    raw_text: 'INCOME TAX DEPARTMENT GOVT OF INDIA PERMANENT ACCOUNT NUMBER ABCDE1234F',
+    extracted_fields: { pan_number: 'ABCDE1234F' },
+  };
+
+  const normalized = normalizeAiDocument(docWithOcr);
+  assert.equal(normalized.extracted_text, 'INCOME TAX DEPARTMENT GOVT OF INDIA PERMANENT ACCOUNT NUMBER ABCDE1234F');
+  assert.equal(normalized.extracted_fields.pan_number, 'ABCDE1234F');
+  assert.ok(normalized.extracted_text.length > 0, 'Extracted text character count must not be 0');
+
+  // Preview component does NOT overwrite or erase OCR text
+  const previewHtml = renderToString(React.createElement(DocumentPreview, { document: normalized }));
+  assert.ok(previewHtml.includes('PAN_With_OCR.pdf'));
+  assert.equal(normalized.extracted_text.length, 71);
 });
 
 test('DocumentPreview handles missing or undefined document safely without crashing', () => {
