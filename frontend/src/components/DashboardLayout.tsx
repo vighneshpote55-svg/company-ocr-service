@@ -160,20 +160,18 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           onToggleTheme={toggleTheme}
         />
 
-        <main className="content-body">
+        <main className={`content-body ${currentTab === 'settings' ? 'content-body-settings' : ''}`}>
           {/* 1. Document Inspection Mode: strictly for Offline Mode verification */}
           {selectedDoc && inspectContent && mode === 'offline' ? (
             inspectContent
           ) : currentTab === 'settings' ? (
             /* Settings Full-Page System */
-            <div className="settings-page-wrapper mode-fade-enter">
-              <SettingsPage
-                onNotify={onNotify}
-                onRefreshAiConfig={onRefreshAiConfig}
-                stats={stats}
-                documents={documents}
-              />
-            </div>
+            <SettingsPage
+              onNotify={onNotify}
+              onRefreshAiConfig={onRefreshAiConfig}
+              stats={stats}
+              documents={documents}
+            />
           ) : currentTab === 'repository' ? (
             /* 2. Document Vault Full View */
             <div className="vault-view-wrapper mode-fade-enter">
