@@ -1033,6 +1033,29 @@ test('DocumentsTable renders real confidence and N/A for missing values without 
   assert.ok(html.includes('Showing <strong>1</strong> to <strong>3</strong> of <strong>3</strong> documents'));
 });
 
+test('DocumentsTable renders All Modes, All Document Types, and All Statuses filter options', () => {
+  const html = renderToString(
+    React.createElement(DocumentsTable, {
+      documents: mockThreeDocuments,
+      supportedTypes: mockSupportedTypes,
+      onSelectDocument: () => {},
+      onDeleteDocument: () => {},
+      onRefresh: () => {},
+    })
+  );
+
+  // Filter dropdowns exist
+  assert.ok(html.includes('All Modes'), 'Must have All Modes option');
+  assert.ok(html.includes('Offline (RapidOCR)'), 'Must have Offline option');
+  assert.ok(html.includes('AI Intelligence'), 'Must have AI Mode option');
+  assert.ok(html.includes('All Document Types'), 'Must have All Document Types option');
+  assert.ok(html.includes('All Statuses'), 'Must have All Statuses option');
+  assert.ok(html.includes('Verified (Green)'), 'Must have Verified status option');
+  assert.ok(html.includes('Review Required (Orange)'), 'Must have Review Required status option');
+  assert.ok(html.includes('Unsupported (Gray)'), 'Must have Unsupported status option');
+  assert.ok(html.includes('Failed (Red)'), 'Must have Failed status option');
+});
+
 
 
 

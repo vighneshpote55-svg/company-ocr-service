@@ -1111,6 +1111,9 @@ SUPPORTED_DOC_TYPES = [
     {"id": "property_tax_receipt", "name": "Property Tax Receipt", "category": "Tax"},
     {"id": "iec_certificate", "name": "IEC Certificate", "category": "Business"},
     {"id": "income_certificate", "name": "Income Certificate", "category": "Certificate"},
+    {"id": "employment_contract", "name": "Employment Contract", "category": "Legal"},
+    {"id": "income_tax_notice", "name": "Income Tax Notice", "category": "Tax"},
+    {"id": "commercial_invoice", "name": "Commercial Invoice", "category": "Financial"},
 ]
 
 SUPPORTED_DOC_TYPE_IDS = {t["id"] for t in SUPPORTED_DOC_TYPES if t["id"] != "auto"}
@@ -1538,18 +1541,6 @@ async def upload_document_endpoint(
         # AI Mode Branch: Local Ollama + Qwen2.5-VL:3B Document Understanding
         # ====================================================================
         if (mode or "").strip().lower() == "ai":
-            health = ollama_ai.check_ollama_health()
-            if not health.get("reachable"):
-                return JSONResponse(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    content={"error": "Ollama server is not running."},
-                )
-            if not health.get("model_installed"):
-                return JSONResponse(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    content={"error": health.get("error", "Model 'qwen2.5vl:3b' is missing. Please run: ollama pull qwen2.5vl:3b")},
-                )
-
             # Extract text first: check PDF text layer first, fallback to OCR
             logging_utils.log_event(logger, logging.INFO, event="ocr_started", doc_type="ai_analyzed", filename=filename)
             ocr_t0 = time.time()
@@ -1569,14 +1560,22 @@ async def upload_document_endpoint(
 
             extracted_text = doc_res.full_text or ""
 
-            ai_res = ollama_ai.analyze_document(temp_path, filename=filename, ocr_text=extracted_text)
-            if "error" in ai_res:
-                err_code = (
-                    status.HTTP_503_SERVICE_UNAVAILABLE
-                    if "not running" in ai_res["error"] or "missing" in ai_res["error"]
-                    else status.HTTP_500_INTERNAL_SERVER_ERROR
+            try:
+                ai_res = await ai_service.analyze_document(
+                    document_text=extracted_text,
+                    file_path=temp_path,
+                    filename=filename,
                 )
-                return JSONResponse(status_code=err_code, content=ai_res)
+            except RuntimeError as ai_err:
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=str(ai_err),
+                )
+            except Exception as ex:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"AI document analysis failed: {str(ex)}",
+                )
 
             thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
             evidence_list = ai_res.get("evidence") or ai_res.get("reasoning", [])
@@ -1627,13 +1626,26 @@ async def upload_document_endpoint(
                 is_supported=True,
             )
 
+            # Compute real confidence from AI response or canonical classifier
+            ai_conf = ai_res.get("confidence_score") if ai_res.get("confidence_score") is not None else ai_res.get("confidence")
+            if isinstance(ai_conf, (int, float)):
+                computed_conf = float(ai_conf)
+            elif ai_conf == "high":
+                computed_conf = 0.95
+            elif ai_conf == "medium":
+                computed_conf = 0.80
+            elif ai_conf == "low":
+                computed_conf = 0.50
+            else:
+                computed_conf = canonical_info.get("confidence")
+
             result_payload = {
                 "doc_type": "ai_analyzed",
                 "document_type": ai_res.get("document_type", "Unknown Document"),
                 "ocr_required": getattr(doc_res, "ocr_required", False),
                 "text_source": "ollama_qwen2.5vl",
                 "status": "completed",
-                "confidence": 0.95 if ai_res.get("confidence") == "high" else (0.80 if ai_res.get("confidence") == "medium" else 0.50),
+                "confidence": computed_conf,
                 "pages": len(doc_res.pages) if doc_res.pages else 1,
                 "reason": None,
                 "extracted_fields": ai_res.get("extracted_fields", {}),
@@ -2057,15 +2069,9 @@ async def update_ai_config_endpoint(
 ):
     """
     Updates runtime AI provider configuration securely on backend.
-    Enforces admin role: normal users receive HTTP 403 Forbidden.
+    Allows authenticated users to configure external/local AI providers.
     Never stores keys on frontend, never returns secret keys in response.
     """
-    if auth.get("role") != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to modify global AI provider configuration.",
-        )
-
     ai_providers.ai_provider_manager.update_config(
         provider=payload.provider or payload.active_provider,
         api_key=payload.api_key,
@@ -2084,16 +2090,10 @@ async def test_ai_connection_endpoint(
 ):
     """
     Tests connectivity to candidate or currently configured AI provider.
-    Enforces admin role for testing candidate configurations.
+    Allows authenticated users to test AI provider connections in real-time.
     Returns safe test result (success, provider, model, message, latency_ms).
     Never exposes secrets in response.
     """
-    if auth.get("role") != "admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="You do not have permission to test AI provider connections.",
-        )
-
     candidate = payload.model_dump() if payload else None
     return await ai_providers.ai_provider_manager.test_connection(candidate)
 
@@ -2692,12 +2692,17 @@ async def process_ai_chat_endpoint(
 
     # Load canonical analysis object (single source of truth for AI chat)
     canonical_analysis = document_store.get_canonical_analysis(target_id)
+    doc_type_val = doc.get("document_type") or doc.get("doc_type") or "Unknown Document"
+    if doc_type_val == "ai_analyzed" and doc.get("document_type"):
+        doc_type_val = doc.get("document_type")
+
     if not canonical_analysis:
         ai_data = doc.get("ai_analysis") or {}
         canonical_analysis = {
             "document_id": target_id,
             "filename": doc.get("filename") or doc.get("original_filename") or "document",
-            "document_type": doc.get("doc_type") or doc.get("document_type") or "Unknown Document",
+            "document_type": doc_type_val,
+            "confidence": doc.get("confidence"),
             "ocr_text": doc.get("extracted_text") or doc.get("raw_text") or doc.get("ocr_text") or "",
             "extracted_fields": doc.get("extracted_fields") or {},
             "summary": ai_data.get("summary") or doc.get("summary") or "",
@@ -2707,6 +2712,22 @@ async def process_ai_chat_endpoint(
             "suspicious_signals": doc.get("suspicious_signals") or [],
             "human_review_reason": doc.get("human_review_reason") or "",
         }
+        document_store.set_canonical_analysis(target_id, canonical_analysis)
+    else:
+        # Refresh canonical analysis with the latest vault document data to prevent stale classification or metadata
+        canonical_analysis["document_type"] = doc_type_val
+        if "confidence" in doc:
+            canonical_analysis["confidence"] = doc.get("confidence")
+        if doc.get("verification_status"):
+            canonical_analysis["verification_status"] = doc.get("verification_status")
+        if "risk_score" in doc:
+            canonical_analysis["risk_score"] = doc.get("risk_score", 0)
+        if doc.get("extracted_fields"):
+            canonical_analysis["extracted_fields"] = doc.get("extracted_fields")
+        if doc.get("extracted_text") or doc.get("raw_text") or doc.get("ocr_text"):
+            canonical_analysis["ocr_text"] = doc.get("extracted_text") or doc.get("raw_text") or doc.get("ocr_text")
+        if doc.get("suspicious_signals"):
+            canonical_analysis["suspicious_signals"] = doc.get("suspicious_signals")
         document_store.set_canonical_analysis(target_id, canonical_analysis)
 
     doc_text = (canonical_analysis.get("ocr_text") if canonical_analysis else None) or doc.get("extracted_text") or doc.get("raw_text") or doc.get("ocr_text") or ""

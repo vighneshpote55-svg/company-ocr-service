@@ -98,7 +98,7 @@ test('API keys are masked with type="password" to protect secrets', () => {
   assert.ok(passwordInputs && passwordInputs.length >= 4, 'Must have password inputs for provider API keys');
 });
 
-test('Non-admin users see "AI provider settings are managed by your administrator" notice', () => {
+test('Authenticated users have access to configure and save AI providers', () => {
   const html = renderToString(
     React.createElement(
       AuthProvider,
@@ -112,8 +112,12 @@ test('Non-admin users see "AI provider settings are managed by your administrato
   );
 
   assert.ok(
-    html.includes('AI provider settings are managed by your administrator'),
-    'Should inform non-admin users about administrator management'
+    html.includes('Activate &amp; Save') || html.includes('Activate & Save'),
+    'Authenticated users should have access to Activate & Save provider buttons'
+  );
+  assert.ok(
+    !html.includes('is-read-only'),
+    'Settings should not be locked in read-only mode'
   );
 });
 

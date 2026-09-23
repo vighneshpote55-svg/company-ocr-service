@@ -195,14 +195,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   };
 
   const handleTestAiConnection = async () => {
-    if (!isAdmin) {
-      setAiTestResult({
-        ok: false,
-        isWarning: true,
-        message: 'Connection test unavailable — administrator permission required.',
-      });
-      return;
-    }
     setIsTestingAi(true);
     setAiTestResult(null);
     try {
@@ -315,8 +307,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   };
 
   const handleSave = async () => {
-    if (!isAdmin) return;
-
     api.updateConfig({
       baseUrl,
       clientId,
@@ -401,11 +391,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
           >
             <Sparkles size={16} />
             <span>AI Configuration</span>
-            {isAdmin ? (
-              <span className="settings-role-tag admin">Admin</span>
-            ) : (
-              <span className="settings-role-tag user">Read Only</span>
-            )}
+            <span className={`settings-role-tag ${isAdmin ? 'admin' : 'user'}`}>
+              {isAdmin ? 'Admin' : 'User'}
+            </span>
           </button>
 
           <button
@@ -468,11 +456,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                           ? 'Connected'
                           : 'Not Tested'}
                       </span>
-                      {!isAdmin && (
-                        <span className="status-managed-pill">
-                          <Lock size={11} /> Managed by administrator
-                        </span>
-                      )}
                     </div>
                     <div className="status-banner-subtext">
                       {selectedProvider === 'local' && `Private air-gapped inference active on this device (offline & secure).${connectionLatency ? ` • ${connectionLatency}ms` : ''}`}
@@ -489,7 +472,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                     className="btn btn-secondary btn-sm test-connection-pill-btn"
                     onClick={handleTestAiConnection}
                     disabled={isTestingAi}
-                    title={!isAdmin ? 'Administrator permission required to test connections' : 'Test AI Model connectivity'}
+                    title="Test AI Model connectivity"
                   >
                     <RefreshCw size={13} className={isTestingAi ? 'spin-anim' : ''} />
                     <span>{isTestingAi ? 'Testing...' : 'Test AI Connection'}</span>
@@ -531,33 +514,15 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                       Primary reasoning model for document extraction and contextual analysis.
                     </p>
                   </div>
-                  {!isAdmin ? (
-                    <span className="settings-managed-tag">
-                      <Lock size={12} /> Managed by administrator
-                    </span>
-                  ) : (
-                    <span className="settings-endpoint-pill">AI Mode Engine</span>
-                  )}
+                  <span className="settings-endpoint-pill">AI Mode Engine</span>
                 </div>
-
-                {!isAdmin && (
-                  <div className="settings-admin-notice">
-                    <Lock size={15} />
-                    <span>AI provider settings are managed by your administrator.</span>
-                  </div>
-                )}
 
                 <div className="settings-two-col-grid">
                   <div className="settings-field-col">
                     <label className="settings-input-label" htmlFor="ai-provider-select">
                       Provider
-                      {!isAdmin && (
-                        <span className="settings-badge-read-only">
-                          <Lock size={10} style={{ marginRight: '3px' }} /> Read-only
-                        </span>
-                      )}
                     </label>
-                    <div className={`settings-input-wrapper ${!isAdmin ? 'is-read-only' : ''}`}>
+                    <div className="settings-input-wrapper">
                       <div className="settings-input-left-icon" aria-hidden="true">
                         <Bot size={18} />
                       </div>
@@ -565,7 +530,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                         id="ai-provider-select"
                         className="settings-input-field"
                         value={selectedProvider}
-                        disabled={!isAdmin}
                         onChange={(e) => {
                           const val = e.target.value as 'local' | 'openai' | 'openrouter' | 'custom';
                           setSelectedProvider(val);
@@ -632,13 +596,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                     <div className="settings-field-col">
                       <label className="settings-input-label" htmlFor="ai-model-input">
                         Model
-                        {!isAdmin && (
-                          <span className="settings-badge-read-only">
-                            <Lock size={10} style={{ marginRight: '3px' }} /> Read-only
-                          </span>
-                        )}
                       </label>
-                      <div className={`settings-input-wrapper ${!isAdmin ? 'is-read-only' : ''}`}>
+                      <div className="settings-input-wrapper">
                         <div className="settings-input-left-icon" aria-hidden="true">
                           <Cpu size={18} />
                         </div>
@@ -647,7 +606,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                           type="text"
                           className="settings-input-field"
                           value={aiModel}
-                          disabled={!isAdmin}
                           onChange={(e) => setAiModel(e.target.value)}
                           placeholder={
                             selectedProvider === 'openai'
@@ -666,7 +624,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                               key={m}
                               type="button"
                               className={`suggestion-chip ${aiModel === m ? 'active' : ''}`}
-                              disabled={!isAdmin}
                               onClick={() => setAiModel(m)}
                             >
                               {m}
@@ -686,7 +643,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                               key={item.id}
                               type="button"
                               className={`suggestion-chip ${aiModel === item.id ? 'active' : ''}`}
-                              disabled={!isAdmin}
                               onClick={() => setAiModel(item.id)}
                             >
                               {item.label}
@@ -714,13 +670,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                             : selectedProvider === 'custom'
                             ? 'Base URL (Required)'
                             : 'Endpoint Base URL'}
-                          {!isAdmin && (
-                            <span className="settings-badge-read-only">
-                              <Lock size={10} style={{ marginRight: '3px' }} /> Read-only
-                            </span>
-                          )}
                         </label>
-                        <div className={`settings-input-wrapper ${!isAdmin ? 'is-read-only' : ''}`}>
+                        <div className="settings-input-wrapper">
                           <div className="settings-input-left-icon" aria-hidden="true">
                             <Globe size={18} />
                           </div>
@@ -729,7 +680,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                             type="text"
                             className="settings-input-field"
                             value={aiBaseUrl}
-                            disabled={!isAdmin}
                             onChange={(e) => setAiBaseUrl(e.target.value)}
                             placeholder={
                               selectedProvider === 'openai'
@@ -750,13 +700,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                       <div className="settings-field-col">
                         <label className="settings-input-label" htmlFor="ai-api-key-input">
                           API Key
-                          {!isAdmin && (
-                            <span className="settings-badge-read-only">
-                              <Lock size={10} style={{ marginRight: '3px' }} /> Read-only
-                            </span>
-                          )}
                         </label>
-                        <div className={`settings-input-wrapper ${!isAdmin ? 'is-read-only' : ''}`}>
+                        <div className="settings-input-wrapper">
                           <div className="settings-input-left-icon" aria-hidden="true">
                             <Key size={18} />
                           </div>
@@ -765,7 +710,6 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                             type="password"
                             className="settings-input-field"
                             value={aiApiKey}
-                            disabled={!isAdmin}
                             onChange={(e) => setAiApiKey(e.target.value)}
                             placeholder={
                               isAiKeyConfigured
@@ -959,40 +903,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
             {/* Footer Buttons */}
             <div className="settings-panel-footer">
-              {!isAdmin ? (
-                <>
-                  <div className="settings-footer-info">
-                    <Lock size={14} className="settings-footer-lock-icon" />
-                    <span>View-only mode • Managed by administrator</span>
-                  </div>
-                  <button
-                    type="button"
-                    className="btn btn-secondary settings-close-btn"
-                    onClick={onClose}
-                  >
-                    <span>Close</span>
-                  </button>
-                </>
-              ) : (
-                <>
-                  <button
-                    type="button"
-                    className="btn btn-secondary"
-                    onClick={onClose}
-                  >
-                    <span>Cancel</span>
-                  </button>
+              <button
+                type="button"
+                className="btn btn-secondary"
+                onClick={onClose}
+              >
+                <span>Cancel</span>
+              </button>
 
-                  <button
-                    type="button"
-                    className="btn btn-primary settings-save-btn"
-                    onClick={handleSave}
-                  >
-                    <Check size={16} />
-                    <span>Save Changes</span>
-                  </button>
-                </>
-              )}
+              <button
+                type="button"
+                className="btn btn-primary settings-save-btn"
+                onClick={handleSave}
+              >
+                <Check size={16} />
+                <span>Save Changes</span>
+              </button>
             </div>
           </>
         ) : (

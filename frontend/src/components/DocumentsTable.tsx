@@ -16,6 +16,7 @@ import {
   HelpCircle,
   ChevronLeft,
   ChevronRight,
+  RotateCcw,
 } from 'lucide-react';
 import type { DocumentItem, SupportedType, EngineInfo } from '../types';
 import { api } from '../services/api';
@@ -326,6 +327,16 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
     );
   };
 
+  const hasActiveFilters = searchTerm.trim() !== '' || modeFilter !== 'all' || typeFilter !== 'all' || statusFilter !== 'all';
+
+  const handleResetFilters = () => {
+    setSearchTerm('');
+    setModeFilter('all');
+    setTypeFilter('all');
+    setStatusFilter('all');
+    setCurrentPage(1);
+  };
+
   const handleRefresh = async () => {
     await fetchFromBackend();
     onRefresh();
@@ -414,8 +425,21 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
             </select>
           </div>
 
-          {/* Actions: Refresh & Clear All */}
+          {/* Actions: Refresh, Reset Filters & Clear All */}
           <div className="vault-toolbar-actions">
+            {hasActiveFilters && (
+              <button
+                type="button"
+                className="btn btn-secondary vault-action-btn vault-reset-filters-btn"
+                onClick={handleResetFilters}
+                data-testid="vault-reset-filters-btn"
+                title="Reset all filters and search query"
+              >
+                <RotateCcw size={14} />
+                <span>Reset Filters</span>
+              </button>
+            )}
+
             <button
               className="btn btn-secondary vault-action-btn vault-refresh-btn"
               onClick={handleRefresh}

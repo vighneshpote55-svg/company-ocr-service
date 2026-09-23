@@ -255,13 +255,23 @@ def normalize_ai_response(
 
     if canonical_cls.get("doc_type") != "unknown":
         normalized_type = canonical_cls["document_type"]
-        confidence = canonical_cls.get("confidence", "high")
+        confidence_score = canonical_cls.get("confidence")
+        conf_raw = str(raw_response.get("confidence") or canonical_cls.get("confidence_level") or "high").lower().strip()
+        confidence = conf_raw if conf_raw in ("high", "medium", "low") else "high"
         evidence = list(canonical_cls.get("evidence", []))
     else:
         raw_doc_type = raw_response.get("document_type") or "Unknown Document"
         normalized_type = ollama_ai.normalize_document_type(raw_doc_type, text_content=ocr_text)
-        conf_raw = str(raw_response.get("confidence", "low")).lower().strip()
-        confidence = conf_raw if conf_raw in ("high", "medium", "low") else ("high" if normalized_type != "Unknown Document" else "low")
+        conf_raw = raw_response.get("confidence")
+        if isinstance(conf_raw, (int, float)):
+            confidence_score = float(conf_raw)
+            confidence = "high" if confidence_score >= 0.85 else ("medium" if confidence_score >= 0.60 else "low")
+        elif str(conf_raw).lower() in ("high", "medium", "low"):
+            confidence = str(conf_raw).lower()
+            confidence_score = 0.95 if confidence == "high" else (0.80 if confidence == "medium" else 0.50)
+        else:
+            confidence = "low" if normalized_type == "Unknown Document" else "medium"
+            confidence_score = None if normalized_type == "Unknown Document" else 0.70
         evidence = raw_response.get("evidence") or raw_response.get("reasoning") or []
         if isinstance(evidence, str):
             evidence = [evidence]
@@ -301,6 +311,8 @@ def normalize_ai_response(
     return {
         "document_type": normalized_type,
         "confidence": confidence,
+        "confidence_score": confidence_score,
+        "confidence_level": confidence,
         "summary": summary,
         "evidence": evidence,
         "reasoning": evidence,
@@ -730,11 +742,17 @@ class OpenAICompatibleProvider(BaseAIProvider):
         stored_analysis: Optional[Dict[str, Any]] = None,
     ) -> str:
         doc_type = (stored_analysis or {}).get("document_type") or "Document"
+        confidence_val = (stored_analysis or {}).get("confidence")
+        confidence_str = f"{confidence_val:.2f}" if isinstance(confidence_val, (int, float)) else (str(confidence_val) if confidence_val is not None else "N/A")
+        verif_status = (stored_analysis or {}).get("verification_status") or "verified"
+        risk_score = (stored_analysis or {}).get("risk_score", 0)
         extracted = (stored_analysis or {}).get("extracted_fields") or {}
 
         system_prompt = (
             f"You are an AI Document Assistant analyzing the document '{filename}'.\n"
             f"Document Type: {doc_type}\n"
+            f"Classification Confidence: {confidence_str}\n"
+            f"Verification Status: {verif_status} (Risk Score: {risk_score})\n"
             f"Extracted Document Text:\n---\n{(document_text or '')[:12000]}\n---\n\n"
             f"Verified Stored Fields:\n{json.dumps(extracted, indent=2)}\n\n"
             "CRITICAL GROUNDING RULES:\n"

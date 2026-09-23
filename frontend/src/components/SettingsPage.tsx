@@ -11,7 +11,6 @@ import {
   UserCheck,
   Layers,
   Key,
-  Lock,
   RefreshCw,
   CheckCircle2,
   Save,
@@ -150,17 +149,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   // Connection Test Handler
   const handleTestConnection = async (provider: 'ollama' | 'openai' | 'gemini' | 'openrouter' | 'custom') => {
-    if (!isAdmin) {
-      setProviderTestResults((prev) => ({
-        ...prev,
-        [provider]: {
-          ok: false,
-          message: 'Connection test unavailable — administrator permission required.',
-        },
-      }));
-      return;
-    }
-
     setTestingProvider(provider);
     try {
       const candidate: any = { provider };
@@ -217,11 +205,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   // Provider Activation & Save Handler
   const handleActivateProvider = async (provider: 'ollama' | 'openai' | 'gemini' | 'openrouter' | 'custom') => {
-    if (!isAdmin) {
-      onNotify('Administrator permission required to change active AI provider.', 'error');
-      return;
-    }
-
     setSavingProvider(provider);
     try {
       const payload: any = {
@@ -370,7 +353,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
         <div className="settings-header-meta">
           <span className={`settings-role-badge ${isAdmin ? 'admin' : 'user'}`}>
             <Shield size={13} />
-            <span>{isAdmin ? 'Administrator Access' : 'Standard User (Read-Only)'}</span>
+            <span>{isAdmin ? 'Administrator Access' : 'Standard User Access'}</span>
           </span>
         </div>
       </div>
@@ -520,15 +503,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 </div>
               </div>
 
-              {!isAdmin && (
-                <div className="settings-admin-alert-banner">
-                  <Lock size={16} />
-                  <div>
-                    <strong>Read-Only Mode:</strong> AI provider settings are managed by your administrator.
-                  </div>
-                </div>
-              )}
-
               {/* 5 Provider Cards Grid */}
               <div className="settings-providers-grid">
                 {/* 1. OLLAMA (LOCAL) */}
@@ -560,7 +534,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="ollama-base-url-input"
                         type="text"
                         value={ollamaBaseUrl}
-                        disabled={!isAdmin}
                         onChange={(e) => setOllamaBaseUrl(e.target.value)}
                         placeholder="http://127.0.0.1:11434"
                       />
@@ -572,7 +545,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="ollama-model-input"
                         type="text"
                         value={ollamaModel}
-                        disabled={!isAdmin}
                         onChange={(e) => setOllamaModel(e.target.value)}
                         placeholder="qwen2.5vl:3b"
                       />
@@ -595,17 +567,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         <span>Test Connection</span>
                       </button>
 
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleActivateProvider('ollama')}
-                          disabled={savingProvider === 'ollama' || isProviderActive('ollama')}
-                        >
-                          <Save size={13} />
-                          <span>{isProviderActive('ollama') ? 'Current Active' : 'Activate & Save'}</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleActivateProvider('ollama')}
+                        disabled={savingProvider === 'ollama' || isProviderActive('ollama')}
+                      >
+                        <Save size={13} />
+                        <span>{isProviderActive('ollama') ? 'Current Active' : 'Activate & Save'}</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -639,7 +609,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="openai-model-input"
                         type="text"
                         value={openaiModel}
-                        disabled={!isAdmin}
                         onChange={(e) => setOpenaiModel(e.target.value)}
                         placeholder="gpt-4o-mini"
                       />
@@ -649,7 +618,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                             key={m}
                             type="button"
                             className={`suggestion-chip ${openaiModel === m ? 'active' : ''}`}
-                            disabled={!isAdmin}
                             onClick={() => setOpenaiModel(m)}
                           >
                             {m}
@@ -665,7 +633,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                           id="openai-key-input"
                           type={showKeys['openai'] ? 'text' : 'password'}
                           value={openaiKey}
-                          disabled={!isAdmin}
                           onChange={(e) => setOpenaiKey(e.target.value)}
                           placeholder={
                             activeConfig?.api_key_configured && activeConfig.active_provider === 'openai'
@@ -690,7 +657,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="openai-base-url-input"
                         type="text"
                         value={openaiBaseUrl}
-                        disabled={!isAdmin}
                         onChange={(e) => setOpenaiBaseUrl(e.target.value)}
                         placeholder="https://api.openai.com/v1"
                       />
@@ -713,17 +679,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         <span>Test Connection</span>
                       </button>
 
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleActivateProvider('openai')}
-                          disabled={savingProvider === 'openai' || isProviderActive('openai')}
-                        >
-                          <Save size={13} />
-                          <span>{isProviderActive('openai') ? 'Current Active' : 'Activate & Save'}</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleActivateProvider('openai')}
+                        disabled={savingProvider === 'openai' || isProviderActive('openai')}
+                      >
+                        <Save size={13} />
+                        <span>{isProviderActive('openai') ? 'Current Active' : 'Activate & Save'}</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -757,7 +721,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="gemini-model-input"
                         type="text"
                         value={geminiModel}
-                        disabled={!isAdmin}
                         onChange={(e) => setGeminiModel(e.target.value)}
                         placeholder="gemini-2.0-flash"
                       />
@@ -767,7 +730,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                             key={m}
                             type="button"
                             className={`suggestion-chip ${geminiModel === m ? 'active' : ''}`}
-                            disabled={!isAdmin}
                             onClick={() => setGeminiModel(m)}
                           >
                             {m}
@@ -783,7 +745,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                           id="gemini-key-input"
                           type={showKeys['gemini'] ? 'text' : 'password'}
                           value={geminiKey}
-                          disabled={!isAdmin}
                           onChange={(e) => setGeminiKey(e.target.value)}
                           placeholder={
                             activeConfig?.api_key_configured && activeConfig.active_provider === 'gemini'
@@ -819,17 +780,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         <span>Test Connection</span>
                       </button>
 
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleActivateProvider('gemini')}
-                          disabled={savingProvider === 'gemini' || isProviderActive('gemini')}
-                        >
-                          <Save size={13} />
-                          <span>{isProviderActive('gemini') ? 'Current Active' : 'Activate & Save'}</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleActivateProvider('gemini')}
+                        disabled={savingProvider === 'gemini' || isProviderActive('gemini')}
+                      >
+                        <Save size={13} />
+                        <span>{isProviderActive('gemini') ? 'Current Active' : 'Activate & Save'}</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -863,7 +822,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="openrouter-model-input"
                         type="text"
                         value={openrouterModel}
-                        disabled={!isAdmin}
                         onChange={(e) => setOpenrouterModel(e.target.value)}
                         placeholder="google/gemini-2.5-flash"
                       />
@@ -877,7 +835,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                             key={m.id}
                             type="button"
                             className={`suggestion-chip ${openrouterModel === m.id ? 'active' : ''}`}
-                            disabled={!isAdmin}
                             onClick={() => setOpenrouterModel(m.id)}
                           >
                             {m.label}
@@ -893,7 +850,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                           id="openrouter-key-input"
                           type={showKeys['openrouter'] ? 'text' : 'password'}
                           value={openrouterKey}
-                          disabled={!isAdmin}
                           onChange={(e) => setOpenrouterKey(e.target.value)}
                           placeholder={
                             activeConfig?.api_key_configured && activeConfig.active_provider === 'openrouter'
@@ -918,7 +874,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="openrouter-base-url-input"
                         type="text"
                         value={openrouterBaseUrl}
-                        disabled={!isAdmin}
                         onChange={(e) => setOpenrouterBaseUrl(e.target.value)}
                         placeholder="https://openrouter.ai/api/v1"
                       />
@@ -941,17 +896,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         <span>Test Connection</span>
                       </button>
 
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleActivateProvider('openrouter')}
-                          disabled={savingProvider === 'openrouter' || isProviderActive('openrouter')}
-                        >
-                          <Save size={13} />
-                          <span>{isProviderActive('openrouter') ? 'Current Active' : 'Activate & Save'}</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleActivateProvider('openrouter')}
+                        disabled={savingProvider === 'openrouter' || isProviderActive('openrouter')}
+                      >
+                        <Save size={13} />
+                        <span>{isProviderActive('openrouter') ? 'Current Active' : 'Activate & Save'}</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -985,7 +938,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="custom-name-input"
                         type="text"
                         value={customName}
-                        disabled={!isAdmin}
                         onChange={(e) => setCustomName(e.target.value)}
                         placeholder="Internal vLLM Service"
                       />
@@ -997,7 +949,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="custom-model-input"
                         type="text"
                         value={customModel}
-                        disabled={!isAdmin}
                         onChange={(e) => setCustomModel(e.target.value)}
                         placeholder="e.g. meta-llama/Llama-3.2-11B-Vision"
                       />
@@ -1009,7 +960,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         id="custom-endpoint-input"
                         type="text"
                         value={customEndpoint}
-                        disabled={!isAdmin}
                         onChange={(e) => setCustomEndpoint(e.target.value)}
                         placeholder="http://localhost:8000/v1"
                       />
@@ -1020,7 +970,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       <select
                         id="custom-format-select"
                         value={customFormat}
-                        disabled={!isAdmin}
                         onChange={(e) => setCustomFormat(e.target.value)}
                       >
                         <option value="chat_completions">OpenAI-compatible (/chat/completions)</option>
@@ -1036,7 +985,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                           id="custom-key-input"
                           type={showKeys['custom'] ? 'text' : 'password'}
                           value={customKey}
-                          disabled={!isAdmin}
                           onChange={(e) => setCustomKey(e.target.value)}
                           placeholder="Leave empty if unauthenticated"
                         />
@@ -1068,17 +1016,15 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                         <span>Test Connection</span>
                       </button>
 
-                      {isAdmin && (
-                        <button
-                          type="button"
-                          className="btn btn-primary btn-sm"
-                          onClick={() => handleActivateProvider('custom')}
-                          disabled={savingProvider === 'custom' || isProviderActive('custom')}
-                        >
-                          <Save size={13} />
-                          <span>{isProviderActive('custom') ? 'Current Active' : 'Activate & Save'}</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleActivateProvider('custom')}
+                        disabled={savingProvider === 'custom' || isProviderActive('custom')}
+                      >
+                        <Save size={13} />
+                        <span>{isProviderActive('custom') ? 'Current Active' : 'Activate & Save'}</span>
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -1108,7 +1054,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       type="checkbox"
                       id="fallback-toggle"
                       checked={fallbackOnError}
-                      disabled={!isAdmin}
                       onChange={(e) => setFallbackOnError(e.target.checked)}
                     />
                   </div>
@@ -1122,7 +1067,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       max="1.0"
                       step="0.05"
                       value={temperature}
-                      disabled={!isAdmin}
                       onChange={(e) => setTemperature(parseFloat(e.target.value))}
                     />
                     <span className="field-hint">Lower temperature (0.0 – 0.2) delivers strict factual grounding for legal and financial document OCR.</span>
@@ -1134,30 +1078,27 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       type="number"
                       id="max-tokens-input"
                       value={maxTokens}
-                      disabled={!isAdmin}
                       onChange={(e) => setMaxTokens(parseInt(e.target.value, 10) || 1500)}
                     />
                   </div>
 
-                  {isAdmin && (
-                    <div style={{ marginTop: '1.5rem' }}>
-                      <button
-                        type="button"
-                        className="btn btn-primary btn-sm"
-                        onClick={async () => {
-                          try {
-                            await api.updateAiConfig({ fallback_on_error: fallbackOnError });
-                            onNotify('Model parameter preferences saved.', 'success');
-                          } catch (err: any) {
-                            onNotify(err.message, 'error');
-                          }
-                        }}
-                      >
-                        <Save size={14} />
-                        <span>Save Model Parameters</span>
-                      </button>
-                    </div>
-                  )}
+                  <div style={{ marginTop: '1.5rem' }}>
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      onClick={async () => {
+                        try {
+                          await api.updateAiConfig({ fallback_on_error: fallbackOnError });
+                          onNotify('Model parameter preferences saved.', 'success');
+                        } catch (err: any) {
+                          onNotify(err.message, 'error');
+                        }
+                      }}
+                    >
+                      <Save size={14} />
+                      <span>Save Model Parameters</span>
+                    </button>
+                  </div>
                 </div>
               </div>
             </div>

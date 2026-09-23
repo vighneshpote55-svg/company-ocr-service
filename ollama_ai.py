@@ -444,9 +444,13 @@ def chat_with_document(
         raise RuntimeError("Ollama server is not running.")
 
     verified_type = (stored_analysis or {}).get("document_type", "")
+    confidence_val = (stored_analysis or {}).get("confidence")
+    confidence_str = f"{confidence_val:.2f}" if isinstance(confidence_val, (int, float)) else (str(confidence_val) if confidence_val is not None else "N/A")
+    verif_status = (stored_analysis or {}).get("verification_status") or "verified"
+    risk_score = (stored_analysis or {}).get("risk_score", 0)
     verified_fields = (stored_analysis or {}).get("extracted_fields", {})
 
-    doc_type_header = f"Verified Document Type: {verified_type}\n" if verified_type else ""
+    doc_type_header = f"Verified Document Type: {verified_type} (Confidence: {confidence_str}, Status: {verif_status}, Risk Score: {risk_score})\n" if verified_type else ""
     fields_ctx = f"\nVerified Key Extracted Fields:\n{json.dumps(verified_fields, indent=2)}\n" if verified_fields else ""
 
     system_prompt = (

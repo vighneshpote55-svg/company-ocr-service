@@ -276,8 +276,9 @@ DOC_SIGNATURES = {
         r"INCOME TAX DEPARTMENT",
         r"PERMANENT ACCOUNT NUMBER",
         r"GOVT\. OF INDIA.*INCOME TAX|INCOME TAX.*GOVT\. OF INDIA",
-        r"FATHER'?S NAME",
-        r"[A-Z]{5}[0-9]{4}[A-Z]",
+        r"GOVERNMENT OF INDIA.*INCOME TAX|INCOME TAX.*GOVERNMENT OF INDIA",
+        r"\bALL INDIA TAXATION\b|\bINDIAN INCOME TAX\b",
+        r"\b[A-Z]{5}[0-9]{4}[A-Z]\b",
     ],
     "aadhaar": [
         r"UNIQUE IDENTIFICATION AUTHORITY OF INDIA|UIDAI",
@@ -544,46 +545,264 @@ def normalize_ocr_text(text: str) -> str:
     return norm
 
 
+# ==============================================================================
+# Centralized Institutional Signatures & Primary Anchors for all 25 Document Types
+# ==============================================================================
+
+DOC_PRIMARY_SIGNATURES: Dict[str, List[str]] = {
+    "pan": [
+        r"INCOME TAX DEPARTMENT|आयकर\s*विभाग",
+        r"PERMANENT ACCOUNT NUMBER|स्थायी\s*लेखा\s*संख्या",
+        r"GOVT\. OF INDIA.*INCOME TAX|INCOME TAX.*GOVT\. OF INDIA",
+        r"GOVERNMENT OF INDIA.*INCOME TAX|INCOME TAX.*GOVERNMENT OF INDIA",
+        r"\bALL INDIA TAXATION\b|\bINDIAN INCOME TAX\b",
+    ],
+    "aadhaar": [
+        r"UNIQUE IDENTIFICATION AUTHORITY OF INDIA|UIDAI|भारतीय\s*विशिष्ट\s*(?:ओळख|पहचान)\s*प्राधिकरण",
+        r"UNIQUE IDENTIFICATION.*GOVERNMENT OF INDIA|GOVERNMENT OF INDIA.*UNIQUE IDENTIFICATION",
+        r"\bAADHAAR\b|\bAADHAR\b|माझे\s*आधार|मेरा\s*आधार|आमचा\s*आधार|आधार\s*क्रमांक|आधार\s*कार्ड",
+        r"MERA AADHAAR|MERI PEHCHAN|मेरी पहचान|MERA AADHAR",
+        r"HELP@UIDAI\.GOV\.IN|WWW\.UIDAI\.GOV\.IN|WWW\.EAADHAAR\.UIDAI\.GOV\.IN",
+    ],
+    "cancelled_cheque": [
+        r"\bCANCELLED\b|C\s*A\s*N\s*C\s*E\s*L\s*L\s*E\s*D",
+        r"PAY\s+(?:AGAINST\s+CHEQUE|TO\s+ORDER|TO\s+[A-Z]|THE\s+SUM|BEARER)",
+        r"IFS\s*CODE|IFSC",
+        r"A/C\s*(?:NO|NUM|NUMBER)[\.:]?\s*[0-9Xx]+",
+    ],
+    "passport": [
+        r"REPUBLIC OF INDIA.*PASSPORT|PASSPORT.*REPUBLIC OF INDIA",
+        r"PASSPORT\s*(?:NO|NUMBER)",
+        r"\bPASSPORT\b",
+    ],
+    "voter_id": [
+        r"ELECTION COMMISSION OF INDIA",
+        r"ELECTOR PHOTO IDENTITY CARD",
+        r"EPIC\s*(?:NO|NUMBER)",
+        r"BHARAT NIRVACHAN AYOG",
+    ],
+    "driving_licence": [
+        r"DRIVING LICEN[CS]E",
+        r"TRANSPORT DEPARTMENT|MOTOR VEHICLES ACT|UNION OF INDIA.*DRIVING",
+    ],
+    "udyam": [
+        r"UDYAM REGISTRATION|उद्यम\s*नोंदणी|उद्यम\s*पंजीकरण",
+        r"UDYAM-[A-Z]{2}-[0-9]{2}-[0-9]+",
+        r"MINISTRY OF MICRO.*SMALL AND MEDIUM|सूक्ष्म,\s*लघु\s*(?:व|आणि|एवं)\s*मध्यम\s*उद्योग",
+    ],
+    "fssai": [
+        r"FOOD SAFETY AND STANDARDS AUTHORITY",
+        r"\bFSSAI\b",
+        r"LICENSE UNDER FSS ACT|REGISTRATION UNDER FSS ACT",
+    ],
+    "shop_establishment": [
+        r"SHOP & ESTABLISHMENT|SHOPS & ESTABLISHMENTS|SHOPS AND ESTABLISHMENTS|दुकान\s*(?:आणि|व|एवं)\s*(?:आस्थापना|स्थापना)|दु\s*क\s*ाने\s*(?:आणि|व)\s*आ\s*(?:थापना|स्थापना)",
+        r"MAHARASHTRA SHOPS AND COMMERCIAL|आस्थापना\s*नोंदणी|स्थापना\s*पंजीकरण|Form\s*[-–]\s*[\"'\u2018\u2019]?[फगFG][\"'\u2018\u2019]?",
+    ],
+    "bank_statement": [
+        r"ACCOUNT STATEMENT|STATEMENT OF ACCOUNT|BANK STATEMENT|SAVINGS ACCOUNT STATEMENT|CURRENT ACCOUNT STATEMENT",
+    ],
+    "salary_slip": [
+        r"SALARY SLIP|PAYSLIP|PAY SLIP|वेतन\s*पावती|वेतन\s*प्रमाणपत्र|मासिक\s*वेतन\s*पावती|वेतन\s*पर्ची",
+    ],
+    "utility_bill": [
+        r"ELECTRICITY BILL|WATER BILL|GAS BILL|ENERGY BILL|BILL OF SUPPLY|POWER DISTRIBUTION|MSEDCL|MAHADISCOM|महावितरण|महािवतरण|वीज\s*देयक|विद्युत\s*देयक|पाणी\s*पट्टी|गॅस\s*बिल",
+    ],
+    "itr": [
+        r"INDIAN INCOME TAX RETURN",
+        r"ITR-V|ITR-1|ITR-2|ITR-3|ITR-4",
+        r"ITR ACKNOWLEDGEMENT|INCOME TAX RETURN ACKNOWLEDGEMENT",
+    ],
+    "gst_certificate": [
+        r"FORM GST REG-06|FORM GST REG-02|FORM GST REG",
+        r"REGISTRATION CERTIFICATE.*GST|GST.*REGISTRATION CERTIFICATE",
+        r"GOODS AND SERVICES TAX",
+    ],
+    "certificate_of_incorporation": [
+        r"CERTIFICATE OF INCORPORATION",
+        r"REGISTRAR OF COMPANIES",
+        r"MINISTRY OF CORPORATE AFFAIRS",
+    ],
+    "partnership_deed": [
+        r"PARTNERSHIP DEED|DEED OF PARTNERSHIP",
+        r"INDIAN PARTNERSHIP ACT",
+    ],
+    "rent_agreement": [
+        r"RENT AGREEMENT|LEASE AGREEMENT|LEAVE AND LICENSE AGREEMENT|TENANCY AGREEMENT|भाडेकरार|भाडे\s*करार|परवाना\s*करार",
+    ],
+    "form_16": [
+        r"FORM NO\.?\s*16\b",
+        r"CERTIFICATE UNDER SECTION 203",
+    ],
+    "bank_passbook": [
+        r"PASS\s*BOOK|PASSBOOK|पास\s*बुक|पासबुक|बचत\s*खाते\s*पासबुक",
+    ],
+    "property_tax_receipt": [
+        r"PROPERTY TAX RECEIPT|PROPERTY TAX PAYMENT|मालमत्ता\s*कर|घरपट्टी",
+        r"MUNICIPAL CORPORATION.*PROPERTY TAX|PROPERTY TAX.*MUNICIPAL CORPORATION",
+    ],
+    "iec_certificate": [
+        r"IMPORT EXPORT CODE|IMPORTER EXPORTER CODE",
+        r"DIRECTORATE GENERAL OF FOREIGN TRADE|DGFT",
+        r"IEC CERTIFICATE|IEC ISSUANCE",
+    ],
+    "income_certificate": [
+        r"INCOME CERTIFICATE|CERTIFICATE OF INCOME|उत्पन्नाचा\s*दाखला|उत्पन्नाचे\s*प्रमाणपत्र|उलपञाचे\s*पमाणपऋ|उतनाचा\s*दाखला|वार्षिक\s*उत्पन्नाचा\s*दाखला|उत्पन्न\s*दाखला|उत्पन्न\s*प्रमाणपत्र",
+    ],
+    "employment_contract": [
+        r"EMPLOYMENT AGREEMENT|EMPLOYMENT CONTRACT|CONTRACT OF EMPLOYMENT",
+        r"OFFER OF EMPLOYMENT|TERMS OF EMPLOYMENT|APPOINTMENT LETTER",
+    ],
+    "income_tax_notice": [
+        r"NOTICE UNDER SECTION\s*(?:143|142|148|156)|INTIMATION UNDER SECTION\s*(?:143|142|148)",
+        r"INCOME TAX DEPARTMENT.*NOTICE|NOTICE.*INCOME TAX DEPARTMENT",
+        r"DEMAND NOTICE|TAX DEMAND",
+    ],
+    "commercial_invoice": [
+        r"TAX INVOICE|COMMERCIAL INVOICE",
+    ],
+}
+
+
 def classify_document_content(
     text: str,
-    min_score: int = 2,
-    min_margin: int = 1,
+    min_score: int = 1,
+    min_margin: int = 0,
 ) -> Dict[str, Any]:
     """
-    Shared content classifier for Offline Mode.
-    Never classifies using filename, metadata, first OCR line, or fallback names.
-    Uses normalized OCR/PDF text, layout signatures, and existing regexes.
-    Returns:
-    {
-      "doc_type": "...",
-      "document_type": "...",
-      "confidence": "high|medium|low",
-      "evidence": ["...", "..."],
-      "issuer": "..."
-    }
+    Centralized, authoritative document content classifier for all 25 supported document types.
+    - Uses OCR/PDF text, structural layout patterns, primary institutional anchors, and format evidence.
+    - Handles multi-page documents seamlessly with per-page evidence tracing.
+    - Strictly prevents Aadhaar -> PAN misclassification using mutual exclusion and primary anchor verification.
+    - Computes real float confidence based on verified primary/secondary evidence and format checksums.
+    - Returns 'Unknown Document' with confidence=None when evidence is insufficient.
     """
+    if not text or len(text.strip()) < 10:
+        return {
+            "doc_type": "unknown",
+            "document_type": "Unknown Document",
+            "confidence": None,
+            "confidence_score": None,
+            "confidence_level": "low",
+            "evidence": [],
+            "issuer": None,
+        }
+
     norm_text = normalize_ocr_text(text)
     norm_upper = norm_text.upper()
 
-    scores: Dict[str, int] = {}
-    evidence_map: Dict[str, List[str]] = {}
+    # Multi-page breakdown: trace page-specific boundaries if present
+    page_splits = re.split(r"(?:---|===)\s*Page\s*(\d+)\s*(?:---|===)", norm_text, flags=re.IGNORECASE)
+    pages: List[Tuple[int, str]] = []
+    if len(page_splits) > 1:
+        if page_splits[0].strip():
+            pages.append((1, page_splits[0].upper()))
+        idx = 1
+        while idx < len(page_splits):
+            try:
+                p_num = int(page_splits[idx])
+            except ValueError:
+                p_num = 1
+            p_content = page_splits[idx + 1].upper() if idx + 1 < len(page_splits) else ""
+            pages.append((p_num, p_content))
+            idx += 2
+    else:
+        pages.append((1, norm_upper))
 
-    for doc_type, patterns in DOC_SIGNATURES.items():
-        matched_ev: List[str] = []
-        for p in patterns:
-            m = re.search(p, norm_upper)
-            if m:
-                matched_ev.append(m.group(0).strip())
-        if matched_ev:
-            scores[doc_type] = len(matched_ev)
-            evidence_map[doc_type] = matched_ev
+    # Explicit Aadhaar marker detection across all pages
+    aadhaar_anchors = DOC_PRIMARY_SIGNATURES.get("aadhaar", [])
+    has_aadhaar_primary = any(re.search(p, norm_upper) for p in aadhaar_anchors)
+    has_aadhaar_uid = bool(
+        re.search(r"\b[2-9][0-9]{3}\s+[0-9]{4}\s+[0-9]{4}\b", norm_upper) or
+        re.search(r"\bXXXX\s+XXXX\s+[0-9]{4}\b", norm_upper) or
+        re.search(r"\bVID\s*:\s*\d{4}", norm_upper)
+    )
+    is_aadhaar_present = has_aadhaar_primary or (
+        has_aadhaar_uid and any(k in norm_upper for k in ["MALE", "FEMALE", "DOB", "YEAR OF BIRTH", "GOVERNMENT OF INDIA", "ENROLMENT"])
+    )
+
+    scores: Dict[str, float] = {}
+    evidence_map: Dict[str, List[str]] = {}
+    primary_counts: Dict[str, int] = {}
+    secondary_counts: Dict[str, int] = {}
+
+    for doc_type, primary_patterns in DOC_PRIMARY_SIGNATURES.items():
+        # Disambiguation: Absolute suppression of PAN when Aadhaar anchors/UID are present
+        if doc_type == "pan" and is_aadhaar_present:
+            continue
+
+        primary_matches: List[str] = []
+        secondary_matches: List[str] = []
+
+        # 1. Match Primary Institutional Anchors
+        for p in primary_patterns:
+            for p_num, p_text in pages:
+                m = re.search(p, p_text)
+                if m:
+                    ev_text = m.group(0).strip()
+                    loc = f"[Page {p_num}] {ev_text}" if len(pages) > 1 else ev_text
+                    if loc not in primary_matches:
+                        primary_matches.append(loc)
+
+        if not primary_matches:
+            for p in primary_patterns:
+                m = re.search(p, norm_upper)
+                if m:
+                    ev_text = m.group(0).strip()
+                    if ev_text not in primary_matches:
+                        primary_matches.append(ev_text)
+
+        # 2. Match Secondary Signatures
+        all_patterns = DOC_SIGNATURES.get(doc_type, [])
+        for p in all_patterns:
+            if p in primary_patterns:
+                continue
+            for p_num, p_text in pages:
+                m = re.search(p, p_text)
+                if m:
+                    ev_text = m.group(0).strip()
+                    loc = f"[Page {p_num}] {ev_text}" if len(pages) > 1 else ev_text
+                    if loc not in primary_matches and loc not in secondary_matches:
+                        secondary_matches.append(loc)
+
+        # 3. PAN standalone verification: valid PAN entity code + Government of India
+        has_valid_pan_format = False
+        if doc_type == "pan" and not primary_matches and not is_aadhaar_present:
+            pan_match = re.search(r"\b[A-Z]{5}[0-9]{4}[A-Z]\b", norm_upper)
+            if pan_match:
+                pan_val = pan_match.group(0)
+                if pan_val[3] in "PCHFATBLJG" and any(k in norm_upper for k in ["GOVT", "INDIA", "FATHER", "INCOME"]):
+                    has_valid_pan_format = True
+                    primary_matches.append(f"PAN: {pan_val}")
+
+        # Document MUST have at least one verified primary institutional anchor
+        if not primary_matches and not has_valid_pan_format:
+            continue
+
+        # Mutual exclusion checks
+        if doc_type == "bank_statement" and any("PASSBOOK" in ev or "PASS BOOK" in ev or "पासबुक" in ev for ev in primary_matches):
+            continue
+        if doc_type == "employment_contract" and any(k in norm_upper for k in ["SALARY SLIP", "PAYSLIP", "PAY SLIP", "वेतन पावती"]):
+            continue
+
+        p_cnt = len(primary_matches)
+        s_cnt = len(secondary_matches)
+        primary_counts[doc_type] = p_cnt
+        secondary_counts[doc_type] = s_cnt
+
+        # Evidence scoring: Primary institutional anchors weighted heavily
+        score = (p_cnt * 3.0) + (s_cnt * 1.0)
+        scores[doc_type] = score
+        evidence_map[doc_type] = primary_matches + secondary_matches
 
     if not scores:
         return {
             "doc_type": "unknown",
             "document_type": "Unknown Document",
-            "confidence": "low",
-            "evidence": [],
+            "confidence": None,
+            "confidence_score": None,
+            "confidence_level": "low",
+            "evidence": ["Insufficient legible text or standardized institutional markers detected"],
             "issuer": None,
         }
 
@@ -591,49 +810,76 @@ def classify_document_content(
     top_type, top_score = sorted_scores[0]
     top_evidence = evidence_map.get(top_type, [])
 
-    # Check margin
+    # Margin check between top candidates
     has_margin = True
     if len(sorted_scores) > 1:
         second_type, second_score = sorted_scores[1]
         if (top_score - second_score) < min_margin:
-            has_margin = False
+            if primary_counts.get(top_type, 0) < primary_counts.get(second_type, 0):
+                top_type, top_score = second_type, second_score
+                top_evidence = evidence_map.get(top_type, [])
+            elif primary_counts.get(top_type, 0) == primary_counts.get(second_type, 0) and min_margin > 0:
+                has_margin = False
+
+    if not has_margin and min_margin > 0:
+        return {
+            "doc_type": "unknown",
+            "document_type": "Unknown Document",
+            "confidence": None,
+            "confidence_score": None,
+            "confidence_level": "low",
+            "evidence": top_evidence,
+            "issuer": None,
+        }
 
     meta = DOC_TYPE_METADATA.get(
         top_type,
         {"name": top_type.replace("_", " ").title(), "issuer": None},
     )
 
-    if top_score >= 1 and has_margin:
-        conf_level = "high" if top_score >= 3 else "medium"
-        if top_type == "pan" and (any(re.search(r"^[A-Z]{5}[0-9]{4}[A-Z]$", ev) for ev in top_evidence) or any("PERMANENT ACCOUNT" in ev.upper() for ev in top_evidence)):
-            conf_level = "high"
-        elif top_type == "aadhaar" and any(k in ev.upper() for ev in top_evidence for k in ["UNIQUE IDENTIFICATION", "UIDAI", "AADHAAR"]):
-            conf_level = "high"
-        elif top_type == "bank_statement" and any(k in ev.upper() for ev in top_evidence for k in ["STATEMENT OF ACCOUNT", "ACCOUNT STATEMENT"]):
-            conf_level = "high"
-        elif top_type == "employment_contract" and any(k in ev.upper() for ev in top_evidence for k in ["EMPLOYMENT AGREEMENT", "EMPLOYMENT CONTRACT", "OFFER OF EMPLOYMENT"]):
-            conf_level = "high"
-        elif top_type == "gst_certificate" and (any(re.search(r"^[0-9]{2}[A-Z]{5}", ev) for ev in top_evidence) or any("GOODS AND SERVICES TAX" in ev.upper() for ev in top_evidence)):
-            conf_level = "high"
-        elif top_type == "udyam" and any("UDYAM-" in ev for ev in top_evidence):
-            conf_level = "high"
-        elif top_type == "passport" and any("PASSPORT" in ev.upper() for ev in top_evidence):
-            conf_level = "high"
+    # Dynamic float confidence calculation from verified evidence
+    p_cnt = primary_counts.get(top_type, 1)
+    s_cnt = secondary_counts.get(top_type, 0)
+    
+    # Base confidence: 0.72 for 1 primary anchor, +0.08 per extra primary anchor (max 0.88)
+    base_conf = 0.72 + min(0.16, max(0, p_cnt - 1) * 0.08)
+    # Secondary anchor bonus: +0.03 each (max 0.06)
+    secondary_bonus = min(0.06, s_cnt * 0.03)
+    
+    # Checksum and structural format verification bonus (+0.04)
+    format_bonus = 0.0
+    if top_type == "aadhaar":
+        uid_m = re.search(r"\b([2-9][0-9]{3}\s+[0-9]{4}\s+[0-9]{4})\b", norm_upper)
+        if uid_m and validate_verhoeff_checksum(uid_m.group(1)):
+            format_bonus = 0.04
+        elif any("XXXX" in ev for ev in top_evidence):
+            format_bonus = 0.03
+    elif top_type == "pan":
+        pan_m = re.search(r"\b([A-Z]{5}[0-9]{4}[A-Z])\b", norm_upper)
+        if pan_m and validate_pan_format(pan_m.group(1))[0]:
+            format_bonus = 0.04
+    elif top_type == "gst_certificate":
+        gst_m = re.search(r"\b([0-9]{2}[A-Z]{5}[0-9]{4}[A-Z][1-9A-Z]Z[0-9A-Z])\b", norm_upper)
+        if gst_m:
+            format_bonus = 0.04
+    elif top_type == "cancelled_cheque":
+        if any(re.search(r"\b[A-Z]{4}0[A-Z0-9]{6}\b", ev) for ev in top_evidence) or "IFSC" in norm_upper:
+            format_bonus = 0.04
+    elif top_type in ("bank_statement", "salary_slip", "utility_bill", "udyam", "fssai"):
+        if s_cnt >= 2:
+            format_bonus = 0.04
 
-        return {
-            "doc_type": top_type,
-            "document_type": meta["name"],
-            "confidence": conf_level,
-            "evidence": top_evidence,
-            "issuer": meta.get("issuer"),
-        }
+    conf_score = min(0.98, round(base_conf + secondary_bonus + format_bonus, 4))
+    conf_level = "high" if conf_score >= 0.85 else ("medium" if conf_score >= 0.60 else "low")
 
     return {
-        "doc_type": "unknown",
-        "document_type": "Unknown Document",
-        "confidence": "low",
-        "evidence": top_evidence if top_score > 0 else [],
-        "issuer": None,
+        "doc_type": top_type,
+        "document_type": meta["name"],
+        "confidence": conf_score,
+        "confidence_score": conf_score,
+        "confidence_level": conf_level,
+        "evidence": top_evidence,
+        "issuer": meta.get("issuer"),
     }
 
 
