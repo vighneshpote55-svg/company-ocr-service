@@ -16,3 +16,7 @@ walkthrough.md
 __pycache__/
 *.pyc
 env.sh
+
+# Local OCR test documents
+scratch/test_docs/
+test_docs/
