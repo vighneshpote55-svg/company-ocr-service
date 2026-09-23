@@ -46,8 +46,10 @@ logger = logging_utils.get_logger("company_server_ocr.ai_providers")
 # Standard defaults
 DEFAULT_OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai"
 DEFAULT_LOCAL_MODEL = "qwen2.5vl:3b"
 DEFAULT_EXTERNAL_MODEL = "google/gemini-2.5-flash"
+DEFAULT_GEMINI_MODEL = "gemini-2.0-flash"
 
 
 def get_persisted_config_path() -> str:
@@ -203,6 +205,21 @@ def normalize_openrouter_endpoint_and_model(
         elif not clean_model:
             clean_model = "nvidia/nemotron-3-ultra-550b-a55b:free"
 
+    elif prov in ("gemini", "google_gemini", "google"):
+        prov = "gemini"
+        clean_url = clean_url or DEFAULT_GEMINI_BASE_URL
+        clean_model = clean_model or DEFAULT_GEMINI_MODEL
+        clean_url = clean_url.rstrip("/")
+        if clean_url.endswith("/chat/completions"):
+            clean_url = clean_url[:-len("/chat/completions")].rstrip("/")
+
+    elif prov == "openai":
+        clean_url = clean_url or DEFAULT_OPENAI_BASE_URL
+        clean_model = clean_model or "gpt-4o-mini"
+        clean_url = clean_url.rstrip("/")
+        if clean_url.endswith("/chat/completions"):
+            clean_url = clean_url[:-len("/chat/completions")].rstrip("/")
+
     else:
         clean_url = clean_url.rstrip("/")
         if clean_url.endswith("/chat/completions"):
@@ -348,17 +365,18 @@ class BaseAIProvider(ABC):
 
 
 # ==============================================================================
-# 1. Local Ollama Provider (Qwen2.5-VL 3B)
+# 1. Local Ollama Provider (Qwen2.5-VL 3B) / OllamaAdapter
 # ==============================================================================
 
-class LocalOllamaProvider(BaseAIProvider):
+class OllamaAdapter(BaseAIProvider):
     """
     Provider adapter for private local Ollama instance (Qwen2.5-VL:3B).
     Guarantees zero external network access and preserves existing multimodal behavior.
     """
 
-    def __init__(self, model_name: Optional[str] = None):
+    def __init__(self, model_name: Optional[str] = None, base_url: Optional[str] = None):
         self._model = model_name or ollama_ai.get_ollama_model() or DEFAULT_LOCAL_MODEL
+        self._base_url = base_url or ollama_ai.get_ollama_host()
 
     @property
     def provider_name(self) -> str:
@@ -367,6 +385,10 @@ class LocalOllamaProvider(BaseAIProvider):
     @property
     def model_name(self) -> str:
         return self._model
+
+    @property
+    def base_url(self) -> str:
+        return self._base_url
 
     @property
     def is_local(self) -> bool:
@@ -427,27 +449,60 @@ class LocalOllamaProvider(BaseAIProvider):
 
     async def test_connection(self) -> Dict[str, Any]:
         t0 = time.time()
-        health = ollama_ai.check_ollama_health()
-        latency_ms = round((time.time() - t0) * 1000)
+        host = self._base_url or ollama_ai.get_ollama_host()
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(f"{host.rstrip('/')}/api/tags")
+                latency_ms = round((time.time() - t0) * 1000)
+                if res.status_code == 200:
+                    models_data = res.json().get("models", [])
+                    installed_names = [m.get("name", "") for m in models_data]
+                    model_found = any(self.model_name in name for name in installed_names)
+                    if model_found or not installed_names:
+                        return {
+                            "success": True,
+                            "provider": "ollama",
+                            "model": self.model_name,
+                            "message": f"Local Ollama server connected • Model '{self.model_name}' is ready ({latency_ms}ms latency).",
+                            "latency_ms": latency_ms,
+                        }
+                    else:
+                        return {
+                            "success": True,
+                            "provider": "ollama",
+                            "model": self.model_name,
+                            "message": f"Ollama is reachable ({latency_ms}ms), but model '{self.model_name}' is not currently loaded.",
+                            "latency_ms": latency_ms,
+                        }
+                else:
+                    return {
+                        "success": False,
+                        "provider": "ollama",
+                        "model": self.model_name,
+                        "message": f"Ollama server returned HTTP {res.status_code}",
+                        "latency_ms": latency_ms,
+                    }
+        except Exception as ex:
+            latency_ms = round((time.time() - t0) * 1000)
+            health = ollama_ai.check_ollama_health()
+            if health.get("reachable"):
+                return {
+                    "success": True,
+                    "provider": "ollama",
+                    "model": self.model_name,
+                    "message": f"Local Ollama server connected • Model '{self.model_name}' is ready ({latency_ms}ms latency).",
+                    "latency_ms": latency_ms,
+                }
+            return {
+                "success": False,
+                "provider": "ollama",
+                "model": self.model_name,
+                "message": f"Local Ollama server is not reachable at {host}: {str(ex)[:100]}",
+                "latency_ms": latency_ms,
+            }
 
-        reachable = health.get("reachable", False)
-        installed = health.get("model_installed", False)
-        success = reachable and installed
 
-        if success:
-            msg = f"Local Ollama server connected • Model '{self.model_name}' is ready ({latency_ms}ms latency)."
-        elif reachable:
-            msg = health.get("error") or f"Ollama is reachable, but model '{self.model_name}' is not installed."
-        else:
-            msg = health.get("error") or "Local Ollama server is not running."
-
-        return {
-            "success": success,
-            "provider": "ollama",
-            "model": self.model_name,
-            "message": msg,
-            "latency_ms": latency_ms,
-        }
+LocalOllamaProvider = OllamaAdapter
 
 
 # ==============================================================================
@@ -789,6 +844,93 @@ class OpenAICompatibleProvider(BaseAIProvider):
 
 
 # ==============================================================================
+# Dedicated External Provider Adapters
+# ==============================================================================
+
+class OpenAIAdapter(OpenAICompatibleProvider):
+    """Dedicated OpenAI adapter."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: float = 60.0,
+    ):
+        super().__init__(
+            provider_name="openai",
+            base_url=base_url or DEFAULT_OPENAI_BASE_URL,
+            api_key=api_key,
+            model_name=model_name or "gpt-4o-mini",
+            timeout=timeout,
+        )
+
+
+class GeminiAdapter(OpenAICompatibleProvider):
+    """Dedicated Google Gemini adapter using the official OpenAI-compatible endpoint."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: float = 60.0,
+    ):
+        super().__init__(
+            provider_name="gemini",
+            base_url=base_url or DEFAULT_GEMINI_BASE_URL,
+            api_key=api_key,
+            model_name=model_name or DEFAULT_GEMINI_MODEL,
+            timeout=timeout,
+        )
+
+
+class OpenRouterAdapter(OpenAICompatibleProvider):
+    """Dedicated OpenRouter adapter with model routing and header attribution."""
+
+    def __init__(
+        self,
+        api_key: str,
+        model_name: Optional[str] = None,
+        base_url: Optional[str] = None,
+        timeout: float = 60.0,
+    ):
+        super().__init__(
+            provider_name="openrouter",
+            base_url=base_url or DEFAULT_OPENROUTER_BASE_URL,
+            api_key=api_key,
+            model_name=model_name or DEFAULT_EXTERNAL_MODEL,
+            timeout=timeout,
+        )
+
+
+class CustomAdapter(OpenAICompatibleProvider):
+    """Dedicated Custom AI adapter supporting configurable endpoints and request formats."""
+
+    def __init__(
+        self,
+        base_url: str,
+        api_key: Optional[str] = None,
+        model_name: Optional[str] = None,
+        provider_name: Optional[str] = None,
+        request_format: Optional[str] = "chat_completions",
+        timeout: float = 60.0,
+    ):
+        super().__init__(
+            provider_name=provider_name or "custom",
+            base_url=base_url,
+            api_key=api_key or "",
+            model_name=model_name or "custom-model",
+            timeout=timeout,
+        )
+        self._request_format = (request_format or "chat_completions").lower().strip()
+
+    @property
+    def request_format(self) -> str:
+        return self._request_format
+
+
+# ==============================================================================
 # 3. Deterministic AI Provider Manager
 # ==============================================================================
 
@@ -812,6 +954,7 @@ class AIProviderManager:
         self._model: Optional[str] = None
         self._base_url: Optional[str] = None
         self._fallback_on_error: Optional[bool] = None
+        self._request_format: Optional[str] = None
         self._cached_mtime: float = 0.0
         self._sync_with_disk()
 
@@ -829,6 +972,7 @@ class AIProviderManager:
                         self._model = loaded.get("model")
                         self._base_url = loaded.get("base_url")
                         self._fallback_on_error = loaded.get("fallback_on_error")
+                        self._request_format = loaded.get("request_format")
                         self._cached_mtime = mtime
             except Exception as ex:
                 logger.debug("Error syncing AI config from disk: %s", ex)
@@ -886,6 +1030,7 @@ class AIProviderManager:
         self._model = None
         self._base_url = None
         self._fallback_on_error = None
+        self._request_format = None
         self._cached_mtime = 0.0
 
     def update_config(
@@ -895,6 +1040,7 @@ class AIProviderManager:
         model: Optional[str] = None,
         base_url: Optional[str] = None,
         fallback_on_error: Optional[bool] = None,
+        request_format: Optional[str] = None,
     ) -> None:
         """Update runtime provider configuration securely and persist encrypted across workers and container restarts."""
         self._sync_with_disk()
@@ -915,6 +1061,8 @@ class AIProviderManager:
             self._base_url = norm_u
         if fallback_on_error is not None:
             self._fallback_on_error = bool(fallback_on_error)
+        if request_format is not None:
+            self._request_format = request_format.strip()
 
         # Persist encrypted configuration to disk for multi-worker and restart persistence
         persisted_data = {
@@ -923,6 +1071,7 @@ class AIProviderManager:
             "model": self._model,
             "base_url": self._base_url,
             "fallback_on_error": self._fallback_on_error,
+            "request_format": self._request_format,
         }
         save_persisted_config(persisted_data)
         path = get_persisted_config_path()
@@ -930,12 +1079,25 @@ class AIProviderManager:
             self._cached_mtime = os.path.getmtime(path)
 
     def get_effective_base_url(self, provider_name: str) -> str:
-        base_url = self.current_base_url
-        if base_url:
-            return base_url
-        if provider_name == "openai":
-            return DEFAULT_OPENAI_BASE_URL
-        return DEFAULT_OPENROUTER_BASE_URL
+        prov = (provider_name or "").lower().strip()
+        raw = (self._base_url if self._base_url is not None else os.getenv("AI_BASE_URL", "")).strip()
+        is_standard_url = (
+            not raw
+            or "googleapis.com" in raw
+            or "api.openai.com" in raw
+            or "openrouter.ai" in raw
+        )
+        if prov in ("gemini", "google_gemini", "google"):
+            return DEFAULT_GEMINI_BASE_URL if is_standard_url else raw
+        elif prov == "openai":
+            return DEFAULT_OPENAI_BASE_URL if is_standard_url else raw
+        elif prov in ("openrouter", "open_router"):
+            return DEFAULT_OPENROUTER_BASE_URL if is_standard_url else raw
+        elif prov in ("local", "ollama"):
+            return raw or ollama_ai.get_ollama_host()
+        elif prov == "custom":
+            return raw or "http://localhost:8000/v1"
+        return raw or ""
 
     def get_effective_model(self, provider_name: str) -> str:
         model = self.current_model
@@ -945,16 +1107,20 @@ class AIProviderManager:
             return DEFAULT_LOCAL_MODEL
         elif provider_name == "openai":
             return "gpt-4o-mini"
+        elif provider_name in ("gemini", "google_gemini", "google"):
+            return DEFAULT_GEMINI_MODEL
         elif provider_name in ("openrouter", "open_router"):
             return "nvidia/nemotron-3-ultra-550b-a55b:free"
+        elif provider_name == "custom":
+            return "custom-model"
         return DEFAULT_EXTERNAL_MODEL
 
     def get_active_provider(self) -> BaseAIProvider:
         """
         Deterministic provider selection:
-        CASE A & B: Provider is 'local' or 'ollama' -> LocalOllamaProvider (qwen2.5vl:3b)
-        CASE C: External provider + valid API key -> OpenAICompatibleProvider
-        CASE D: External provider selected but API key missing/empty -> Mandatory fallback to LocalOllamaProvider (qwen2.5vl:3b)
+        CASE A & B: Provider is 'local' or 'ollama' -> OllamaAdapter (qwen2.5vl:3b)
+        CASE C: External provider + valid API key -> Dedicated Provider Adapter
+        CASE D: External provider selected but API key missing/empty -> Mandatory fallback to OllamaAdapter (qwen2.5vl:3b)
         """
         self._sync_with_disk()
         p = self.current_provider
@@ -962,7 +1128,32 @@ class AIProviderManager:
         has_key = bool(api_key and api_key.strip())
 
         if p in ("local", "ollama"):
-            return LocalOllamaProvider(model_name=self.get_effective_model("local"))
+            return OllamaAdapter(model_name=self.get_effective_model("local"), base_url=self.current_base_url or None)
+        elif p == "openai" and has_key:
+            return OpenAIAdapter(
+                api_key=api_key,
+                model_name=self.get_effective_model("openai"),
+                base_url=self.get_effective_base_url("openai"),
+            )
+        elif p in ("gemini", "google_gemini", "google") and has_key:
+            return GeminiAdapter(
+                api_key=api_key,
+                model_name=self.get_effective_model("gemini"),
+                base_url=self.get_effective_base_url("gemini"),
+            )
+        elif p in ("openrouter", "open_router") and has_key:
+            return OpenRouterAdapter(
+                api_key=api_key,
+                model_name=self.get_effective_model("openrouter"),
+                base_url=self.get_effective_base_url("openrouter"),
+            )
+        elif p == "custom":
+            return CustomAdapter(
+                base_url=self.get_effective_base_url("custom") or "http://localhost:8000/v1",
+                api_key=api_key or "",
+                model_name=self.get_effective_model("custom"),
+                request_format=self._request_format or "chat_completions",
+            )
         elif p and has_key:
             return OpenAICompatibleProvider(
                 provider_name=p,
@@ -972,7 +1163,7 @@ class AIProviderManager:
             )
         else:
             # Case D: External provider configured but missing/empty API key -> mandatory local Qwen fallback
-            return LocalOllamaProvider(model_name=self.get_effective_model("local"))
+            return OllamaAdapter(model_name=self.get_effective_model("local"))
 
     def get_safe_config(self) -> Dict[str, Any]:
         """
@@ -988,7 +1179,8 @@ class AIProviderManager:
             "active_model": provider.model_name,
             "mode": "external" if is_external else "local",
             "api_key_configured": bool(self.current_api_key),
-            "base_url": provider.base_url if is_external else "",
+            "base_url": provider.base_url if is_external else (self.current_base_url or ""),
+            "request_format": self._request_format or "chat_completions",
             "ollama_available": ollama_health.get("reachable", False) and ollama_health.get("model_installed", False),
             "local_fallback_available": True,
             "fallback_on_error": self.current_fallback_on_error,
@@ -1012,7 +1204,47 @@ class AIProviderManager:
 
             norm_p, norm_m, norm_u = normalize_openrouter_endpoint_and_model(p, raw_model, raw_url)
 
-            if norm_p not in ("local", "ollama") and key:
+            if norm_p in ("local", "ollama"):
+                test_prov = OllamaAdapter(model_name=norm_m, base_url=norm_u or None)
+                return await test_prov.test_connection()
+            elif norm_p == "openai":
+                if not key:
+                    return {
+                        "success": False,
+                        "provider": "openai",
+                        "model": norm_m,
+                        "message": "API key is required to test OpenAI.",
+                        "latency_ms": 0,
+                    }
+                test_prov = OpenAIAdapter(api_key=key, model_name=norm_m, base_url=norm_u or None)
+                return await test_prov.test_connection()
+            elif norm_p in ("gemini", "google_gemini", "google"):
+                if not key:
+                    return {
+                        "success": False,
+                        "provider": "gemini",
+                        "model": norm_m,
+                        "message": "API key is required to test Google Gemini.",
+                        "latency_ms": 0,
+                    }
+                test_prov = GeminiAdapter(api_key=key, model_name=norm_m, base_url=norm_u or None)
+                return await test_prov.test_connection()
+            elif norm_p in ("openrouter", "open_router"):
+                if not key:
+                    return {
+                        "success": False,
+                        "provider": "openrouter",
+                        "model": norm_m,
+                        "message": "API key is required to test OpenRouter.",
+                        "latency_ms": 0,
+                    }
+                test_prov = OpenRouterAdapter(api_key=key, model_name=norm_m, base_url=norm_u or None)
+                return await test_prov.test_connection()
+            elif norm_p == "custom":
+                req_fmt = candidate_config.get("request_format") or "chat_completions"
+                test_prov = CustomAdapter(base_url=norm_u, api_key=key, model_name=norm_m, request_format=req_fmt)
+                return await test_prov.test_connection()
+            elif key:
                 test_prov = OpenAICompatibleProvider(
                     provider_name=norm_p,
                     base_url=norm_u,
@@ -1020,7 +1252,7 @@ class AIProviderManager:
                     model_name=norm_m,
                 )
                 return await test_prov.test_connection()
-            elif norm_p not in ("local", "ollama") and not key:
+            else:
                 return {
                     "success": False,
                     "provider": norm_p,
@@ -1028,9 +1260,6 @@ class AIProviderManager:
                     "message": f"API key is required to test external provider '{norm_p}'.",
                     "latency_ms": 0,
                 }
-            else:
-                test_prov = LocalOllamaProvider(model_name=norm_m if norm_p in ("local", "ollama") else DEFAULT_LOCAL_MODEL)
-                return await test_prov.test_connection()
 
         provider = self.get_active_provider()
         return await provider.test_connection()

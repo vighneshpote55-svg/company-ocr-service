@@ -172,6 +172,7 @@ export interface AIProviderConfig {
   mode: 'local' | 'external';
   api_key_configured: boolean;
   base_url?: string;
+  request_format?: string;
   ollama_available?: boolean;
   local_fallback_available?: boolean;
   fallback_on_error?: boolean;

@@ -356,7 +356,10 @@ const DashboardApp: React.FC = () => {
           loadData();
           refreshAiConfig();
         }}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => {
+          setCurrentTab('settings');
+          setSelectedDoc(null);
+        }}
         onLogout={async () => {
           await authLogout();
           api.logout();

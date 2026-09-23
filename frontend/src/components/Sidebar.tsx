@@ -13,7 +13,7 @@ import {
 import type { EngineInfo, AppMode } from '../types';
 import { useAuth } from '../context/AuthContext';
 
-export type NavTab = 'dashboard' | 'repository';
+export type NavTab = 'dashboard' | 'repository' | 'settings';
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -193,10 +193,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
             {/* Settings */}
             <button
-              className="docpilot-nav-item"
+              className={`docpilot-nav-item ${currentTab === 'settings' ? 'active-glowing' : ''}`}
               onClick={() => {
+                handleNavClick('settings');
                 onOpenSettings();
-                if (onCloseMobile) onCloseMobile();
               }}
               title="Settings & AI Providers"
             >

@@ -747,6 +747,7 @@ export class ApiService {
     api_key?: string;
     base_url?: string;
     fallback_on_error?: boolean;
+    request_format?: string;
   }): Promise<AIProviderConfig> {
     const norm = normalizeOpenRouterConfig(payload.provider, payload.model, payload.base_url);
     const safePayload = {
@@ -772,6 +773,7 @@ export class ApiService {
     model?: string;
     api_key?: string;
     base_url?: string;
+    request_format?: string;
   }): Promise<AIConnectionTestResult> {
     const norm = candidate ? normalizeOpenRouterConfig(candidate.provider, candidate.model, candidate.base_url) : null;
     const safeCandidate = candidate ? {

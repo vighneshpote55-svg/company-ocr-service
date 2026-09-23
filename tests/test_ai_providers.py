@@ -622,3 +622,88 @@ async def test_test_connection_does_not_mutate_active_provider(monkeypatch):
     assert ai_providers.ai_provider_manager.get_active_provider().is_local is True
     assert ai_providers.ai_provider_manager.current_provider == "local"
 
+
+@pytest.mark.asyncio
+async def test_gemini_adapter_and_routing(monkeypatch):
+    """Verify GeminiAdapter connects to Google Gemini endpoint and routes correctly."""
+    monkeypatch.setenv("AI_PROVIDER", "gemini")
+    monkeypatch.setenv("AI_API_KEY", "AIzaSyTestKey123")
+    ai_providers.ai_provider_manager.reload_from_env()
+
+    prov = ai_providers.ai_provider_manager.get_active_provider()
+    assert isinstance(prov, ai_providers.GeminiAdapter)
+    assert prov.provider_name == "gemini"
+    assert "generativelanguage.googleapis.com" in prov.base_url
+
+    async def mock_gemini_call(self, url, *args, **kwargs):
+        payload = kwargs.get("json", {})
+        assert "messages" in payload
+        return httpx.Response(
+            200,
+            json={
+                "choices": [{
+                    "message": {
+                        "content": "Gemini response for document."
+                    }
+                }]
+            },
+            request=httpx.Request("POST", url),
+        )
+
+    with patch.object(httpx.AsyncClient, "post", new=mock_gemini_call):
+        reply = await ai_providers.ai_provider_manager.chat(
+            document_text="Sample text",
+            filename="doc.pdf",
+            message="Explain this document",
+        )
+        assert "Gemini response" in reply
+
+        test_res = await ai_providers.ai_provider_manager.test_connection()
+        assert test_res["success"] is True
+        assert test_res["provider"] == "gemini"
+
+
+@pytest.mark.asyncio
+async def test_custom_adapter_request_formats(monkeypatch):
+    """Verify CustomAdapter handles custom endpoints and request formats."""
+    monkeypatch.setenv("AI_PROVIDER", "custom")
+    ai_providers.ai_provider_manager.reload_from_env()
+    ai_providers.ai_provider_manager.update_config(
+        provider="custom",
+        base_url="http://custom-ai.internal:8000/v1",
+        model="custom-llama3",
+        request_format="chat_completions",
+    )
+
+    prov = ai_providers.ai_provider_manager.get_active_provider()
+    assert isinstance(prov, ai_providers.CustomAdapter)
+    assert prov.provider_name == "custom"
+    assert prov.request_format == "chat_completions"
+    assert prov.base_url == "http://custom-ai.internal:8000/v1"
+
+
+@pytest.mark.asyncio
+async def test_ai_service_direct_provider_routing_without_silent_fallback(monkeypatch):
+    """When an external provider fails and fallback_on_error is False, error must raise."""
+    import ai_service
+    monkeypatch.setenv("AI_PROVIDER", "openai")
+    monkeypatch.setenv("AI_API_KEY", "sk-proj-invalid-key")
+    ai_providers.ai_provider_manager.reload_from_env()
+    ai_providers.ai_provider_manager.update_config(fallback_on_error=False)
+
+    async def mock_openai_fail(self, url, *args, **kwargs):
+        return httpx.Response(
+            401,
+            text='{"error": {"message": "Incorrect API key provided"}}',
+            request=httpx.Request("POST", url),
+        )
+
+    with patch.object(httpx.AsyncClient, "post", new=mock_openai_fail):
+        with pytest.raises(RuntimeError) as exc_info:
+            await ai_service.analyze_document(
+                document_text="Sample invoice text",
+                filename="invoice.pdf",
+            )
+        assert "External AI authentication failed" in str(exc_info.value)
+
+

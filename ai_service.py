@@ -289,27 +289,9 @@ async def analyze_document(
             "extracted_fields": {},
         }
 
-    # 2. Shared Canonical Document Classifier
-    canonical_res = classify_document_content(document_text, filename=filename)
+    active_prov = ai_providers.ai_provider_manager.get_active_provider()
 
-    # If canonical classifier identified document with high/medium confidence, enforce it
-    if canonical_res["confidence"] in ("high", "medium") and canonical_res["document_type"] != "Unknown Document":
-        # Optionally augment extracted fields with active provider vision analysis
-        if file_path and os.path.exists(file_path):
-            try:
-                active_prov = ai_providers.ai_provider_manager.get_active_provider()
-                prov_res = await active_prov.analyze_document(
-                    document_text=document_text,
-                    file_path=file_path,
-                    filename=filename,
-                )
-                extra_fields = prov_res.get("extracted_fields") or {}
-                canonical_res["extracted_fields"] = {**extra_fields, **canonical_res.get("extracted_fields", {})}
-            except Exception as ex:
-                logger.debug("Provider vision augmentation skipped: %s", ex)
-        return canonical_res
-
-    # 3. Active AI Provider Document Analysis (Local Ollama or External Provider)
+    # 2. Active AI Provider Document Analysis (Local Ollama or External Provider)
     try:
         prov_res = await ai_providers.ai_provider_manager.analyze_document(
             document_text=document_text,
@@ -319,12 +301,13 @@ async def analyze_document(
         if prov_res and "error" not in prov_res:
             return prov_res
     except Exception as ex:
-        logger.warning("AI Provider analysis failed: %s; falling back to canonical classifier", ex)
-        active_p = ai_providers.ai_provider_manager.get_active_provider()
-        if not active_p.is_local and not ai_providers.ai_provider_manager._fallback_on_error:
+        if not active_prov.is_local and not ai_providers.ai_provider_manager.current_fallback_on_error:
+            # Raise real error from external provider! Never silently hide failures!
             raise
+        logger.warning("Active AI Provider analysis failed: %s; falling back to canonical classifier", ex)
 
-    # 4. Built-in Local Grounded Document Classifier fallback
+    # 3. Built-in Local Grounded Document Classifier fallback
+    canonical_res = classify_document_content(document_text, filename=filename)
     return canonical_res
 
 
@@ -719,7 +702,7 @@ async def chat_with_document(
             return reply
     except Exception as ex:
         active_p = ai_providers.ai_provider_manager.get_active_provider()
-        if not active_p.is_local and not ai_providers.ai_provider_manager._fallback_on_error:
+        if not active_p.is_local and not ai_providers.ai_provider_manager.current_fallback_on_error:
             raise
         logger.warning("Active AI Provider chat failed: %s; falling back to grounded line search", ex)
 

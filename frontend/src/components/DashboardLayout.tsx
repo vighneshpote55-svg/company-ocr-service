@@ -9,6 +9,7 @@ import { DocumentsTable } from './DocumentsTable';
 import { UploadCard } from './UploadCard';
 import { AIModeView } from './AIModeView';
 import { PageHeader } from './PageHeader';
+import { SettingsPage } from './SettingsPage';
 
 export interface DashboardLayoutProps {
   mode: AppMode;
@@ -163,6 +164,16 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
           {/* 1. Document Inspection Mode: strictly for Offline Mode verification */}
           {selectedDoc && inspectContent && mode === 'offline' ? (
             inspectContent
+          ) : currentTab === 'settings' ? (
+            /* Settings Full-Page System */
+            <div className="settings-page-wrapper mode-fade-enter">
+              <SettingsPage
+                onNotify={onNotify}
+                onRefreshAiConfig={onRefreshAiConfig}
+                stats={stats}
+                documents={documents}
+              />
+            </div>
           ) : currentTab === 'repository' ? (
             /* 2. Document Vault Full View */
             <div className="vault-view-wrapper mode-fade-enter">

@@ -2018,10 +2018,13 @@ async def get_ai_mode_status(
 
 class AiConfigUpdatePayload(BaseModel):
     provider: Optional[str] = None
+    active_provider: Optional[str] = None
     model: Optional[str] = None
+    active_model: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     fallback_on_error: Optional[bool] = None
+    request_format: Optional[str] = None
 
 
 class AiTestConnectionPayload(BaseModel):
@@ -2029,6 +2032,7 @@ class AiTestConnectionPayload(BaseModel):
     model: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
+    request_format: Optional[str] = None
 
 
 @app.get("/api/ai/config")
@@ -2059,11 +2063,12 @@ async def update_ai_config_endpoint(
         )
 
     ai_providers.ai_provider_manager.update_config(
-        provider=payload.provider,
+        provider=payload.provider or payload.active_provider,
         api_key=payload.api_key,
-        model=payload.model,
+        model=payload.model or payload.active_model,
         base_url=payload.base_url,
         fallback_on_error=payload.fallback_on_error,
+        request_format=payload.request_format,
     )
     return ai_providers.ai_provider_manager.get_safe_config()
 
