@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
   ArrowLeft,
-  Search,
   Bell,
   Sun,
   Moon,
@@ -117,27 +116,8 @@ export const Header: React.FC<HeaderProps> = ({
         )}
       </div>
 
-      {/* Right: Workspace Capsule, Search, Notification Bell, User Avatar */}
+      {/* Right: Notification Bell, Refresh, Theme Toggle, Settings, Profile Avatar */}
       <div className="docpilot-header-right">
-        {/* Workspace Capsule Pill: Workspace: Alpha | Project: Security Audit Q3 */}
-        <div className="docpilot-workspace-capsule" title="Active Tenant Workspace">
-          <span className="capsule-label">Workspace:</span>
-          <span className="capsule-val">Alpha</span>
-          <span className="capsule-sep">|</span>
-          <span className="capsule-label">Project:</span>
-          <span className="capsule-val">Security Audit Q3</span>
-        </div>
-
-        {/* Search Icon Button */}
-        <button
-          className="docpilot-header-icon-btn"
-          onClick={onRefresh}
-          title="Search Document Repository"
-          aria-label="Search"
-        >
-          <Search size={17} />
-        </button>
-
         {/* Notifications Icon Button */}
         <div className="header-popover-container" ref={notificationsRef}>
           <button
@@ -235,44 +215,48 @@ export const Header: React.FC<HeaderProps> = ({
           </div>
 
           {showUserMenu && (
-            <div className="header-dropdown-menu user-dropdown">
+            <div className="header-dropdown-menu docpilot-profile-dropdown">
               <div className="dropdown-user-header">
-                <div className="dropdown-user-avatar">
-                  {displayName.charAt(0).toUpperCase()}
+                <div className="dropdown-user-avatar-wrap">
+                  <div className="dropdown-user-avatar">
+                    {displayName.charAt(0).toUpperCase()}
+                  </div>
                 </div>
-                <div>
-                  <p className="dropdown-user-name">{displayName}</p>
-                  <p className="dropdown-user-email">Admin • Workspace Alpha</p>
+                <div className="dropdown-user-meta">
+                  <p className="dropdown-user-name" title={displayName}>{displayName}</p>
+                  <span className="dropdown-user-role-badge">Admin</span>
                 </div>
               </div>
 
               <div className="dropdown-divider" />
 
-              <button
-                className="dropdown-action-btn"
-                onClick={() => {
-                  setShowUserMenu(false);
-                  onOpenSettings();
-                }}
-              >
-                <Settings size={15} />
-                <span>AI Providers & Settings</span>
-              </button>
+              <div className="dropdown-menu-items">
+                <button
+                  className="dropdown-action-btn"
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    onOpenSettings();
+                  }}
+                >
+                  <Settings size={15} />
+                  <span>AI Providers & Settings</span>
+                </button>
 
-              <button
-                className="dropdown-action-btn danger"
-                onClick={async () => {
-                  setShowUserMenu(false);
-                  if (onLogout) {
-                    onLogout();
-                  } else {
-                    await authLogout();
-                  }
-                }}
-              >
-                <LogOut size={15} />
-                <span>Sign Out</span>
-              </button>
+                <button
+                  className="dropdown-action-btn danger"
+                  onClick={async () => {
+                    setShowUserMenu(false);
+                    if (onLogout) {
+                      onLogout();
+                    } else {
+                      await authLogout();
+                    }
+                  }}
+                >
+                  <LogOut size={15} />
+                  <span>Sign Out</span>
+                </button>
+              </div>
             </div>
           )}
         </div>

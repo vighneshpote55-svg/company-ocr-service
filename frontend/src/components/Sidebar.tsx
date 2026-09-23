@@ -1,17 +1,13 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   LayoutDashboard,
   FileText,
-  Search,
   Sparkles,
-  Users,
   Settings,
   ChevronLeft,
   ChevronRight,
-  Globe,
   LogOut,
   X,
-  ChevronDown,
   ShieldCheck,
 } from 'lucide-react';
 import type { EngineInfo, AppMode } from '../types';
@@ -47,8 +43,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onLogout,
 }) => {
   const { user, logout: authLogout } = useAuth();
-  const [activeProject, setActiveProject] = useState<'alpha' | 'beta' | 'delta'>('alpha');
-  const [isProjectsOpen, setIsProjectsOpen] = useState(true);
 
   const handleNavClick = (tab: NavTab) => {
     onSelectTab(tab);
@@ -139,12 +133,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
         {/* 2. Main Navigation Links */}
         <div className="docpilot-sidebar-nav-scroll">
           <nav className="docpilot-sidebar-menu" aria-label="DocPilot Navigation">
-            {/* Dashboard (Active Pill with glowing border) */}
+            {/* Dashboard */}
             <button
-              className={`docpilot-nav-item ${currentTab === 'dashboard' && appMode === 'ai' ? 'active-glowing' : ''}`}
-              onClick={() => {
-                handleModeClick('ai');
-              }}
+              className={`docpilot-nav-item ${currentTab === 'dashboard' ? 'active-glowing' : ''}`}
+              onClick={() => handleNavClick('dashboard')}
               title="Dashboard"
             >
               <div className="docpilot-nav-icon">
@@ -165,31 +157,19 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {!isCollapsed && <span className="docpilot-nav-label">My Documents</span>}
             </button>
 
-            {/* Search */}
+            {/* AI Mode */}
             <button
-              className="docpilot-nav-item"
-              onClick={() => handleNavClick('repository')}
-              title="Search Documents"
-            >
-              <div className="docpilot-nav-icon">
-                <Search size={18} />
-              </div>
-              {!isCollapsed && <span className="docpilot-nav-label">Search</span>}
-            </button>
-
-            {/* AI Tools / Mode Switcher */}
-            <button
-              className={`docpilot-nav-item ${appMode === 'ai' ? 'highlighted' : ''}`}
+              className={`docpilot-nav-item ${appMode === 'ai' ? 'active-glowing' : ''}`}
               onClick={() => handleModeClick('ai')}
-              title="AI Tools & Analysis"
+              title="AI Mode (Qwen2.5-VL Document Intelligence)"
             >
               <div className="docpilot-nav-icon">
                 <Sparkles size={18} />
               </div>
               {!isCollapsed && (
                 <div className="docpilot-nav-label-group">
-                  <span className="docpilot-nav-label">AI Tools</span>
-                  <span className="docpilot-mini-tag">Active</span>
+                  <span className="docpilot-nav-label">AI Mode</span>
+                  {appMode === 'ai' && <span className="docpilot-mini-tag">Active</span>}
                 </div>
               )}
             </button>
@@ -211,18 +191,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
               )}
             </button>
 
-            {/* Teams */}
-            <button
-              className="docpilot-nav-item"
-              onClick={() => onSelectTab('dashboard')}
-              title="Teams & Permissions"
-            >
-              <div className="docpilot-nav-icon">
-                <Users size={18} />
-              </div>
-              {!isCollapsed && <span className="docpilot-nav-label">Teams</span>}
-            </button>
-
             {/* Settings */}
             <button
               className="docpilot-nav-item"
@@ -240,58 +208,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </nav>
         </div>
 
-        {/* 3. Sidebar Bottom Section: Multi-tenant Workspace & User Profile */}
+        {/* 3. Sidebar Bottom Section: User Profile */}
         <div className="docpilot-sidebar-bottom">
-          {/* Multi-tenant Workspace Capsule */}
-          {!isCollapsed && (
-            <div className="docpilot-workspace-card">
-              <div
-                className="docpilot-workspace-card-header"
-                onClick={() => setIsProjectsOpen((p) => !p)}
-                style={{ cursor: 'pointer' }}
-              >
-                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                  <Globe size={13} color="#00C2FF" />
-                  <span className="docpilot-workspace-card-title">Multi-tenant workspace</span>
-                </div>
-                <ChevronDown
-                  size={13}
-                  color="#94A3B8"
-                  style={{
-                    transform: isProjectsOpen ? 'rotate(180deg)' : 'none',
-                    transition: 'transform 0.15s ease',
-                  }}
-                />
-              </div>
-
-              {isProjectsOpen && (
-                <div className="docpilot-projects-list">
-                  <div className="docpilot-projects-lbl">Projects</div>
-                  <div
-                    className={`docpilot-project-item ${activeProject === 'alpha' ? 'active' : ''}`}
-                    onClick={() => setActiveProject('alpha')}
-                  >
-                    <span className="project-badge blue">A</span>
-                    <span className="project-name">Alpha</span>
-                  </div>
-                  <div
-                    className={`docpilot-project-item ${activeProject === 'beta' ? 'active' : ''}`}
-                    onClick={() => setActiveProject('beta')}
-                  >
-                    <span className="project-badge teal">S</span>
-                    <span className="project-name">Beta</span>
-                  </div>
-                  <div
-                    className={`docpilot-project-item ${activeProject === 'delta' ? 'active' : ''}`}
-                    onClick={() => setActiveProject('delta')}
-                  >
-                    <span className="project-badge magenta">R</span>
-                    <span className="project-name">Delta</span>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
 
           {/* User Profile Footer */}
           <div className="docpilot-user-footer">

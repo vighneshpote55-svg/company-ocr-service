@@ -12,6 +12,8 @@ import { AIChatPanel } from './AIChatPanel.tsx';
 import { SettingsModal } from './SettingsModal.tsx';
 import { AIModeView } from './AIModeView.tsx';
 import { ExtractedFields } from './ExtractedFields.tsx';
+import { Sidebar } from './Sidebar.tsx';
+import { Header } from './Header.tsx';
 import { AuthProvider } from '../context/AuthContext.tsx';
 import type { DocumentItem, SupportedType, AIProviderConfig } from '../types.ts';
 import { normalizeAiDocument } from '../types.ts';
@@ -736,6 +738,65 @@ test('Fix AI Chat Bug: AIModeView passes matching active document ID and filenam
   assert.ok(html.includes('Summarize Document'), 'Must render Quick Action button Summarize Document');
   assert.ok(html.includes('Ask any question about GST RC.pdf...'), 'Chat panel must be bound to GST RC.pdf');
 });
+
+test('Final UI Cleanup: Sidebar contains only Dashboard, My Documents, AI Mode, Offline OCR, Settings and Profile footer', () => {
+  const html = renderToString(
+    React.createElement(
+      AuthProvider,
+      null,
+      React.createElement(Sidebar, {
+        currentTab: 'dashboard',
+        onSelectTab: () => {},
+        onOpenSettings: () => {},
+        appMode: 'ai',
+        onSelectMode: () => {},
+      })
+    )
+  );
+
+  // Must include
+  assert.ok(html.includes('Dashboard'), 'Sidebar must include Dashboard');
+  assert.ok(html.includes('My Documents'), 'Sidebar must include My Documents');
+  assert.ok(html.includes('AI Mode'), 'Sidebar must include AI Mode');
+  assert.ok(html.includes('Offline OCR'), 'Sidebar must include Offline OCR');
+  assert.ok(html.includes('Settings'), 'Sidebar must include Settings');
+  assert.ok(html.includes('Admin'), 'Sidebar must include user profile footer with Admin');
+
+  // Must NOT include
+  assert.ok(!html.includes('Search Documents'), 'Sidebar must NOT include Search Documents');
+  assert.ok(!html.includes('Teams &amp; Permissions') && !html.includes('Teams & Permissions'), 'Sidebar must NOT include Teams');
+  assert.ok(!html.includes('Multi-tenant workspace'), 'Sidebar must NOT include Multi-tenant workspace');
+  assert.ok(!html.includes('AI Tools'), 'Sidebar must NOT include legacy AI Tools name');
+});
+
+test('Final UI Cleanup: Header does not contain Workspace pill or search button', () => {
+  const html = renderToString(
+    React.createElement(
+      AuthProvider,
+      null,
+      React.createElement(Header, {
+        mode: 'ai',
+        onModeChange: () => {},
+        isBackendConnected: true,
+        onOpenSettings: () => {},
+        onRefresh: () => {},
+        onToggleTheme: () => {},
+      })
+    )
+  );
+
+  // Must NOT include workspace pill or search button
+  assert.ok(!html.includes('Security Audit Q3'), 'Header must NOT include Security Audit Q3');
+  assert.ok(!html.includes('docpilot-workspace-capsule'), 'Header must NOT include docpilot-workspace-capsule');
+  assert.ok(!html.includes('Search Document Repository'), 'Header must NOT include search button');
+
+  // Must include bell, refresh, theme toggle, settings, and profile avatar
+  assert.ok(html.includes('Notifications'), 'Header must include Notifications');
+  assert.ok(html.includes('Synchronize Data'), 'Header must include Refresh button');
+  assert.ok(html.includes('Settings'), 'Header must include Settings');
+  assert.ok(html.includes('docpilot-header-avatar'), 'Header must include avatar');
+});
+
 
 
 

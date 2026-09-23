@@ -652,6 +652,131 @@ p, span, div {
 }
 
 /* ==========================================================================
+   DocPilot Premium Profile Dropdown
+   ========================================================================== */
+.header-dropdown-menu.docpilot-profile-dropdown {
+  width: 250px;
+  background: #0B132B;
+  border: 1px solid rgba(0, 194, 255, 0.25);
+  border-radius: 14px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.6), 0 0 20px rgba(0, 194, 255, 0.1);
+  padding: 8px;
+  overflow: hidden;
+  z-index: 100;
+}
+
+.dropdown-user-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 10px 12px 10px;
+}
+
+.dropdown-user-avatar-wrap {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  padding: 2px;
+  background: linear-gradient(135deg, #00C2FF, #0284C7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 10px rgba(0, 194, 255, 0.35);
+  flex-shrink: 0;
+}
+
+.dropdown-user-avatar {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: #0F172A;
+  color: #FFFFFF;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.dropdown-user-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dropdown-user-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: #F8FAFC;
+  margin: 0;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.dropdown-user-role-badge {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  padding: 2px 8px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: #00C2FF;
+  background: rgba(0, 194, 255, 0.12);
+  border: 1px solid rgba(0, 194, 255, 0.3);
+  border-radius: 9999px;
+  box-shadow: 0 0 8px rgba(0, 194, 255, 0.15);
+}
+
+.docpilot-profile-dropdown .dropdown-divider {
+  height: 1px;
+  background: rgba(255, 255, 255, 0.08);
+  margin: 2px 4px 6px 4px;
+}
+
+.dropdown-menu-items {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.dropdown-action-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 12px;
+  border: none;
+  background: transparent;
+  color: #CBD5E1;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 8px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.dropdown-action-btn:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #00C2FF;
+}
+
+.dropdown-action-btn.danger {
+  color: #F87171;
+}
+
+.dropdown-action-btn.danger:hover {
+  background: rgba(239, 68, 68, 0.12);
+  color: #FCA5A5;
+}
+
+/* ==========================================================================
    Dark Floating Sidebar Redesign
    ========================================================================== */
 .sidebar-backdrop {
