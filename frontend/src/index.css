@@ -3521,18 +3521,62 @@ p, span, div {
   border: 1px solid rgba(148, 163, 184, 0.25);
   margin-left: 6px;
   vertical-align: middle;
+  display: inline-flex;
+  align-items: center;
 }
 
+.status-managed-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 9999px;
+  background: rgba(245, 158, 11, 0.15);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.settings-managed-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 6px;
+  background: rgba(245, 158, 11, 0.12);
+  color: #fbbf24;
+  border: 1px solid rgba(245, 158, 11, 0.28);
+}
+
+/* High-contrast readable disabled and read-only inputs */
+.settings-input-field:disabled,
+.settings-input-field[readonly] {
+  background-color: rgba(15, 23, 42, 0.7) !important;
+  color: #f1f5f9 !important; /* High contrast readable text */
+  -webkit-text-fill-color: #f1f5f9 !important; /* Overrides default browser graying/dimming */
+  opacity: 1 !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  cursor: default !important;
+}
+
+.settings-input-field:disabled::placeholder,
+.settings-input-field[readonly]::placeholder {
+  color: #94a3b8 !important;
+  -webkit-text-fill-color: #94a3b8 !important;
+}
+
+.settings-input-wrapper.is-read-only,
 .settings-input-wrapper.is-disabled {
-  opacity: 0.72;
-  background: rgba(255, 255, 255, 0.03);
-  cursor: not-allowed;
-  border-color: rgba(255, 255, 255, 0.08);
+  opacity: 1 !important;
+  cursor: default;
 }
 
-.settings-input-wrapper.is-disabled input {
-  cursor: not-allowed;
-  color: var(--text-muted);
+.settings-input-wrapper.is-read-only .settings-input-left-icon,
+.settings-input-wrapper.is-disabled .settings-input-left-icon {
+  color: #94a3b8;
 }
 
 /* Collapsible Accordion: Advanced / Administrator Settings */
@@ -3759,6 +3803,12 @@ p, span, div {
   color: var(--success-text);
 }
 
+.settings-feedback-banner.feedback-warning {
+  background-color: rgba(245, 158, 11, 0.12);
+  border: 1.5px solid rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+}
+
 .settings-feedback-banner.feedback-error {
   background-color: var(--error-bg);
   border: 1.5px solid var(--error-border);
@@ -3781,6 +3831,24 @@ p, span, div {
   padding-top: 24px;
   border-top: 1px solid var(--border-subtle);
   gap: 16px;
+}
+
+.settings-footer-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.84rem;
+  color: #94a3b8;
+  font-weight: 500;
+}
+
+.settings-footer-lock-icon {
+  color: #fbbf24;
+  flex-shrink: 0;
+}
+
+.settings-close-btn {
+  min-width: 100px;
 }
 
 .settings-test-btn {

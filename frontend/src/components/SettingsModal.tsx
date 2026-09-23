@@ -70,7 +70,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   const [aiBaseUrl, setAiBaseUrl] = useState('');
   const [isAiKeyConfigured, setIsAiKeyConfigured] = useState(false);
   const [isTestingAi, setIsTestingAi] = useState(false);
-  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const [aiTestResult, setAiTestResult] = useState<{ ok: boolean; isWarning?: boolean; message: string } | null>(null);
 
   // Sync state with api config whenever modal opens
   useEffect(() => {
@@ -119,6 +119,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   if (!isOpen) return null;
 
   const handleTestConnection = async () => {
+    if (!isAdmin) {
+      setTestResult({
+        ok: false,
+        message: 'Connection test unavailable — administrator permission required.',
+      });
+      return;
+    }
     setIsTesting(true);
     setTestResult(null);
     const start = performance.now();
@@ -132,10 +139,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
         message: `Connected successfully (${latency}ms latency) • FastAPI Service v${health.version || '1.0.0'}`,
       });
     } catch (err: any) {
-      setTestResult({
-        ok: false,
-        message: `Connection failed: ${err.message || 'Cannot reach FastAPI backend.'}`,
-      });
+      const errMsg = err?.message || '';
+      const isPerm =
+        errMsg.toLowerCase().includes('permission') ||
+        errMsg.toLowerCase().includes('forbidden') ||
+        errMsg.toLowerCase().includes('403') ||
+        errMsg.toLowerCase().includes('administrator');
+
+      if (isPerm) {
+        setTestResult({
+          ok: false,
+          message: 'Connection test unavailable — administrator permission required.',
+        });
+      } else {
+        setTestResult({
+          ok: false,
+          message: `Connection failed: ${errMsg || 'Cannot reach FastAPI backend.'}`,
+        });
+      }
     } finally {
       setIsTesting(false);
     }
@@ -163,6 +184,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
   };
 
   const handleTestAiConnection = async () => {
+    if (!isAdmin) {
+      setAiTestResult({
+        ok: false,
+        isWarning: true,
+        message: 'Connection test unavailable — administrator permission required.',
+      });
+      return;
+    }
     setIsTestingAi(true);
     setAiTestResult(null);
     try {
@@ -176,6 +205,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
       const res = await api.testAiConnection(candidate);
       setAiTestResult({
         ok: res.success,
+        isWarning: false,
         message: res.message,
       });
       if (aiProvider === 'external') {
@@ -183,10 +213,26 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
         if (norm.model && norm.model !== aiModel) setAiModel(norm.model);
       }
     } catch (err: any) {
-      setAiTestResult({
-        ok: false,
-        message: `Connection failed: ${err.message || 'Error reaching provider.'}`,
-      });
+      const errMsg = err?.message || '';
+      const isPerm =
+        errMsg.toLowerCase().includes('permission') ||
+        errMsg.toLowerCase().includes('forbidden') ||
+        errMsg.toLowerCase().includes('403') ||
+        errMsg.toLowerCase().includes('administrator');
+
+      if (isPerm) {
+        setAiTestResult({
+          ok: false,
+          isWarning: true,
+          message: 'Connection test unavailable — administrator permission required.',
+        });
+      } else {
+        setAiTestResult({
+          ok: false,
+          isWarning: false,
+          message: `Connection failed: ${errMsg || 'Error reaching provider.'}`,
+        });
+      }
     } finally {
       setIsTestingAi(false);
     }
@@ -363,11 +409,16 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                       <span className="status-connection-badge">
                         {connectionLatency ? `${connectionLatency}ms` : 'Connected'}
                       </span>
+                      {!isAdmin && (
+                        <span className="status-managed-pill">
+                          <Lock size={11} /> Managed by administrator
+                        </span>
+                      )}
                     </div>
                     <div className="status-banner-subtext">
                       {activeAiConfig?.mode === 'external'
-                        ? `Cloud Endpoint: ${activeAiConfig.base_url || 'https://openrouter.ai/api/v1'} • ${activeAiConfig.api_key_configured ? 'Key Encrypted' : 'Key Missing'}`
-                        : 'Private air-gapped inference via internal Ollama (qwen2.5vl:3b).'}
+                        ? `Cloud AI reasoning via ${activeAiConfig.active_provider || 'OpenRouter'} endpoint.`
+                        : 'Private air-gapped inference active on this device (offline & private).'}
                     </div>
                   </div>
                 </div>
@@ -378,6 +429,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                     className="btn btn-secondary btn-sm test-connection-pill-btn"
                     onClick={handleTestAiConnection}
                     disabled={isTestingAi}
+                    title={!isAdmin ? 'Administrator permission required to test connections' : 'Test AI Model connectivity'}
                   >
                     <RefreshCw size={13} className={isTestingAi ? 'spin-anim' : ''} />
                     <span>{isTestingAi ? 'Testing...' : 'Test AI Connection'}</span>
@@ -388,11 +440,23 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               {/* AI Test Status Banner */}
               {aiTestResult && (
                 <div
-                  className={`settings-feedback-banner ${aiTestResult.ok ? 'feedback-success' : 'feedback-error'}`}
+                  className={`settings-feedback-banner ${
+                    aiTestResult.ok
+                      ? 'feedback-success'
+                      : aiTestResult.isWarning
+                      ? 'feedback-warning'
+                      : 'feedback-error'
+                  }`}
                   role="alert"
                 >
                   <div className="feedback-icon">
-                    {aiTestResult.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+                    {aiTestResult.ok ? (
+                      <CheckCircle2 size={16} />
+                    ) : aiTestResult.isWarning ? (
+                      <Lock size={16} />
+                    ) : (
+                      <AlertCircle size={16} />
+                    )}
                   </div>
                   <div className="feedback-message">{aiTestResult.message}</div>
                 </div>
@@ -404,16 +468,24 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                   <div>
                     <h3 className="settings-section-heading">AI Model Configuration</h3>
                     <p className="settings-section-subheading">
-                      Select the primary reasoning model for document extraction and contextual Q&A.
+                      Primary reasoning model for document extraction and contextual analysis.
                     </p>
                   </div>
-                  <span className="settings-endpoint-pill">AI Mode Engine</span>
+                  {!isAdmin ? (
+                    <span className="settings-managed-tag">
+                      <Lock size={12} /> Managed by administrator
+                    </span>
+                  ) : (
+                    <span className="settings-endpoint-pill">AI Mode Engine</span>
+                  )}
                 </div>
 
                 {!isAdmin && (
                   <div className="settings-admin-notice">
                     <Lock size={15} />
-                    <span>AI Provider settings are managed by your administrator.</span>
+                    <span>
+                      Managed by administrator — AI provider and model settings are view-only for standard accounts.
+                    </span>
                   </div>
                 )}
 
@@ -421,8 +493,13 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                   <div className="settings-field-col">
                     <label className="settings-input-label" htmlFor="ai-provider-select">
                       Provider
+                      {!isAdmin && (
+                        <span className="settings-badge-read-only">
+                          <Lock size={10} style={{ marginRight: '3px' }} /> Read-only
+                        </span>
+                      )}
                     </label>
-                    <div className="settings-input-wrapper">
+                    <div className={`settings-input-wrapper ${!isAdmin ? 'is-read-only' : ''}`}>
                       <div className="settings-input-left-icon" aria-hidden="true">
                         <Bot size={18} />
                       </div>
@@ -452,8 +529,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                     </div>
                     <span className="settings-field-hint">
                       {aiProvider === 'local'
-                        ? 'Inference stays local on your machine. Zero external API key or network required.'
-                        : 'Routes document intelligence queries to cloud or custom OpenAI-compatible endpoints.'}
+                        ? 'Private air-gapped inference on this device.'
+                        : 'Routes document intelligence queries to cloud endpoints.'}
                     </span>
                   </div>
 
@@ -462,7 +539,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                       <label className="settings-input-label" htmlFor="ai-model-input">
                         Model <span className="settings-badge-read-only">Deterministic</span>
                       </label>
-                      <div className="settings-input-wrapper is-disabled">
+                      <div className="settings-input-wrapper is-read-only">
                         <div className="settings-input-left-icon" aria-hidden="true">
                           <Cpu size={18} />
                         </div>
@@ -476,7 +553,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
                         />
                       </div>
                       <span className="settings-field-hint">
-                        Default vision model: Qwen2.5-VL 3B (verified for air-gapped document intelligence).
+                        Active vision engine: Qwen2.5-VL 3B (local inference).
                       </span>
                     </div>
                   ) : (
@@ -760,24 +837,40 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
             {/* Footer Buttons */}
             <div className="settings-panel-footer">
-              <button
-                type="button"
-                className="btn btn-secondary"
-                onClick={onClose}
-              >
-                <span>Cancel</span>
-              </button>
+              {!isAdmin ? (
+                <>
+                  <div className="settings-footer-info">
+                    <Lock size={14} className="settings-footer-lock-icon" />
+                    <span>View-only mode • Managed by administrator</span>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary settings-close-btn"
+                    onClick={onClose}
+                  >
+                    <span>Close</span>
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    className="btn btn-secondary"
+                    onClick={onClose}
+                  >
+                    <span>Cancel</span>
+                  </button>
 
-              <button
-                type="button"
-                className="btn btn-primary settings-save-btn"
-                onClick={handleSave}
-                disabled={!isAdmin}
-                title={!isAdmin ? 'Only administrators can save configuration changes.' : undefined}
-              >
-                <Check size={16} />
-                <span>Save Changes</span>
-              </button>
+                  <button
+                    type="button"
+                    className="btn btn-primary settings-save-btn"
+                    onClick={handleSave}
+                  >
+                    <Check size={16} />
+                    <span>Save Changes</span>
+                  </button>
+                </>
+              )}
             </div>
           </>
         ) : (
