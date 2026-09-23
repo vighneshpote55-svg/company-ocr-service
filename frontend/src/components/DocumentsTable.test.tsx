@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import React from 'react';
 import { renderToString } from 'react-dom/server';
-import { DocumentsTable } from './DocumentsTable.tsx';
+import { DocumentsTable, formatConfidence } from './DocumentsTable.tsx';
 import { DocumentPreview } from './DocumentPreview.tsx';
 import { OcrDecisionBadge } from './OcrDecisionBadge.tsx';
 import { AIAnalysisCard } from './AIAnalysisCard.tsx';
@@ -880,6 +880,159 @@ test('Dashboard UI Redesign: DashboardLayout renders simplified banner and 2-col
   assert.ok(html.includes('View all'), 'Must render View all link');
   assert.ok(html.includes('WhatsApp Image'), 'Must render recent document filenames');
 });
+
+test('formatConfidence correctly formats real floats, percentages, failures, and N/A without 100% fallback', () => {
+  // 1. Real OCR confidence float (0.9425 -> 94%)
+  assert.equal(
+    formatConfidence({ status: 'completed', confidence: 0.9425 } as any),
+    '94%',
+    '0.9425 should round to 94%'
+  );
+
+  // 2. Real float (0.812 -> 81%)
+  assert.equal(
+    formatConfidence({ status: 'completed', confidence: 0.812 } as any),
+    '81%',
+    '0.812 should round to 81%'
+  );
+
+  // 3. String float ("0.98" -> 98%)
+  assert.equal(
+    formatConfidence({ status: 'completed', confidence: '0.98' } as any),
+    '98%',
+    'String "0.98" should format to 98%'
+  );
+
+  // 4. Missing confidence (undefined -> N/A, never hardcoded 100%!)
+  assert.equal(
+    formatConfidence({ status: 'completed', confidence: undefined } as any),
+    'N/A',
+    'undefined confidence must return N/A'
+  );
+
+  // 5. Null confidence -> N/A
+  assert.equal(
+    formatConfidence({ status: 'completed', confidence: null } as any),
+    'N/A',
+    'null confidence must return N/A'
+  );
+
+  // 6. Empty string confidence -> N/A
+  assert.equal(
+    formatConfidence({ status: 'completed', confidence: '' } as any),
+    'N/A',
+    'empty string confidence must return N/A'
+  );
+
+  // 7. Failed document -> 0%
+  assert.equal(
+    formatConfidence({ status: 'failed', confidence: 0.95 } as any),
+    '0%',
+    'Failed document must return 0%'
+  );
+
+  // 8. Error status document -> 0%
+  assert.equal(
+    formatConfidence({ status: 'error', confidence: null } as any),
+    '0%',
+    'Error status document must return 0%'
+  );
+
+  // 9. Legitimate 1.0 (100%)
+  assert.equal(
+    formatConfidence({ status: 'completed', confidence: 1.0 } as any),
+    '100%',
+    'Legitimate 1.0 confidence should format to 100%'
+  );
+});
+
+test('DocumentsTable renders real confidence and N/A for missing values without hardcoded 100%', () => {
+  const docsWithDiverseConfidence: DocumentItem[] = [
+    {
+      id: 'doc-real-conf',
+      filename: 'real_conf_doc.pdf',
+      file_path: '/uploads/real_conf_doc.pdf',
+      file_size: 1024,
+      file_type: '.pdf',
+      doc_type: 'pan',
+      document_type: 'PAN Card',
+      ocr_required: true,
+      text_source: 'rapid_ocr',
+      status: 'completed',
+      confidence: 0.9425,
+      pages: 1,
+      extracted_fields: {},
+      field_confidences: {},
+      extracted_text: 'PAN SAMPLE',
+      has_preview: false,
+      created_at: '2026-09-23T12:00:00Z',
+    },
+    {
+      id: 'doc-missing-conf',
+      filename: 'missing_conf_doc.pdf',
+      file_path: '/uploads/missing_conf_doc.pdf',
+      file_size: 2048,
+      file_type: '.pdf',
+      doc_type: 'unknown',
+      document_type: 'Unknown Document',
+      ocr_required: true,
+      text_source: 'rapid_ocr',
+      status: 'completed',
+      confidence: undefined, // Missing!
+      pages: 1,
+      extracted_fields: {},
+      field_confidences: {},
+      extracted_text: '',
+      has_preview: false,
+      created_at: '2026-09-23T12:00:00Z',
+    },
+    {
+      id: 'doc-failed',
+      filename: 'failed_doc.pdf',
+      file_path: '/uploads/failed_doc.pdf',
+      file_size: 512,
+      file_type: '.pdf',
+      doc_type: 'unknown',
+      document_type: 'Unknown Document',
+      ocr_required: true,
+      text_source: 'rapid_ocr',
+      status: 'failed',
+      confidence: 0.0,
+      pages: 1,
+      extracted_fields: {},
+      field_confidences: {},
+      extracted_text: '',
+      has_preview: false,
+      created_at: '2026-09-23T12:00:00Z',
+    },
+  ];
+
+  const html = renderToString(
+    React.createElement(DocumentsTable, {
+      documents: docsWithDiverseConfidence,
+      supportedTypes: mockSupportedTypes,
+      onSelectDocument: () => {},
+      onDeleteDocument: () => {},
+      onRefresh: () => {},
+    })
+  );
+
+  // Real confidence rendered
+  assert.ok(html.includes('94%'), 'Must render real confidence 94%');
+
+  // Missing confidence rendered as N/A
+  assert.ok(html.includes('N/A'), 'Must render N/A for missing confidence');
+
+  // Failed document rendered as 0%
+  assert.ok(html.includes('0%'), 'Must render 0% for failed document');
+
+  // Hardcoded 100% must NOT be present
+  assert.ok(!html.includes('100%'), 'Must NOT default to 100% for missing confidence');
+
+  // Accurate pagination counts
+  assert.ok(html.includes('Showing <strong>1</strong> to <strong>3</strong> of <strong>3</strong> documents'));
+});
+
 
 
 

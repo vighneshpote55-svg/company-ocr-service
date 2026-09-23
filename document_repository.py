@@ -347,14 +347,24 @@ def get_user_documents(
 
                 def build_query(cols):
                     q = client.table("documents").select(cols, count="exact").eq("user_id", user_id)
-                    if mode:
-                        q = q.eq("mode", mode)
-                    if doc_type:
-                        q = q.eq("doc_type", doc_type)
-                    if status:
-                        q = q.eq("status", status)
-                    if search:
-                        q = q.ilike("original_filename", f"%{search}%")
+                    if mode and mode.lower() != "all":
+                        q = q.eq("mode", mode.lower())
+                    if doc_type and doc_type.lower() != "all":
+                        q = q.eq("doc_type", doc_type.lower())
+                    if status and status.lower() != "all":
+                        sf = status.lower()
+                        if sf == "verified":
+                            q = q.eq("verification_status", "verified")
+                        elif sf in ("review_required", "review"):
+                            q = q.or_("verification_status.eq.review_required,review_required.eq.true")
+                        elif sf == "unsupported":
+                            q = q.eq("verification_status", "unsupported")
+                        elif sf == "failed":
+                            q = q.in_("status", ["failed", "error"])
+                        else:
+                            q = q.eq("status", status)
+                    if search and search.strip():
+                        q = q.ilike("original_filename", f"%{search.strip()}%")
                     offset = (page - 1) * limit
                     return q.order("created_at", desc=True).range(offset, offset + limit - 1)
 
@@ -400,6 +410,10 @@ def get_user_documents(
                             item["extracted_text"] = raw_ocr
                             item["raw_text"] = raw_ocr
                             item["ocr_text"] = raw_ocr
+                            if item["ocr_result"].get("confidence") is not None:
+                                item["confidence"] = item["ocr_result"].get("confidence")
+                    if item.get("confidence") is None and row.get("confidence") is not None:
+                        item["confidence"] = row.get("confidence")
                     if row.get("extracted_fields"):
                         ef = row["extracted_fields"]
                         item["extracted_fields"] = ef[0].get("fields", {}) if isinstance(ef, list) and len(ef) > 0 else ef.get("fields", {})
@@ -510,6 +524,10 @@ def get_user_document(user_id: str, document_id: str) -> Optional[Dict[str, Any]
                             item["extracted_text"] = raw_ocr
                             item["raw_text"] = raw_ocr
                             item["ocr_text"] = raw_ocr
+                            if item["ocr_result"].get("confidence") is not None:
+                                item["confidence"] = item["ocr_result"].get("confidence")
+                    if item.get("confidence") is None and row.get("confidence") is not None:
+                        item["confidence"] = row.get("confidence")
                     if row.get("extracted_fields"):
                         ef = row["extracted_fields"]
                         item["extracted_fields"] = ef[0].get("fields", {}) if isinstance(ef, list) and len(ef) > 0 else ef.get("fields", {})

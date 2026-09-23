@@ -280,7 +280,7 @@ def save_document(
         "ocr_required": result_data.get("ocr_required", True),
         "text_source": result_data.get("text_source", "paddle_ocr"),
         "status": result_data.get("status", "completed"),
-        "confidence": result_data.get("confidence", 1.0),
+        "confidence": result_data.get("confidence"),
         "pages": result_data.get("pages", 1),
         "reason": result_data.get("reason"),
         "verification_status": result_data.get("verification_status") or "verified",
@@ -476,6 +476,7 @@ def list_documents(
     status_filter: Optional[str] = None,
     ocr_required_filter: Optional[bool] = None,
     doc_type_filter: Optional[str] = None,
+    mode_filter: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = 100,
     offset: int = 0,
@@ -491,25 +492,132 @@ def list_documents(
             is_dev = (user_id == dev_user_id)
             if item.get("user_id") != user_id and not (is_dev and not item.get("user_id")):
                 continue
-        if status_filter and status_filter.lower() != "all":
-            if item.get("status", "").lower() != status_filter.lower():
+
+        # 1. Mode Filter (offline vs ai)
+        if mode_filter and mode_filter.lower() != "all":
+            mf = mode_filter.lower()
+            item_mode = (item.get("mode") or "").lower()
+            is_ai = item_mode == "ai" or item.get("doc_type") == "ai_analyzed" or bool(item.get("ai_analysis"))
+            if mf == "offline" and is_ai:
                 continue
+            if mf == "ai" and not is_ai:
+                continue
+
+        # 2. Document Type Filter
+        if doc_type_filter and doc_type_filter.lower() != "all":
+            dt = doc_type_filter.lower().strip()
+            item_dt = (item.get("doc_type") or "").lower().strip()
+            item_dtn = (item.get("document_type") or "").lower().strip()
+            # Match slug, title, or substring
+            matches_dt = (
+                item_dt == dt or
+                item_dtn == dt or
+                dt in item_dtn or
+                item_dt in dt or
+                (dt == "ai_analyzed" and (item_dt == "ai_analyzed" or bool(item.get("ai_analysis"))))
+            )
+            if not matches_dt:
+                continue
+
+        # 3. Status Filter (supporting both raw status and verification categories)
+        if status_filter and status_filter.lower() != "all":
+            sf = status_filter.lower().strip()
+            item_status = (item.get("status") or "").lower().strip()
+            item_verif = (item.get("verification_status") or "").lower().strip()
+            is_failed = item_status in ("failed", "error") or item_verif in ("failed", "error")
+            is_unsupported = not is_failed and (
+                item_verif == "unsupported" or
+                (item.get("doc_type") == "unknown" and item_status == "low_confidence")
+            )
+            is_review = not is_failed and not is_unsupported and (
+                item_verif == "review_required" or
+                bool(item.get("review_required")) or
+                item_status == "warning" or
+                float(item.get("risk_score") or 0) >= 30 or
+                item.get("checksum_valid") is False
+            )
+            is_verified = (
+                not is_failed and
+                not is_unsupported and
+                not is_review and
+                (item_verif == "verified" or item_status in ("verified", "completed"))
+            )
+
+            if sf == "verified":
+                if not is_verified:
+                    continue
+            elif sf in ("review_required", "review"):
+                if not is_review:
+                    continue
+            elif sf == "unsupported":
+                if not is_unsupported:
+                    continue
+            elif sf == "failed":
+                if not is_failed:
+                    continue
+            else:
+                # Direct fallback comparison
+                if item_status != sf and item_verif != sf:
+                    continue
+
+        # 4. OCR Required Filter
         if ocr_required_filter is not None:
             if item.get("ocr_required") != ocr_required_filter:
                 continue
-        if doc_type_filter and doc_type_filter.lower() != "all":
-            if item.get("doc_type", "").lower() != doc_type_filter.lower():
-                continue
-        if search:
-            query = search.lower()
-            name_match = query in item.get("filename", "").lower()
-            type_match = query in item.get("document_type", "").lower()
-            text_match = query in item.get("extracted_text", "").lower()
+
+        # 5. Search Filter (filename, document_type, doc_type, extracted_text)
+        if search and search.strip():
+            query = search.strip().lower()
+            name_match = query in (item.get("filename") or "").lower() or query in (item.get("original_filename") or "").lower()
+            type_match = query in (item.get("document_type") or "").lower() or query in (item.get("doc_type") or "").lower()
+            text_match = query in (item.get("extracted_text") or "").lower() or query in (item.get("raw_text") or "").lower()
             if not (name_match or type_match or text_match):
                 continue
+
         filtered.append(item)
 
     return filtered[offset : offset + limit]
+
+
+def get_documents(
+    page: int = 1,
+    limit: int = 20,
+    mode: Optional[str] = None,
+    doc_type: Optional[str] = None,
+    status: Optional[str] = None,
+    search: Optional[str] = None,
+    user_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Retrieve paginated and filtered documents with metadata matching document_repository interface."""
+    offset = max(0, (page - 1) * limit)
+    items = list_documents(
+        status_filter=status,
+        doc_type_filter=doc_type,
+        mode_filter=mode,
+        search=search,
+        limit=limit,
+        offset=offset,
+        user_id=user_id,
+    )
+    all_matching = list_documents(
+        status_filter=status,
+        doc_type_filter=doc_type,
+        mode_filter=mode,
+        search=search,
+        limit=100000,
+        offset=0,
+        user_id=user_id,
+    )
+    total = len(all_matching)
+    total_pages = (total + limit - 1) // limit if limit > 0 else 1
+    return {
+        "documents": items,
+        "items": items,
+        "total": total,
+        "page": page,
+        "limit": limit,
+        "total_pages": total_pages,
+    }
 
 
 def delete_document(doc_id: str) -> bool:

@@ -459,6 +459,7 @@ export class ApiService {
   public async getDocuments(params?: {
     search?: string;
     docType?: string;
+    mode?: string;
     ocrRequired?: boolean;
     status?: string;
     limit?: number;
@@ -467,6 +468,7 @@ export class ApiService {
     const query = new URLSearchParams();
     if (params?.search) query.set('search', params.search);
     if (params?.docType && params.docType !== 'all') query.set('doc_type', params.docType);
+    if (params?.mode && params.mode !== 'all') query.set('mode', params.mode);
     if (params?.ocrRequired !== undefined) query.set('ocr_required', String(params.ocrRequired));
     if (params?.status && params.status !== 'all') query.set('status', params.status);
     if (params?.limit) query.set('limit', String(params.limit));

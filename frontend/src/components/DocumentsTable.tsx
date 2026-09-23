@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import {
   Search,
   Eye,
@@ -19,6 +19,36 @@ import {
 } from 'lucide-react';
 import type { DocumentItem, SupportedType, EngineInfo } from '../types';
 import { api } from '../services/api';
+
+/**
+ * Traces and formats real document OCR confidence.
+ * Returns:
+ * - '0%' for failed documents
+ * - 'N/A' when confidence is null, undefined, or empty
+ * - Rounded percentage string (e.g. '94%', '100%') for valid numeric values
+ */
+export function formatConfidence(doc: DocumentItem): string {
+  const isFailed = doc.status === 'error' || doc.status === 'failed' || doc.verification_status === 'failed';
+  if (isFailed) {
+    return '0%';
+  }
+
+  const raw = doc.confidence !== undefined && doc.confidence !== null
+    ? doc.confidence
+    : (doc as any).confidence;
+
+  if (raw === undefined || raw === null || raw === '') {
+    return 'N/A';
+  }
+
+  const num = typeof raw === 'number' ? raw : parseFloat(String(raw));
+  if (isNaN(num)) {
+    return 'N/A';
+  }
+
+  const pct = num <= 1 ? Math.round(num * 100) : Math.round(num);
+  return `${pct}%`;
+}
 
 interface DocumentsTableProps {
   documents: DocumentItem[];
@@ -42,14 +72,76 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
   engineInfo,
 }) => {
   const [searchTerm, setSearchTerm] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [typeFilter, setTypeFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
   const [modeFilter, setModeFilter] = useState<'all' | 'offline' | 'ai'>('all');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(10);
 
+  // Server-side filtering and pagination state
+  const [serverDocs, setServerDocs] = useState<DocumentItem[] | null>(null);
+  const [serverTotal, setServerTotal] = useState<number | null>(null);
+  const [isTableLoading, setIsTableLoading] = useState<boolean>(false);
+  const isMountedRef = useRef<boolean>(false);
+
+  // 300ms debounce on search input before querying backend
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchTerm);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchTerm]);
+
+  // Reset pagination to page 1 whenever any filter or debounced search changes
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, modeFilter, typeFilter, statusFilter]);
+
+  // Query backend with all active filters and pagination
+  const fetchFromBackend = useCallback(async () => {
+    try {
+      setIsTableLoading(true);
+      const offset = (currentPage - 1) * pageSize;
+      const res = await api.getDocuments({
+        search: debouncedSearch.trim() || undefined,
+        docType: typeFilter !== 'all' ? typeFilter : undefined,
+        mode: modeFilter !== 'all' ? modeFilter : undefined,
+        status: statusFilter !== 'all' ? statusFilter : undefined,
+        limit: pageSize,
+        offset,
+      });
+
+      if (res && Array.isArray(res.items)) {
+        setServerDocs(res.items);
+        setServerTotal(typeof res.total === 'number' ? res.total : res.items.length);
+      }
+    } catch (err) {
+      // In SSR, test environments without active network, or offline mode,
+      // fallback smoothly to client-side filtering on documents prop
+      console.warn('Backend documents query fallback to local cache:', err);
+    } finally {
+      setIsTableLoading(false);
+    }
+  }, [debouncedSearch, modeFilter, typeFilter, statusFilter, currentPage, pageSize]);
+
+  // Fetch when filters or pagination change
+  useEffect(() => {
+    if (!isMountedRef.current) {
+      isMountedRef.current = true;
+    }
+    fetchFromBackend();
+  }, [fetchFromBackend]);
+
+  // Re-sync when parent documents prop updates (e.g. after upload or clear)
+  useEffect(() => {
+    if (isMountedRef.current) {
+      fetchFromBackend();
+    }
+  }, [documents, fetchFromBackend]);
+
   const getStatusCategory = (doc: DocumentItem): 'verified' | 'review_required' | 'unsupported' | 'processing' | 'failed' => {
-    if (doc.status === 'failed' || doc.status === 'error') {
+    if (doc.status === 'failed' || doc.status === 'error' || doc.verification_status === 'failed') {
       return 'failed';
     }
     if (doc.status === 'processing') {
@@ -70,14 +162,15 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
     return 'verified';
   };
 
-  const filteredDocs = useMemo(() => {
+  // Client-side fallback filtering (used when server query is loading or in test/SSR mode)
+  const clientFilteredDocs = useMemo(() => {
     return documents.filter((doc) => {
       // 1. Search Query
-      if (searchTerm.trim()) {
-        const q = searchTerm.toLowerCase();
-        const matchName = (doc.filename || '').toLowerCase().includes(q);
-        const matchType = `${doc.document_type || ''} ${doc.doc_type || ''}`.toLowerCase().includes(q);
-        const matchText = (doc.extracted_text || '').toLowerCase().includes(q);
+      const query = (debouncedSearch || searchTerm).trim().toLowerCase();
+      if (query) {
+        const matchName = (doc.filename || '').toLowerCase().includes(query);
+        const matchType = `${doc.document_type || ''} ${doc.doc_type || ''}`.toLowerCase().includes(query);
+        const matchText = (doc.extracted_text || '').toLowerCase().includes(query);
         if (!matchName && !matchType && !matchText) return false;
       }
 
@@ -128,17 +221,22 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
 
       return true;
     });
-  }, [documents, searchTerm, modeFilter, typeFilter, statusFilter, supportedTypes]);
+  }, [documents, searchTerm, debouncedSearch, modeFilter, typeFilter, statusFilter, supportedTypes]);
 
-  // Reset to page 1 whenever filters change
-  const totalItems = filteredDocs.length;
+  // Determine effective display documents and total counts
+  const totalItems = serverTotal !== null ? serverTotal : clientFilteredDocs.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
   const validPage = Math.min(currentPage, totalPages);
   const startIndex = (validPage - 1) * pageSize;
-  const endIndex = Math.min(startIndex + pageSize, totalItems);
-  const paginatedDocs = useMemo(() => {
-    return filteredDocs.slice(startIndex, endIndex);
-  }, [filteredDocs, startIndex, endIndex]);
+
+  const displayDocs = useMemo(() => {
+    if (serverDocs !== null) {
+      return serverDocs;
+    }
+    return clientFilteredDocs.slice(startIndex, startIndex + pageSize);
+  }, [serverDocs, clientFilteredDocs, startIndex, pageSize]);
+
+  const endIndex = Math.min(startIndex + displayDocs.length, totalItems);
 
   const formatDate = (isoString: string) => {
     try {
@@ -228,6 +326,21 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
     );
   };
 
+  const handleRefresh = async () => {
+    await fetchFromBackend();
+    onRefresh();
+  };
+
+  const handleDelete = (docId: string, filename: string) => {
+    if (window.confirm(`Delete "${filename}" from vault?`)) {
+      onDeleteDocument(docId);
+      if (serverDocs) {
+        setServerDocs((prev) => (prev ? prev.filter((d) => (d.id || (d as any).document_id) !== docId) : null));
+        setServerTotal((prev) => (prev !== null && prev > 0 ? prev - 1 : 0));
+      }
+    }
+  };
+
   return (
     <div className="vault-table-container">
       {/* Search and Filtering Toolbar */}
@@ -287,7 +400,10 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
             <select
               className="vault-filter-select vault-status-select"
               value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
+              onChange={(e) => {
+                setStatusFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               aria-label="Filter by status"
             >
               <option value="all">All Statuses</option>
@@ -302,11 +418,11 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
           <div className="vault-toolbar-actions">
             <button
               className="btn btn-secondary vault-action-btn vault-refresh-btn"
-              onClick={onRefresh}
-              disabled={isLoading}
+              onClick={handleRefresh}
+              disabled={isLoading || isTableLoading}
               title="Refresh table data"
             >
-              <RefreshCw size={14} className={isLoading ? 'spin-anim' : ''} />
+              <RefreshCw size={14} className={isLoading || isTableLoading ? 'spin-anim' : ''} />
               <span>Refresh</span>
             </button>
 
@@ -314,7 +430,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
               <button
                 className="btn btn-danger vault-action-btn vault-clear-all-btn"
                 onClick={onClearAll}
-                disabled={documents.length === 0 || isLoading}
+                disabled={totalItems === 0 || isLoading}
                 title="Clear all documents from Document Vault"
               >
                 <Trash2 size={14} />
@@ -342,7 +458,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
             </tr>
           </thead>
           <tbody>
-            {filteredDocs.length === 0 ? (
+            {displayDocs.length === 0 ? (
               <tr>
                 <td colSpan={9} className="vault-empty-row">
                   <div className="vault-empty-state">
@@ -359,7 +475,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                 </td>
               </tr>
             ) : (
-              paginatedDocs.map((doc, idx) => {
+              displayDocs.map((doc, idx) => {
                 const docId = doc.id || (doc as any).document_id || '';
                 const isBypassed = !doc.ocr_required;
                 const isFailed = doc.status === 'error' || doc.status === 'failed';
@@ -372,12 +488,6 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                   if (engineInfo?.display_name) return engineInfo.display_name;
                   return 'Neural OCR';
                 };
-
-                const confNum = typeof doc.confidence === 'number'
-                  ? doc.confidence
-                  : typeof (doc as any).confidence === 'string' && !isNaN(parseFloat((doc as any).confidence))
-                  ? parseFloat((doc as any).confidence)
-                  : 1;
 
                 return (
                   <tr
@@ -447,8 +557,8 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
                     </td>
 
                     <td>
-                      <span className="vault-confidence-text">
-                        {isFailed ? '0%' : `${Math.round(confNum <= 1 ? confNum * 100 : confNum)}%`}
+                      <span className="vault-confidence-text" data-testid="doc-confidence">
+                        {formatConfidence(doc)}
                       </span>
                     </td>
 
@@ -479,11 +589,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
 
                         <button
                           className="icon-action-btn delete-btn"
-                          onClick={() => {
-                            if (window.confirm(`Delete "${doc.filename}" from vault?`)) {
-                              onDeleteDocument(docId);
-                            }
-                          }}
+                          onClick={() => handleDelete(docId, doc.filename)}
                           title="Delete document"
                           aria-label="Delete document"
                         >
@@ -500,7 +606,7 @@ export const DocumentsTable: React.FC<DocumentsTableProps> = ({
       </div>
 
       {/* Pagination Controls Bar */}
-      {filteredDocs.length > 0 && (
+      {totalItems > 0 && (
         <div className="vault-pagination-bar">
           <div className="vault-pagination-left">
             <span className="vault-pagination-text">
