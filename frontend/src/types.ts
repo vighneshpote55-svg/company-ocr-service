@@ -154,6 +154,7 @@ export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: string;
+  citations?: string[];
 }
 
 export interface OllamaStatusResponse {

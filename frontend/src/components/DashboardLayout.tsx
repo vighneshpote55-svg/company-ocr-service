@@ -156,8 +156,22 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 engineInfo={engineInfo}
               />
             </div>
+          ) : mode === 'ai' ? (
+            /* 3. DocPilot AI Mode: Dedicated Full-screen Document Intelligence Workspace */
+            <div className="docpilot-fullscreen-workspace-wrapper mode-fade-enter">
+              <AIModeView
+                onNotify={onNotify}
+                onSwitchToOffline={() => onSelectMode('offline')}
+                onRefresh={onRefresh}
+                onDocumentUploaded={onDocumentUploaded}
+                aiConfig={aiConfig}
+                onRefreshAiConfig={onRefreshAiConfig}
+                selectedDoc={selectedDoc}
+                onClearSelectedDoc={onClearSelectedDoc}
+              />
+            </div>
           ) : (
-            /* 3. Primary Dashboard: Stats -> Centered Main Workspace -> Recent Ingestions */
+            /* 4. Offline Mode Primary Dashboard: Welcome Banner -> Stats -> Centered Workspace -> Recent Ingestions */
             <div className="dashboard-view-wrapper">
               {/* Personalized Welcome Banner */}
               <div className="dashboard-welcome-banner">
@@ -180,31 +194,19 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 stats={stats}
                 engineInfo={engineInfo}
                 documents={documents}
+                aiConfig={aiConfig}
                 onNavigateTab={(tab) => onSelectTab(tab)}
               />
 
-              {/* Centered Large Workspace Card (Changes based on mode) */}
+              {/* Centered Large Workspace Card (Offline Mode Upload Card) */}
               <div className="main-workspace-card-wrapper mode-fade-enter" key={mode}>
-                {mode === 'offline' ? (
-                  <UploadCard
-                    supportedTypes={supportedTypes}
-                    onUploadSuccess={onDocumentUploaded}
-                    onError={(msg) => onNotify(msg, 'error')}
-                    onSwitchToAiMode={() => onSelectMode('ai')}
-                    onRefresh={onRefresh}
-                  />
-                ) : (
-                  <AIModeView
-                    onNotify={onNotify}
-                    onSwitchToOffline={() => onSelectMode('offline')}
-                    onRefresh={onRefresh}
-                    onDocumentUploaded={onDocumentUploaded}
-                    aiConfig={aiConfig}
-                    onRefreshAiConfig={onRefreshAiConfig}
-                    selectedDoc={mode === 'ai' ? selectedDoc : null}
-                    onClearSelectedDoc={onClearSelectedDoc}
-                  />
-                )}
+                <UploadCard
+                  supportedTypes={supportedTypes}
+                  onUploadSuccess={onDocumentUploaded}
+                  onError={(msg) => onNotify(msg, 'error')}
+                  onSwitchToAiMode={() => onSelectMode('ai')}
+                  onRefresh={onRefresh}
+                />
               </div>
 
               {/* Recent Ingestions Table */}

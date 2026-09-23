@@ -1,16 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import {
+  ArrowLeft,
+  Search,
+  Bell,
+  Sun,
+  Moon,
+  Settings,
   RefreshCw,
   LogOut,
   Menu,
   X,
-  Sun,
-  Moon,
-  Bell,
-  User,
-  Settings,
-  CheckCircle2,
-  SlidersHorizontal,
+  Sparkles,
 } from 'lucide-react';
 import type { AppMode } from '../types';
 import { ModeSwitcher } from './ModeSwitcher';
@@ -43,7 +43,7 @@ export const Header: React.FC<HeaderProps> = ({
   isDarkMode = false,
   onToggleTheme,
 }) => {
-  const { user, role, logout: authLogout } = useAuth();
+  const { user, logout: authLogout } = useAuth();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
 
@@ -77,10 +77,12 @@ export const Header: React.FC<HeaderProps> = ({
     };
   }, []);
 
+  const displayName = user?.full_name || (user?.email ? user.email.split('@')[0] : 'Sarah J.');
+
   return (
-    <header className="top-header glass-header">
-      {/* Left: Branding */}
-      <div className="header-left-box">
+    <header className="top-header docpilot-top-header">
+      {/* Left: Mobile Drawer Button & [←] DocPilot Back Link */}
+      <div className="docpilot-header-left">
         {onToggleMobileSidebar && (
           <button
             className="mobile-menu-btn"
@@ -91,94 +93,85 @@ export const Header: React.FC<HeaderProps> = ({
           </button>
         )}
 
-        <div className="header-title-box">
-          <h1 className="page-title">Company OCR Service</h1>
-          <span className="page-subtitle">Local OCR • AI Document Intelligence</span>
+        <div className="docpilot-header-breadcrumb">
+          <button
+            type="button"
+            className="docpilot-header-back-btn"
+            onClick={onRefresh}
+            title="DocPilot Workspace"
+          >
+            <ArrowLeft size={16} />
+            <span>DocPilot</span>
+          </button>
         </div>
       </div>
 
-      {/* Center: Mode Switcher (identical position in both modes) */}
-      <div className="header-mode-switch-wrapper">
+      {/* Center: Mode Switcher (Seamless toggle between Offline & AI Mode) */}
+      <div className="docpilot-header-center">
         <ModeSwitcher mode={mode} onModeChange={onModeChange} />
+        {mode === 'ai' && (
+          <span className="docpilot-header-ai-pill">
+            <Sparkles size={13} />
+            <span>DocPilot AI Mode</span>
+          </span>
+        )}
       </div>
 
-      {/* Right: Notifications, Theme Toggle, Settings Shortcut, User Profile */}
-      <div className="header-right-box">
-        {/* Backend Status Dot */}
-        <div
-          className={`status-pill ${isBackendConnected ? 'online' : 'offline'}`}
-          title={isBackendConnected ? 'FastAPI Neural Backend connected' : 'Backend offline'}
-        >
-          <span className="status-dot" />
-          <span className="status-text">{isBackendConnected ? 'Online' : 'Offline'}</span>
+      {/* Right: Workspace Capsule, Search, Notification Bell, User Avatar */}
+      <div className="docpilot-header-right">
+        {/* Workspace Capsule Pill: Workspace: Alpha | Project: Security Audit Q3 */}
+        <div className="docpilot-workspace-capsule" title="Active Tenant Workspace">
+          <span className="capsule-label">Workspace:</span>
+          <span className="capsule-val">Alpha</span>
+          <span className="capsule-sep">|</span>
+          <span className="capsule-label">Project:</span>
+          <span className="capsule-val">Security Audit Q3</span>
         </div>
 
-        {/* Sync Refresh Button */}
+        {/* Search Icon Button */}
         <button
-          className="header-icon-btn"
-          onClick={() => {
-            setShowNotifications(false);
-            setShowUserMenu(false);
-            onRefresh();
-          }}
-          disabled={isRefreshing}
-          title="Synchronize vault data and metrics"
-          aria-label="Synchronize data"
+          className="docpilot-header-icon-btn"
+          onClick={onRefresh}
+          title="Search Document Repository"
+          aria-label="Search"
         >
-          <RefreshCw size={17} className={isRefreshing ? 'spin-anim' : ''} />
+          <Search size={17} />
         </button>
 
-        {/* Theme Toggle Button */}
-        {onToggleTheme && (
-          <button
-            className="header-icon-btn theme-toggle-btn"
-            onClick={() => {
-              setShowNotifications(false);
-              setShowUserMenu(false);
-              onToggleTheme();
-            }}
-            title={isDarkMode ? 'Switch to Light Theme' : 'Switch to Dark Theme'}
-            aria-label="Toggle dark/light theme"
-          >
-            {isDarkMode ? <Sun size={17} className="sun-icon" /> : <Moon size={17} />}
-          </button>
-        )}
-
-        {/* Notification Bell / System Status Popover */}
+        {/* Notifications Icon Button */}
         <div className="header-popover-container" ref={notificationsRef}>
           <button
-            className="header-icon-btn notification-btn"
+            className="docpilot-header-icon-btn"
             onClick={() => {
               setShowNotifications((prev) => !prev);
               setShowUserMenu(false);
             }}
-            title="System Activity & Notifications"
-            aria-label="View notifications"
-            aria-expanded={showNotifications}
+            title="Notifications"
+            aria-label="Notifications"
           >
             <Bell size={17} />
-            <span className="notification-indicator" />
+            <span className="docpilot-notification-dot" />
           </button>
 
           {showNotifications && (
-            <div className="header-dropdown-menu notification-menu">
+            <div className="header-dropdown-menu notifications-dropdown">
               <div className="dropdown-header">
-                <span className="dropdown-title">System Status</span>
-                <span className="dropdown-tag">Healthy</span>
+                <span className="dropdown-title">Notifications</span>
+                <span className="dropdown-tag">2 New</span>
               </div>
               <div className="dropdown-list">
-                <div className="dropdown-item">
-                  <CheckCircle2 size={16} color="var(--success)" className="dropdown-item-icon" />
+                <div className="dropdown-item unread">
+                  <div className="dropdown-item-dot" />
                   <div>
-                    <p className="dropdown-item-title">Neural Engine Operational</p>
-                    <span className="dropdown-item-time">Local OCR & PII Guard active</span>
+                    <p className="dropdown-item-title">Security Audit Report Indexed</p>
+                    <span className="dropdown-item-time">2 mins ago • AI Mode</span>
                   </div>
                 </div>
-                <div className="dropdown-item">
-                  <SlidersHorizontal size={16} color="var(--primary)" className="dropdown-item-icon" />
+                <div className="dropdown-item unread">
+                  <div className="dropdown-item-dot" />
                   <div>
-                    <p className="dropdown-item-title">22 Document Classifiers Ready</p>
-                    <span className="dropdown-item-time">Zero cloud dependency</span>
+                    <p className="dropdown-item-title">Cryptographic Checksum Verified</p>
+                    <span className="dropdown-item-time">10 mins ago • Clean</span>
                   </div>
                 </div>
               </div>
@@ -186,69 +179,95 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
-        {/* Settings Shortcut */}
+        {/* Sync / Refresh */}
         <button
-          className="header-icon-btn settings-shortcut-btn"
-          onClick={() => {
-            setShowNotifications(false);
-            setShowUserMenu(false);
-            onOpenSettings();
-          }}
-          title="Server & Engine Settings"
-          aria-label="Settings shortcut"
+          className="docpilot-header-icon-btn"
+          onClick={onRefresh}
+          disabled={isRefreshing}
+          title="Synchronize Data"
+          aria-label="Synchronize Data"
         >
-          <Settings size={17} />
+          <RefreshCw size={15} className={isRefreshing ? 'spin-anim' : ''} />
         </button>
 
-        {/* User Profile Avatar */}
-        <div className="header-popover-container" ref={userMenuRef}>
+        {/* Theme Toggle */}
+        {onToggleTheme && (
           <button
-            className="user-profile-pill-btn"
+            className="docpilot-header-icon-btn"
+            onClick={onToggleTheme}
+            title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            aria-label="Toggle Theme"
+          >
+            {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
+          </button>
+        )}
+
+        {/* Settings */}
+        <button
+          className="docpilot-header-icon-btn"
+          onClick={onOpenSettings}
+          title="Settings"
+          aria-label="Settings"
+        >
+          <Settings size={16} />
+        </button>
+
+        {/* User Profile Avatar with Online Indicator */}
+        <div className="header-popover-container" ref={userMenuRef}>
+          <div
+            className="docpilot-header-avatar-wrap"
             onClick={() => {
               setShowUserMenu((prev) => !prev);
               setShowNotifications(false);
             }}
-            title="User Profile & Settings"
-            aria-label="Open user menu"
-            aria-expanded={showUserMenu}
+            style={{ cursor: 'pointer' }}
+            title={`${displayName} (Admin)`}
           >
-            <div className="user-avatar-circle">
-              <User size={15} />
+            <div className="docpilot-header-avatar">
+              {displayName.charAt(0).toUpperCase()}
             </div>
-            <span className="user-avatar-label">
-              {user?.full_name ? user.full_name.split(' ')[0] : (user?.email ? user.email.split('@')[0] : 'User')}
-            </span>
-          </button>
+            <span
+              className="docpilot-avatar-online-dot"
+              style={{
+                background: isBackendConnected ? '#10B981' : '#EF4444',
+              }}
+            />
+          </div>
 
           {showUserMenu && (
-            <div className="header-dropdown-menu user-dropdown-menu">
-              <div className="user-dropdown-info">
-                <div className="flex items-center justify-between gap-2">
-                  <div className="user-dropdown-name">{user?.full_name || 'Operator'}</div>
-                  <span className={`text-[10px] uppercase font-bold px-1.5 py-0.5 rounded ${role === 'admin' ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' : 'bg-slate-800 text-slate-400'}`}>
-                    {role}
-                  </span>
+            <div className="header-dropdown-menu user-dropdown">
+              <div className="dropdown-user-header">
+                <div className="dropdown-user-avatar">
+                  {displayName.charAt(0).toUpperCase()}
                 </div>
-                <div className="user-dropdown-email">{user?.email || 'authenticated'}</div>
+                <div>
+                  <p className="dropdown-user-name">{displayName}</p>
+                  <p className="dropdown-user-email">Admin • Workspace Alpha</p>
+                </div>
               </div>
+
               <div className="dropdown-divider" />
+
               <button
-                className="dropdown-menu-action"
+                className="dropdown-action-btn"
                 onClick={() => {
                   setShowUserMenu(false);
                   onOpenSettings();
                 }}
               >
                 <Settings size={15} />
-                <span>Engine & Network Configuration</span>
+                <span>AI Providers & Settings</span>
               </button>
-              <div className="dropdown-divider" />
+
               <button
-                className="dropdown-menu-action text-danger"
+                className="dropdown-action-btn danger"
                 onClick={async () => {
                   setShowUserMenu(false);
-                  await authLogout();
-                  if (onLogout) onLogout();
+                  if (onLogout) {
+                    onLogout();
+                  } else {
+                    await authLogout();
+                  }
                 }}
               >
                 <LogOut size={15} />

@@ -1,24 +1,38 @@
-import React, { useRef, useEffect, useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
-  Bot,
-  User,
+  Sparkles,
   Send,
-  Copy,
+  RotateCcw,
   Check,
-  ShieldCheck,
-  ArrowRight,
-  HelpCircle,
+  Copy,
+  FolderOpen,
+  RefreshCw,
+  MoreHorizontal,
+  X,
+  Paperclip,
+  FileText,
+  Code,
+  Plus,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react';
 import type { ChatMessage, AiAnalysisResult } from '../types';
 
 interface AIChatPanelProps {
   document: AiAnalysisResult;
+  documentId?: string;
+  filename?: string;
+  verification_status?: string;
   messages: ChatMessage[];
   isAiThinking: boolean;
   onSendMessage: (text: string) => void;
   onSwitchToOffline?: () => void;
   onNotify: (message: string, type?: 'success' | 'error' | 'info') => void;
   providerLabel?: string;
+  onResetMessages?: () => void;
+  onRetryLast?: (query?: string) => void;
+  onReconnectContext?: () => void;
+  onOpenVault?: () => void;
 }
 
 const getSuggestedPrompts = (documentType: string): string[] => {
@@ -35,30 +49,16 @@ const getSuggestedPrompts = (documentType: string): string[] => {
   if (docType.includes('pan')) {
     return [
       'What is the PAN number?',
-      "What is the holder's name?",
+      'Whose name is on the PAN card?',
+      'What is the father\'s name?',
       'What is the date of birth?',
     ];
   }
-  if (docType.includes('bank') || docType.includes('statement')) {
+  if (docType.includes('security') || docType.includes('report') || docType.includes('compliance')) {
     return [
-      'What is the account number?',
-      'What is the statement period?',
-      'What is the bank name?',
-    ];
-  }
-  if (docType.includes('employment') || docType.includes('offer') || docType.includes('appointment')) {
-    return [
-      'What is the employee name?',
-      'What is the employer?',
-      'What is the salary?',
-      'What is the joining date?',
-    ];
-  }
-  if (docType.includes('invoice') || docType.includes('bill')) {
-    return [
-      'What is the invoice number?',
-      'What is the total amount?',
-      'What is the invoice date?',
+      'What are the primary recommendations for optimizing cloud infrastructure security?',
+      'What is the compliance status for SOC 2 Type II?',
+      'Are there any critical vulnerability findings?',
     ];
   }
   return [
@@ -69,19 +69,68 @@ const getSuggestedPrompts = (documentType: string): string[] => {
   ];
 };
 
+// Helper to extract citation references from assistant content or metadata
+const extractCitations = (content: string, explicitCitations?: string[]): string[] => {
+  if (explicitCitations && explicitCitations.length > 0) {
+    return explicitCitations;
+  }
+  const citations = new Set<string>();
+  // Match bracketed page citations e.g. [Page 1], [Page 2, Sec 4], [Source: Page 1]
+  const bracketMatches = content.match(/\[(?:Source:\s*)?(Page\s*\d+[^\]]*)\]/gi);
+  if (bracketMatches) {
+    bracketMatches.forEach((m) => {
+      const cleaned = m.replace(/[\[\]]/g, '').trim();
+      citations.add(cleaned.startsWith('Page') ? cleaned : `Source: ${cleaned}`);
+    });
+  }
+  // Also match inline "Page X" if no brackets found
+  if (citations.size === 0) {
+    const pageMatches = content.match(/\bPage\s+\d+\b/gi);
+    if (pageMatches) {
+      pageMatches.forEach((m) => citations.add(m.trim()));
+    }
+  }
+  return Array.from(citations);
+};
+
 export const AIChatPanel: React.FC<AIChatPanelProps> = ({
   document,
+  documentId,
+  filename,
+  verification_status,
   messages,
   isAiThinking,
   onSendMessage,
   onSwitchToOffline,
   onNotify,
-  providerLabel,
+  providerLabel: _providerLabel,
+  onResetMessages,
+  onRetryLast,
+  onReconnectContext,
+  onOpenVault,
 }) => {
+  const activeDocId = documentId || document.document_id || document.id || '';
+  const activeFilename = filename || document.filename || 'document';
+  const activeStatus = verification_status || document.verification_status || 'verified';
   const [inputQuery, setInputQuery] = useState('');
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const [thumbsFeedback, setThumbsFeedback] = useState<Record<string, 'up' | 'down'>>({});
   const chatBottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const prevDocIdRef = useRef<string>(activeDocId);
+  const lastUserQueryRef = useRef<string>('');
+
+  // Reset chat messages whenever documentId changes
+  useEffect(() => {
+    if (prevDocIdRef.current !== activeDocId) {
+      console.log(`[AIChatPanel] documentId changed from "${prevDocIdRef.current}" to "${activeDocId}". Resetting chat messages.`);
+      prevDocIdRef.current = activeDocId;
+      setInputQuery('');
+      if (onResetMessages) {
+        onResetMessages();
+      }
+    }
+  }, [activeDocId, onResetMessages]);
 
   useEffect(() => {
     if (chatBottomRef.current) {
@@ -93,12 +142,30 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
     e.preventDefault();
     const query = inputQuery.trim();
     if (!query || isAiThinking) return;
+
+    if (!activeDocId) {
+      console.warn('[AIChatPanel] Outgoing chat blocked: documentId is missing or empty.');
+      onNotify('No active document selected for chat.', 'error');
+      return;
+    }
+
+    lastUserQueryRef.current = query;
+    console.log('[AIChatPanel] Outgoing chat request with documentId:', activeDocId, 'query:', query);
     onSendMessage(query);
     setInputQuery('');
   };
 
   const handlePromptClick = (prompt: string) => {
     if (isAiThinking) return;
+
+    if (!activeDocId) {
+      console.warn('[AIChatPanel] Outgoing prompt click blocked: documentId is missing or empty.');
+      onNotify('No active document selected for chat.', 'error');
+      return;
+    }
+
+    lastUserQueryRef.current = prompt;
+    console.log('[AIChatPanel] Outgoing prompt click with documentId:', activeDocId, 'prompt:', prompt);
     onSendMessage(prompt);
   };
 
@@ -109,120 +176,236 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
     setTimeout(() => setCopiedMsgId(null), 2000);
   };
 
-  const getDynamicPlaceholder = () => {
-    const docType = (document.document_type || '').toLowerCase();
-    if (docType.includes('pan')) return 'e.g. "What is the PAN number?"';
-    if (docType.includes('gst') || docType.includes('registration')) return 'e.g. "What is the GSTIN?"';
-    if (docType.includes('bank') || docType.includes('statement')) return 'e.g. "What is the account holder?"';
-    if (docType.includes('employment') || docType.includes('salary')) return 'e.g. "What is the employee name?"';
-    return 'e.g. "Summarize key details"';
+  const toggleThumbs = (id: string, type: 'up' | 'down') => {
+    setThumbsFeedback((prev) => ({
+      ...prev,
+      [id]: prev[id] === type ? undefined! : type,
+    }));
   };
 
   return (
-    <div className="ai-chat-assistant-card">
-      {/* Header Bar */}
-      <div className="ai-chat-header-bar">
-        <div className="ai-chat-header-title-box">
-          <div className="ai-chat-bot-avatar">
-            <Bot size={20} />
-          </div>
-          <div>
-            <div className="ai-chat-title-row">
-              <h4 className="ai-chat-title" aria-label="Document AI Assistant">AI Assistant</h4>
-              <span className="ai-chat-live-badge">
-                <span className="ai-chat-live-dot" />
-                <span>Using: {providerLabel || 'Ollama • Qwen2.5-VL 3B'}</span>
-              </span>
-            </div>
-            <p className="ai-chat-subtitle">
-              Ask questions about this document. Grounded in <strong>{document.filename}</strong> ({document.document_type}).
-            </p>
+    <div className="docpilot-chat-panel" aria-label="Document AI Assistant">
+      {/* 1. Header Bar: Document Intelligence + Action Icons (⟲, ..., ✕) */}
+      <div className="docpilot-chat-header">
+        <div className="docpilot-chat-title-group">
+          <h3 className="docpilot-chat-main-title">Document Intelligence</h3>
+          <div className="docpilot-grounded-indicator">
+            <span>Grounded in <strong>{activeFilename}</strong></span>
+            {activeStatus ? <span className="docpilot-verif-tag">{`Status: ${activeStatus}`}</span> : null}
           </div>
         </div>
 
-        {onSwitchToOffline && (
+        <div className="docpilot-chat-header-actions">
+          {onResetMessages && (
+            <button
+              type="button"
+              className="docpilot-icon-action-btn"
+              onClick={onResetMessages}
+              title="Reset conversation"
+            >
+              <RotateCcw size={15} />
+            </button>
+          )}
+
           <button
             type="button"
-            className="btn btn-ghost ai-switch-offline-btn"
-            onClick={onSwitchToOffline}
-            title="Switch back to Offline Mode"
+            className="docpilot-icon-action-btn"
+            title="Conversation Options"
           >
-            <ShieldCheck size={14} />
-            <span>Offline Mode</span>
-            <ArrowRight size={13} />
+            <MoreHorizontal size={16} />
           </button>
-        )}
+
+          {onSwitchToOffline && (
+            <button
+              type="button"
+              className="docpilot-icon-action-btn"
+              onClick={onSwitchToOffline}
+              title="Close panel / Switch to Offline"
+            >
+              <X size={16} />
+            </button>
+          )}
+        </div>
       </div>
 
-      {/* Messages Scroll Area */}
-      <div className="ai-chat-messages-area">
+      {/* 2. Chat Messages Area */}
+      <div className="docpilot-chat-scroll-area">
+        {messages.length === 0 ? (
+          /* Welcome Card for current active document */
+          <div className="docpilot-assistant-card welcome-card">
+            <div className="docpilot-assistant-header">
+              <div className="docpilot-assistant-badge-icon">
+                <Sparkles size={16} color="#00C2FF" />
+              </div>
+              <span className="docpilot-assistant-name">DocPilot AI Assistant</span>
+            </div>
+            <div className="docpilot-assistant-body">
+              <p className="docpilot-assistant-paragraph">
+                Ready to analyze <strong>{activeFilename}</strong>. Ask any question about figures, dates, parties, or provisions. Every answer includes specific page references.
+              </p>
+            </div>
+          </div>
+        ) : null}
+
         {messages.map((msg) => {
-          const isAssistant = msg.role === 'assistant';
+          const isUser = msg.role === 'user';
+          const isErrorMsg = !isUser && (msg.content.includes('⚠️') || msg.content.includes('not found') || msg.content.includes('Error'));
+          const feedback = thumbsFeedback[msg.id];
+          const citationsList = extractCitations(msg.content, msg.citations);
+
           return (
-            <div key={msg.id} className={`ai-chat-message-row ${msg.role}`}>
-              <div className={`ai-chat-avatar ${msg.role}`}>
-                {isAssistant ? <Bot size={18} /> : <User size={18} />}
-              </div>
-
-              <div className="ai-chat-bubble-container">
-                <div className="ai-chat-bubble-header">
-                  <span className="ai-chat-sender">
-                    {isAssistant ? 'Document AI' : 'You'}
-                  </span>
-                  <span className="ai-chat-timestamp">{msg.timestamp}</span>
-                </div>
-
-                <div className={`ai-chat-bubble-body ${msg.role}`}>
-                  {msg.content.split('\n\n').map((para, idx) => (
-                    <p key={idx} className="ai-chat-paragraph">
-                      {para}
-                    </p>
-                  ))}
-                </div>
-
-                {isAssistant && (
-                  <div className="ai-chat-bubble-actions">
-                    <button
-                      type="button"
-                      className="ai-chat-action-copy-btn"
-                      onClick={() => handleCopy(msg.id, msg.content)}
-                      title="Copy response"
-                    >
-                      {copiedMsgId === msg.id ? (
-                        <>
-                          <Check size={13} className="text-success" />
-                          <span className="text-success">Copied</span>
-                        </>
-                      ) : (
-                        <>
-                          <Copy size={13} />
-                          <span>Copy</span>
-                        </>
-                      )}
-                    </button>
+            <div key={msg.id} className={`docpilot-msg-container ${isUser ? 'user-container' : 'assistant-container'}`}>
+              {isUser ? (
+                /* User Message Bubble: Sleek dark with glowing cyan border */
+                <div className="docpilot-user-bubble-wrap">
+                  <div className="docpilot-user-bubble">
+                    <p className="docpilot-user-text">{msg.content}</p>
+                    <span className="docpilot-msg-timestamp">{msg.timestamp || '3:38 AM'}</span>
                   </div>
-                )}
-              </div>
+                </div>
+              ) : (
+                /* Assistant Message Card: DocPilot Assistant with citations and feedback */
+                <div className="docpilot-assistant-card">
+                  {/* Assistant Identity Header */}
+                  <div className="docpilot-assistant-header">
+                    <div className="docpilot-assistant-badge-icon">
+                      <svg width="18" height="18" viewBox="0 0 32 32" fill="none">
+                        <path d="M6 24L16 6L26 24L16 19L6 24Z" fill="url(#aiBotGrad)" stroke="#38BDF8" strokeWidth="1.5" />
+                        <circle cx="16" cy="14" r="3" fill="#FFFFFF" />
+                        <defs>
+                          <linearGradient id="aiBotGrad" x1="6" y1="6" x2="26" y2="24" gradientUnits="userSpaceOnUse">
+                            <stop stopColor="#00C2FF" />
+                            <stop offset="1" stopColor="#0284C7" />
+                          </linearGradient>
+                        </defs>
+                      </svg>
+                    </div>
+                    <span className="docpilot-assistant-name">DocPilot Assistant</span>
+                  </div>
+
+                  {/* Message Content */}
+                  <div className={`docpilot-assistant-body ${isErrorMsg ? 'error-body' : ''}`}>
+                    {msg.content.split('\n\n').map((para, pIdx) => (
+                      <p key={pIdx} className="docpilot-assistant-paragraph">
+                        {para}
+                      </p>
+                    ))}
+
+                    {/* Citations Sub-card */}
+                    {!isErrorMsg && citationsList.length > 0 && (
+                      <div className="docpilot-citations-card">
+                        <div className="docpilot-citations-title">Page Citations</div>
+                        <div className="docpilot-citations-pills">
+                          {citationsList.map((cite, cIdx) => (
+                            <span key={cIdx} className="docpilot-citation-chip">
+                              {cite}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Error Recovery Buttons if Error Occurs */}
+                    {isErrorMsg && (
+                      <div className="docpilot-chat-recovery-bar">
+                        <button
+                          type="button"
+                          className="btn btn-secondary docpilot-recovery-btn"
+                          onClick={() => {
+                            const query = lastUserQueryRef.current || 'Summarize this document.';
+                            if (onRetryLast) {
+                              onRetryLast(query);
+                            } else {
+                              onSendMessage(query);
+                            }
+                          }}
+                          title="Retry query"
+                        >
+                          <RotateCcw size={12} />
+                          <span>Retry</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          className="btn btn-secondary docpilot-recovery-btn"
+                          onClick={() => {
+                            if (onReconnectContext) {
+                              onReconnectContext();
+                            } else {
+                              onNotify('Document context reconnected. Try your query again.', 'info');
+                            }
+                          }}
+                          title="Reconnect document context"
+                        >
+                          <RefreshCw size={12} />
+                          <span>Reconnect Context</span>
+                        </button>
+
+                        {onOpenVault && (
+                          <button
+                            type="button"
+                            className="btn btn-secondary docpilot-recovery-btn"
+                            onClick={onOpenVault}
+                            title="Open Document Vault"
+                          >
+                            <FolderOpen size={12} />
+                            <span>Open Vault</span>
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Feedback Footer: Thumbs up/down + Copy */}
+                  {!isErrorMsg && (
+                    <div className="docpilot-assistant-footer">
+                      <button
+                        type="button"
+                        className={`docpilot-feedback-btn ${feedback === 'up' ? 'active' : ''}`}
+                        onClick={() => toggleThumbs(msg.id, 'up')}
+                        title="Good response"
+                      >
+                        <ThumbsUp size={13} />
+                      </button>
+
+                      <button
+                        type="button"
+                        className={`docpilot-feedback-btn ${feedback === 'down' ? 'active' : ''}`}
+                        onClick={() => toggleThumbs(msg.id, 'down')}
+                        title="Needs improvement"
+                      >
+                        <ThumbsDown size={13} />
+                      </button>
+
+                      <button
+                        type="button"
+                        className="docpilot-feedback-btn"
+                        onClick={() => handleCopy(msg.id, msg.content)}
+                        title="Copy text"
+                      >
+                        {copiedMsgId === msg.id ? <Check size={13} color="#10B981" /> : <Copy size={13} />}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           );
         })}
 
         {/* AI Typing Indicator */}
         {isAiThinking && (
-          <div className="ai-chat-message-row assistant thinking">
-            <div className="ai-chat-avatar assistant">
-              <Bot size={18} />
+          <div className="docpilot-assistant-card thinking-card">
+            <div className="docpilot-assistant-header">
+              <div className="docpilot-assistant-badge-icon">
+                <Sparkles size={16} color="#00C2FF" />
+              </div>
+              <span className="docpilot-assistant-name">DocPilot Assistant</span>
             </div>
-            <div className="ai-chat-bubble-container">
-              <div className="ai-chat-bubble-header">
-                <span className="ai-chat-sender">Document AI</span>
-                <span className="ai-chat-typing-label">Analyzing context...</span>
-              </div>
-              <div className="ai-chat-typing-dots">
-                <span className="dot dot-1" />
-                <span className="dot dot-2" />
-                <span className="dot dot-3" />
-              </div>
+            <div className="docpilot-typing-indicator">
+              <span className="dot dot-1" />
+              <span className="dot dot-2" />
+              <span className="dot dot-3" />
             </div>
           </div>
         )}
@@ -230,52 +413,64 @@ export const AIChatPanel: React.FC<AIChatPanelProps> = ({
         <div ref={chatBottomRef} />
       </div>
 
-      {/* Suggested Prompts Strip */}
-      <div className="ai-chat-suggested-strip">
-        <div className="ai-suggested-label">
-          <HelpCircle size={13} />
-          <span>Suggested:</span>
-        </div>
-        <div className="ai-suggested-scroll">
-          {getSuggestedPrompts(document.document_type).map((prompt, idx) => (
-            <button
-              key={idx}
-              type="button"
-              className="ai-suggested-chip"
-              onClick={() => handlePromptClick(prompt)}
-              disabled={isAiThinking}
-            >
-              {prompt}
-            </button>
-          ))}
-        </div>
+      {/* 3. Suggested Prompt Chips */}
+      <div className="docpilot-chat-suggested-row">
+        {getSuggestedPrompts(document.document_type).slice(0, 2).map((prompt, idx) => (
+          <button
+            key={idx}
+            type="button"
+            className="docpilot-suggested-pill"
+            onClick={() => handlePromptClick(prompt)}
+            disabled={isAiThinking}
+          >
+            {prompt}
+          </button>
+        ))}
       </div>
 
-      {/* Sticky Bottom Message Input Form */}
-      <div className="ai-chat-input-sticky">
-        <form className="ai-chat-form" onSubmit={handleSubmit}>
+      {/* 4. Sticky Bottom Message Input Form */}
+      <div className="docpilot-chat-input-container">
+        <form className="docpilot-chat-form" onSubmit={handleSubmit}>
+          {/* Left Tool Icons */}
+          <div className="docpilot-input-left-tools">
+            <button type="button" className="docpilot-tool-icon-btn" title="Attach file">
+              <Paperclip size={15} />
+            </button>
+            <button type="button" className="docpilot-tool-icon-btn" title="Reference document">
+              <FileText size={15} />
+            </button>
+          </div>
+
+          {/* Text Input */}
           <input
             ref={inputRef}
             type="text"
-            className="ai-chat-input"
-            placeholder={`Ask any question about ${document.filename}... (${getDynamicPlaceholder()})`}
+            className="docpilot-chat-text-input"
+            placeholder={`Ask any question about ${activeFilename}...`}
             value={inputQuery}
             onChange={(e) => setInputQuery(e.target.value)}
             disabled={isAiThinking}
           />
-          <button
-            type="submit"
-            className="btn btn-primary ai-chat-send-btn"
-            disabled={!inputQuery.trim() || isAiThinking}
-            title="Send inquiry"
-          >
-            <Send size={15} />
-            <span>Send</span>
-          </button>
+
+          {/* Right Tool Icons & Send Button */}
+          <div className="docpilot-input-right-tools">
+            <button type="button" className="docpilot-tool-icon-btn" title="Insert code">
+              <Code size={15} />
+            </button>
+            <button type="button" className="docpilot-tool-icon-btn" title="Add context">
+              <Plus size={15} />
+            </button>
+
+            <button
+              type="submit"
+              className="docpilot-chat-send-pill"
+              disabled={!inputQuery.trim() || isAiThinking}
+              title="Send inquiry"
+            >
+              <Send size={14} />
+            </button>
+          </div>
         </form>
-        <div className="ai-chat-input-hint">
-          <span>Press Enter ↵ to send • Grounded strictly on uploaded document context</span>
-        </div>
       </div>
     </div>
   );

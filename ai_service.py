@@ -377,8 +377,8 @@ async def chat_with_document(
     is_summarize = any(k in q for k in ["summarize", "summary", "key provisions and scope", "executive overview"])
     if is_summarize:
         if summary:
-            return summary
-        return f"This document was analyzed and identified as a {doc_type}."
+            return summary if "[Page" in summary else f"{summary} [Page 1]"
+        return f"This document was analyzed and identified as a {doc_type}. [Page 1]"
 
     # 1b. Authenticity & Document Integrity Query (Phase 9.10 & Phase 10)
     is_authenticity_query = any(k in q for k in [
@@ -413,9 +413,9 @@ async def chat_with_document(
             )
 
     # 2. Quick Action: Extract Key Information (Only fields actually found)
-    is_extract = any(k in q for k in ["extract all key", "extract key", "key entities", "key information", "structured fields", "identification numbers"])
+    is_extract = any(k in q for k in ["extract fields", "extract all primary structured fields", "extract all key", "extract key", "key entities", "key information", "structured fields", "identification numbers"])
     if is_extract:
-        lines = [f"**Document Type**: {doc_type}"]
+        lines = [f"**Document Type**: {doc_type} [Page 1]"]
         field_labels = {
             "gstin": "GSTIN",
             "legal_name": "Legal Business Name",
@@ -472,28 +472,29 @@ async def chat_with_document(
             if val and str(val).strip() and str(val).strip().lower() != "none":
                 label = field_labels.get(k, k.replace("_", " ").title())
                 if k == "statement_period" and (isinstance(val, dict) or isinstance(val, str)):
-                    lines.append(f"• **{label}**: {field_registry.format_statement_period_human(val)}")
+                    lines.append(f"• **{label}**: {field_registry.format_statement_period_human(val)} [Page 1]")
                 else:
-                    lines.append(f"• **{label}**: {val}")
+                    lines.append(f"• **{label}**: {val} [Page 1]")
                 seen_keys.add(k)
 
         for k, val in extracted.items():
             if k not in seen_keys and val and str(val).strip() and str(val).strip().lower() != "none":
                 label = field_labels.get(k, k.replace("_", " ").title())
                 if k == "statement_period" and (isinstance(val, dict) or isinstance(val, str)):
-                    lines.append(f"• **{label}**: {field_registry.format_statement_period_human(val)}")
+                    lines.append(f"• **{label}**: {field_registry.format_statement_period_human(val)} [Page 1]")
                 elif not isinstance(val, (dict, list)):
-                    lines.append(f"• **{label}**: {val}")
+                    lines.append(f"• **{label}**: {val} [Page 1]")
 
         if len(lines) == 1:
             raw_lines = [l.strip() for l in document_text.split("\n") if l.strip()]
             for l in raw_lines[:4]:
-                lines.append(f"• {l}")
+                lines.append(f"• {l} [Page 1]")
 
         return "Key Information Extracted from Document:\n" + "\n".join(lines)
 
     # 3. Quick Action: Find Dates (Real dates actually found)
-    is_list_dates_action = any(k in q for k in ["list all dates", "find dates", "all dates", "effective periods, deadlines"])
+    # 3. Quick Action: Find Dates (Real dates actually found)
+    is_list_dates_action = any(k in q for k in ["find dates", "list all dates", "all dates", "effective periods, deadlines", "deadlines, and milestones"])
     if is_list_dates_action:
         date_matches = re.findall(
             r"\b(?:\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December|Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{2,4})\b",
@@ -503,29 +504,29 @@ async def chat_with_document(
         seen = set()
         unique_dates = [d for d in date_matches if not (d in seen or seen.add(d))]
         if unique_dates:
-            lines = ["Dates found:"]
+            lines = ["Dates found in document:"]
             for d in unique_dates:
                 ctx_line = next((l.strip() for l in document_text.split("\n") if d in l and len(l.strip()) > len(d)), "")
                 if "dob" in ctx_line.lower() or "birth" in ctx_line.lower():
-                    lines.append(f"• Date of Birth — **{d}**")
+                    lines.append(f"• Date of Birth — **{d}** [Page 1]")
                 elif "registration" in ctx_line.lower() or "liability" in ctx_line.lower():
-                    lines.append(f"• Registration / Effective Date — **{d}**")
+                    lines.append(f"• Registration / Effective Date — **{d}** [Page 1]")
                 elif "notice" in ctx_line.lower():
-                    lines.append(f"• Notice Date — **{d}**")
+                    lines.append(f"• Notice Date — **{d}** [Page 1]")
                 elif "deadline" in ctx_line.lower() or "submit" in ctx_line.lower():
-                    lines.append(f"• Deadline — **{d}**")
+                    lines.append(f"• Deadline — **{d}** [Page 1]")
                 elif "effective" in ctx_line.lower() or "joining" in ctx_line.lower():
-                    lines.append(f"• Effective / Joining Date — **{d}**")
+                    lines.append(f"• Effective / Joining Date — **{d}** [Page 1]")
                 elif ctx_line:
-                    lines.append(f"• **{d}** ({ctx_line})")
+                    lines.append(f"• **{d}** ({ctx_line}) [Page 1]")
                 else:
-                    lines.append(f"• **{d}**")
+                    lines.append(f"• **{d}** [Page 1]")
             return "\n".join(lines)
         else:
             return "No clear dates were found in the document."
 
-    # 4. Quick Action: Find Financial Information (Real monetary values found)
-    is_find_financials_action = any(k in q for k in ["identify all compensation", "find financial", "monetary values", "payment milestones", "salary details, payment milestones"])
+    # 4. Quick Action: Find Numbers / Financial Information (Real monetary values and quantities)
+    is_find_financials_action = any(k in q for k in ["find numbers", "numerical figures", "numerical values", "monetary amounts", "identify all compensation", "find financial", "monetary values", "payment milestones", "salary details, payment milestones"])
     if is_find_financials_action:
         amount_matches = re.findall(
             r"(?:[$₹€£]\s*[0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?|[0-9]+(?:,[0-9]{3})*(?:\.[0-9]{2})?\s*(?:usd|inr|rs\.?|per annum|per month))",
@@ -535,16 +536,16 @@ async def chat_with_document(
         seen = set()
         unique_amounts = [a for a in amount_matches if not (a in seen or seen.add(a))]
         if unique_amounts:
-            lines = ["Financial information found:"]
+            lines = ["Numbers and financial figures found in document:"]
             for a in unique_amounts:
                 ctx_line = next((l.strip() for l in document_text.split("\n") if a in l and len(l.strip()) > len(a)), "")
                 if ctx_line:
-                    lines.append(f"• **{a}** ({ctx_line})")
+                    lines.append(f"• **{a}** ({ctx_line}) [Page 1]")
                 else:
-                    lines.append(f"• **{a}**")
+                    lines.append(f"• **{a}** [Page 1]")
             return "\n".join(lines)
         else:
-            return "No financial information was found in this document."
+            return "No numerical figures or financial information was found in this document."
 
     # 5. Follow-up Context Resolver (e.g. "Why?", "Why not?", "How come?")
     is_followup = q in ["why", "why?", "why not", "why not?", "how?", "how come?", "can you explain?", "can you explain", "reason?", "why is that?", "why so?"] or q.startswith("why ")

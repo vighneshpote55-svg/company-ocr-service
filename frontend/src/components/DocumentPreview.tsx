@@ -13,6 +13,9 @@ import {
   HelpCircle,
   Loader2,
   FileCheck,
+  Maximize2,
+  Minimize2,
+  Layers,
 } from 'lucide-react';
 import type { DocumentItem } from '../types';
 import { api } from '../services/api';
@@ -28,6 +31,9 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
   const [retryKey, setRetryKey] = useState(0);
   const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [rotation, setRotation] = useState(0);
+  const [currentPage, setCurrentPage] = useState(1);
 
   // Defensive Document ID extraction: NEVER generate /api/documents/undefined/file
   const rawId = document?.id || (document as any)?.document_id || '';
@@ -139,10 +145,29 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
   }
 
   return (
-    <div className="preview-panel" data-testid="document-preview-panel">
+    <div
+      className={`preview-panel ${isFullscreen ? 'preview-panel-fullscreen' : ''}`}
+      data-testid="document-preview-panel"
+      style={
+        isFullscreen
+          ? {
+              position: 'fixed',
+              top: 0,
+              left: 0,
+              right: 0,
+              bottom: 0,
+              zIndex: 9999,
+              borderRadius: 0,
+              margin: 0,
+              height: '100vh',
+              background: 'var(--bg-base)',
+            }
+          : undefined
+      }
+    >
       {/* Panel Top Header */}
       <div className="preview-header">
-        <div className="preview-title">
+        <div className="preview-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           {isPdf ? (
             <FileText size={16} color="#818cf8" />
           ) : (
@@ -150,7 +175,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
           )}
           <span
             style={{
-              maxWidth: '200px',
+              maxWidth: '220px',
               overflow: 'hidden',
               textOverflow: 'ellipsis',
               whiteSpace: 'nowrap',
@@ -162,6 +187,26 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
           </span>
           <span style={{ fontSize: '0.72rem', color: 'var(--text-subtle)' }}>
             ({formatBytes(document.file_size)})
+          </span>
+
+          {/* Text Layer Badge */}
+          <span className="docpilot-text-layer-badge">
+            <Layers size={11} />
+            <span>{document.ocr_required === false ? 'Native Text' : 'RapidOCR Layer'}</span>
+          </span>
+
+          {/* Page Count */}
+          <span
+            style={{
+              fontSize: '11px',
+              fontWeight: 600,
+              color: 'var(--text-muted)',
+              padding: '2px 6px',
+              borderRadius: '6px',
+              background: 'var(--bg-subtle)',
+            }}
+          >
+            Page 1 of {pageCount}
           </span>
         </div>
 
@@ -211,6 +256,17 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
               <ExternalLink size={15} />
             </button>
           )}
+
+          {/* Fullscreen toggle */}
+          <button
+            type="button"
+            onClick={() => setIsFullscreen((f) => !f)}
+            className="copy-btn"
+            title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen preview'}
+            aria-label="Toggle fullscreen"
+          >
+            {isFullscreen ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </button>
 
           {/* Download decrypted document securely */}
           <button
@@ -293,7 +349,7 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
                 src={previewBlobUrl}
                 alt={filename}
                 className="preview-img"
-                style={{ transform: `scale(${imageZoom})`, transformOrigin: 'center center' }}
+                style={{ transform: `scale(${imageZoom}) rotate(${rotation}deg)`, transformOrigin: 'center center', transition: 'transform 0.2s ease' }}
               />
             </div>
           ) : (
@@ -306,6 +362,98 @@ export const DocumentPreview: React.FC<DocumentPreviewProps> = ({ document }) =>
             />
           )
         ) : null}
+
+        {/* Phase 11.3: Floating PDF & Image Toolbar */}
+        {previewBlobUrl && !hasError && (
+          <div className="docpilot-floating-pdf-toolbar" role="toolbar" aria-label="Document viewer floating controls">
+            <button
+              type="button"
+              className="docpilot-floating-btn"
+              onClick={() => setImageZoom((z) => Math.max(0.5, Number((z - 0.2).toFixed(1))))}
+              title="Zoom Out"
+              aria-label="Zoom out"
+            >
+              <ZoomOut size={15} />
+            </button>
+            <span className="docpilot-floating-zoom-label">
+              {Math.round(imageZoom * 100)}%
+            </span>
+            <button
+              type="button"
+              className="docpilot-floating-btn"
+              onClick={() => setImageZoom((z) => Math.min(3.0, Number((z + 0.2).toFixed(1))))}
+              title="Zoom In"
+              aria-label="Zoom in"
+            >
+              <ZoomIn size={15} />
+            </button>
+            <div className="docpilot-floating-divider" />
+            <button
+              type="button"
+              className="docpilot-floating-btn"
+              onClick={() => setRotation((r) => (r + 90) % 360)}
+              title="Rotate Document"
+              aria-label="Rotate"
+            >
+              <RotateCcw size={14} />
+            </button>
+            <div className="docpilot-floating-divider" />
+            <div className="docpilot-floating-page-ctrl">
+              <button
+                type="button"
+                className="docpilot-floating-btn"
+                disabled={currentPage <= 1}
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                title="Previous page"
+                aria-label="Previous page"
+              >
+                &lsaquo;
+              </button>
+              <span className="docpilot-floating-page-label">
+                {currentPage} / {pageCount}
+              </span>
+              <button
+                type="button"
+                className="docpilot-floating-btn"
+                disabled={currentPage >= pageCount}
+                onClick={() => setCurrentPage((p) => Math.min(pageCount, p + 1))}
+                title="Next page"
+                aria-label="Next page"
+              >
+                &rsaquo;
+              </button>
+            </div>
+            <div className="docpilot-floating-divider" />
+            <button
+              type="button"
+              onClick={handleDownload}
+              disabled={isDownloading}
+              className="docpilot-floating-btn"
+              title="Download Document"
+              aria-label="Download Document"
+            >
+              {isDownloading ? <Loader2 size={14} className="spin-anim" /> : <Download size={14} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => setIsFullscreen((f) => !f)}
+              className="docpilot-floating-btn"
+              title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+              aria-label="Toggle Fullscreen"
+            >
+              {isFullscreen ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+            </button>
+            <button
+              type="button"
+              onClick={handleOpenInNewTab}
+              className="docpilot-floating-btn"
+              title="Open in New Tab"
+              aria-label="Open in New Tab"
+            >
+              <ExternalLink size={14} />
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Panel Bottom Footer */}

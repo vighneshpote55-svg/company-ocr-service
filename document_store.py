@@ -95,6 +95,15 @@ def clear_active_document():
         _active_document_id = None
 
 
+_canonical_analyses: Dict[str, Dict[str, Any]] = {}
+
+
+def set_canonical_analysis(doc_id: str, analysis: Dict[str, Any]):
+    """Store canonical analysis object in memory cache for AI grounding."""
+    with _lock:
+        _canonical_analyses[doc_id] = analysis
+
+
 def get_canonical_analysis(doc_id: Optional[str] = None) -> Optional[Dict[str, Any]]:
     """
     Retrieve one canonical analysis object for the given document_id (or active session document):
@@ -112,6 +121,9 @@ def get_canonical_analysis(doc_id: Optional[str] = None) -> Optional[Dict[str, A
     target_id = doc_id or get_active_document_id()
     if not target_id:
         return None
+    with _lock:
+        if target_id in _canonical_analyses:
+            return _canonical_analyses[target_id]
     doc = get_document(target_id)
     if not doc:
         return None
@@ -189,11 +201,13 @@ def sanitize_filename(filename: str) -> str:
 
 
 def save_document(
-    file_bytes: bytes,
-    filename: str,
-    result_data: Dict[str, Any],
+    file_bytes: Optional[bytes] = None,
+    filename: Optional[str] = None,
+    result_data: Optional[Dict[str, Any]] = None,
     thumbnail_bytes: Optional[bytes] = None,
     user_id: Optional[str] = None,
+    doc_id: Optional[str] = None,
+    **kwargs: Any,
 ) -> Dict[str, Any]:
     """
     Persist an uploaded document:
@@ -202,7 +216,19 @@ def save_document(
     - Encrypt result JSON and save as uploads/results/<doc_id>.json.enc
     - Update documents.json index
     """
-    doc_id = str(uuid.uuid4())
+    if file_bytes is None and "file_data" in kwargs:
+        file_bytes = kwargs.pop("file_data")
+    if filename is None and "original_filename" in kwargs:
+        filename = kwargs.pop("original_filename")
+    if result_data is None:
+        result_data = {}
+    if kwargs:
+        result_data = {**kwargs, **result_data}
+    if file_bytes is None:
+        file_bytes = b""
+    if not filename:
+        filename = "document.bin"
+    doc_id = doc_id or str(uuid.uuid4())
     user_id = user_id or os.getenv("DEFAULT_DEV_USER_ID", "00000000-0000-0000-0000-000000000001")
     clean_name = sanitize_filename(filename)
     ext = os.path.splitext(clean_name)[1].lower() or ".bin"
@@ -269,7 +295,8 @@ def save_document(
         "extracted_fields": result_data.get("extracted_fields", {}),
         "fields": result_data.get("extracted_fields", result_data.get("fields", {})),
         "field_confidences": result_data.get("field_confidences", {}),
-        "extracted_text": result_data.get("extracted_text", ""),
+        "extracted_text": result_data.get("extracted_text") or result_data.get("raw_text") or (result_data.get("ocr_result") or {}).get("raw_text") or (result_data.get("ocr_result") or {}).get("text") or "",
+        "raw_text": result_data.get("extracted_text") or result_data.get("raw_text") or (result_data.get("ocr_result") or {}).get("raw_text") or (result_data.get("ocr_result") or {}).get("text") or "",
         "has_preview": preview_filename is not None,
         "preview_url": f"/api/documents/{doc_id}/preview" if preview_filename else None,
         "file_url": f"/api/documents/{doc_id}/file",
@@ -284,7 +311,7 @@ def save_document(
             "document_id": doc_id,
             "document_type": result_data.get("document_type") or result_data.get("doc_type", "Unknown Document"),
             "confidence": "high" if (result_data.get("confidence") in ("high", 1.0) or (isinstance(result_data.get("confidence"), (int, float)) and result_data.get("confidence") >= 0.85)) else ("medium" if (result_data.get("confidence") == "medium" or (isinstance(result_data.get("confidence"), (int, float)) and result_data.get("confidence") >= 0.60)) else "low"),
-            "ocr_text": result_data.get("extracted_text") or "",
+            "ocr_text": result_data.get("extracted_text") or result_data.get("raw_text") or (result_data.get("ocr_result") or {}).get("raw_text") or (result_data.get("ocr_result") or {}).get("text") or "",
             "summary": result_data.get("summary") or (result_data.get("ai_analysis") or {}).get("summary") or "",
             "evidence": result_data.get("evidence") or (result_data.get("ai_analysis") or {}).get("evidence") or [],
             "extracted_fields": {
@@ -367,6 +394,9 @@ def get_document(doc_id: str) -> Optional[Dict[str, Any]]:
             return item
 
     return None
+
+
+get_document_metadata = get_document
 
 
 def get_document_file_path(doc_id: str) -> Optional[str]:

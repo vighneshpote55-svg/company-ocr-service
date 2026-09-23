@@ -10,6 +10,9 @@ import {
   HardDrive,
   FileCode,
   ShieldAlert,
+  QrCode,
+  Binary,
+  LayoutGrid,
 } from 'lucide-react';
 import type { AiAnalysisResult } from '../types';
 
@@ -44,8 +47,20 @@ export const AIAnalysisCard: React.FC<AIAnalysisCardProps> = ({
   const isUnsupported = verifStatus === 'unsupported';
   const signals = Array.isArray(document.suspicious_signals) ? document.suspicious_signals : [];
 
+  // Gauge calculations (Circumference for r=38 is ~238.76)
+  const radius = 38;
+  const circumference = 2 * Math.PI * radius;
+  const strokeDashoffset = circumference - (Math.min(100, Math.max(0, riskScore)) / 100) * circumference;
+  const gaugeColor = riskScore >= 60 ? '#EF4444' : riskScore >= 30 ? '#F59E0B' : '#22C55E';
+
+  // Subsystem integrity checks
+  const hasQrMismatch = signals.some((s) => String(s).toLowerCase().includes('qr'));
+  const hasChecksumMismatch = signals.some((s) => String(s).toLowerCase().includes('checksum') || String(s).toLowerCase().includes('math') || String(s).toLowerCase().includes('deduction'));
+  const hasLayoutAnomaly = signals.some((s) => String(s).toLowerCase().includes('duplicate') || String(s).toLowerCase().includes('overlap') || String(s).toLowerCase().includes('alignment'));
+
   return (
-    <div className="ai-analysis-card">
+    <div className="ai-analysis-card" style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+      {/* Top Document Summary Strip */}
       <div className="ai-analysis-card-top">
         <div className="ai-analysis-header-left">
           <div className="ai-analysis-icon-box">
@@ -127,15 +142,189 @@ export const AIAnalysisCard: React.FC<AIAnalysisCardProps> = ({
         </div>
       </div>
 
-      {/* Document Integrity Assessment Panel (Phase 10 & 11) */}
+      {/* Phase 11.7: 4 Compact Metadata Dashboard Cards */}
+      <div className="docpilot-metadata-4grid" role="region" aria-label="Document Metadata Summary">
+        {/* Card 1: Confidence */}
+        <div className="docpilot-meta-card">
+          <div className="docpilot-meta-card-header">
+            <span className="docpilot-meta-card-label">Confidence</span>
+            <div className={`docpilot-meta-icon-badge ${confidenceLower}`}>
+              <CheckCircle2 size={16} />
+            </div>
+          </div>
+          <div className="docpilot-meta-card-value">
+            {typeof rawConf === 'number' ? `${Math.round(rawConf * 100)}%` : rawConf}
+          </div>
+          <span className="docpilot-meta-card-sub">{confidenceLabel}</span>
+        </div>
+
+        {/* Card 2: Pages & Size */}
+        <div className="docpilot-meta-card">
+          <div className="docpilot-meta-card-header">
+            <span className="docpilot-meta-card-label">Pages</span>
+            <div className="docpilot-meta-icon-badge blue">
+              <FileCode size={16} />
+            </div>
+          </div>
+          <div className="docpilot-meta-card-value">
+            {document.pages || 1} {document.pages === 1 ? 'Page' : 'Pages'}
+          </div>
+          <span className="docpilot-meta-card-sub">{formattedSize} KB • {document.text_source || 'PDF Layer'}</span>
+        </div>
+
+        {/* Card 3: Document Type */}
+        <div className="docpilot-meta-card">
+          <div className="docpilot-meta-card-header">
+            <span className="docpilot-meta-card-label">Document Type</span>
+            <div className="docpilot-meta-icon-badge purple">
+              <Layers size={16} />
+            </div>
+          </div>
+          <div className="docpilot-meta-card-value doc-type-val" title={document.document_type}>
+            {document.document_type || 'Unknown'}
+          </div>
+          <span className="docpilot-meta-card-sub">AI Classified</span>
+        </div>
+
+        {/* Card 4: Verification */}
+        <div className="docpilot-meta-card">
+          <div className="docpilot-meta-card-header">
+            <span className="docpilot-meta-card-label">Verification</span>
+            <div className={`docpilot-meta-icon-badge ${isReviewRequired ? 'warning' : 'success'}`}>
+              {isReviewRequired ? <AlertTriangle size={16} /> : <CheckCircle2 size={16} />}
+            </div>
+          </div>
+          <div className={`docpilot-meta-card-value ${isReviewRequired ? 'text-warning' : 'text-success'}`}>
+            {isReviewRequired ? 'Review Required' : 'Verified'}
+          </div>
+          <span className="docpilot-meta-card-sub">
+            {isReviewRequired ? `Risk Score: ${riskScore}%` : 'Risk Score: 0% • Authentic'}
+          </span>
+        </div>
+      </div>
+
+      {/* DocPilot Circular Risk Gauge & Subsystem Integrity Strip */}
+      <div className="docpilot-circular-gauge-card" style={{ marginTop: '0.25rem' }}>
+        <div className="docpilot-gauge-wrap">
+          <div style={{ position: 'relative', width: '100px', height: '100px' }}>
+            <svg className="circular-gauge-svg" viewBox="0 0 100 100">
+              <circle
+                className="circular-gauge-bg"
+                cx="50"
+                cy="50"
+                r={radius}
+              />
+              <circle
+                className="circular-gauge-progress"
+                cx="50"
+                cy="50"
+                r={radius}
+                stroke={gaugeColor}
+                strokeDasharray={circumference}
+                strokeDashoffset={strokeDashoffset}
+              />
+            </svg>
+            <div className="gauge-center-text">
+              <div className="gauge-percent" style={{ color: gaugeColor }}>
+                {riskScore}%
+              </div>
+              <div className="gauge-label">
+                Risk
+              </div>
+            </div>
+          </div>
+
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '4px' }}>
+              <span style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)' }}>
+                Document Integrity Assessment
+              </span>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  padding: '2px 8px',
+                  borderRadius: '9999px',
+                  backgroundColor: isReviewRequired ? 'rgba(245, 158, 11, 0.15)' : 'rgba(34, 197, 94, 0.15)',
+                  color: isReviewRequired ? 'var(--warning)' : 'var(--success)',
+                  border: `1px solid ${isReviewRequired ? 'rgba(245, 158, 11, 0.3)' : 'rgba(34, 197, 94, 0.3)'}`,
+                }}
+              >
+                {isReviewRequired ? 'Review Required' : isUnsupported ? 'Unsupported' : 'Verified'}
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: '12.5px', color: 'var(--text-muted)' }}>
+              Objective checks across layout, OCR, security features, and AI reasoning
+            </p>
+          </div>
+        </div>
+
+        {/* Subsystem Integrity Status Chips */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '8px',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              fontSize: '12px',
+            }}
+          >
+            <QrCode size={14} color={hasQrMismatch ? 'var(--warning)' : 'var(--success)'} />
+            <span style={{ color: 'var(--text-main)', fontWeight: 500 }}>
+              QR: {hasQrMismatch ? 'Mismatch' : 'Valid'}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '8px',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              fontSize: '12px',
+            }}
+          >
+            <Binary size={14} color={hasChecksumMismatch ? 'var(--warning)' : 'var(--success)'} />
+            <span style={{ color: 'var(--text-main)', fontWeight: 500 }}>
+              Checksum: {hasChecksumMismatch ? 'Inconsistent' : 'Valid'}
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '8px',
+              background: 'var(--bg-surface)',
+              border: '1px solid var(--border-subtle)',
+              fontSize: '12px',
+            }}
+          >
+            <LayoutGrid size={14} color={hasLayoutAnomaly ? 'var(--warning)' : 'var(--success)'} />
+            <span style={{ color: 'var(--text-main)', fontWeight: 500 }}>
+              Layout: {hasLayoutAnomaly ? 'Anomaly' : 'Consistent'}
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Review Required Alert / Inconsistencies Panel */}
       {isReviewRequired && (
         <div
           className="review-required-panel"
           data-testid="review-required-panel"
           style={{
-            marginTop: '0.85rem',
-            padding: '0.85rem 1.1rem',
-            borderRadius: '8px',
+            padding: '14px 18px',
+            borderRadius: '12px',
             backgroundColor: 'rgba(249, 115, 22, 0.08)',
             border: '1px solid rgba(249, 115, 22, 0.25)',
           }}

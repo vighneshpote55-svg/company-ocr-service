@@ -437,7 +437,14 @@ def get_user_document(user_id: str, document_id: str) -> Optional[Dict[str, Any]
     Retrieve single document metadata and results.
     Verifies that the document belongs to user_id. Returns None if not found or unauthorized.
     """
-    if is_supabase_configured():
+    is_valid_uuid = False
+    try:
+        uuid.UUID(str(document_id))
+        is_valid_uuid = True
+    except (ValueError, AttributeError):
+        is_valid_uuid = False
+
+    if is_supabase_configured() and is_valid_uuid:
         client = get_supabase_client()
         if client:
             try:
@@ -515,7 +522,7 @@ def get_user_document(user_id: str, document_id: str) -> Optional[Dict[str, Any]
                 logger.error(f"Failed to fetch document {document_id} from Supabase: {type(ex).__name__}")
 
     # Local fallback
-    doc = document_store.get_document_metadata(document_id)
+    doc = document_store.get_document(document_id)
     if doc:
         # Check user ownership if user_id is present
         doc_owner = doc.get("user_id")

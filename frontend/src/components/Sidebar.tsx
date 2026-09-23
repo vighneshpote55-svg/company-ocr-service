@@ -1,17 +1,21 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
-  BarChart3,
-  FolderArchive,
-  ShieldCheck,
+  LayoutDashboard,
+  FileText,
+  Search,
   Sparkles,
+  Users,
   Settings,
   ChevronLeft,
   ChevronRight,
-  FileText,
+  Globe,
+  LogOut,
   X,
-  Cpu,
+  ChevronDown,
+  ShieldCheck,
 } from 'lucide-react';
 import type { EngineInfo, AppMode } from '../types';
+import { useAuth } from '../context/AuthContext';
 
 export type NavTab = 'dashboard' | 'repository';
 
@@ -26,28 +30,25 @@ interface SidebarProps {
   onCloseMobile?: () => void;
   isCollapsed?: boolean;
   onToggleCollapse?: () => void;
+  onLogout?: () => void;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
   currentTab,
   onSelectTab,
   onOpenSettings,
-  engineInfo,
+  engineInfo: _engineInfo,
   appMode,
   onSelectMode,
   isOpenMobile = false,
   onCloseMobile,
   isCollapsed = false,
   onToggleCollapse,
+  onLogout,
 }) => {
-  const engineDisplayName =
-    engineInfo?.display_name ||
-    (engineInfo?.active_engine === 'rapidocr'
-      ? 'RapidOCR'
-      : engineInfo?.active_engine === 'paddleocr'
-      ? 'PaddleOCR'
-      : engineInfo?.engine || 'RapidOCR');
-  const deviceName = engineInfo?.device?.toUpperCase() || 'CPU';
+  const { user, logout: authLogout } = useAuth();
+  const [activeProject, setActiveProject] = useState<'alpha' | 'beta' | 'delta'>('alpha');
+  const [isProjectsOpen, setIsProjectsOpen] = useState(true);
 
   const handleNavClick = (tab: NavTab) => {
     onSelectTab(tab);
@@ -60,6 +61,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (onCloseMobile) onCloseMobile();
   };
 
+  const handleLogoutClick = async () => {
+    if (onLogout) {
+      onLogout();
+    } else {
+      await authLogout();
+    }
+  };
+
+  const displayName = user?.full_name || (user?.email ? user.email.split('@')[0] : 'Sarah J.');
+
   return (
     <>
       {/* Mobile Drawer Backdrop */}
@@ -69,17 +80,34 @@ export const Sidebar: React.FC<SidebarProps> = ({
         aria-hidden="true"
       />
 
-      <aside className={`sidebar dark-floating-sidebar ${isCollapsed ? 'collapsed' : ''} ${isOpenMobile ? 'open' : ''}`}>
-        {/* Sidebar Header */}
-        <div className="sidebar-header">
-          <div className="brand-logo-wrap">
-            <div className="brand-icon">
-              <FileText size={18} />
+      <aside className={`sidebar docpilot-sidebar dark-floating-sidebar ${isCollapsed ? 'collapsed' : ''} ${isOpenMobile ? 'open' : ''}`}>
+        {/* 1. Sidebar Header: DocPilot AI Logo */}
+        <div className="docpilot-sidebar-header">
+          <div className="docpilot-brand-wrap" onClick={() => handleNavClick('dashboard')} style={{ cursor: 'pointer' }}>
+            {/* Stylized DocPilot AI Gradient Icon */}
+            <div className="docpilot-logo-icon">
+              <svg width="24" height="24" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                <path
+                  d="M6 24L16 6L26 24L16 19L6 24Z"
+                  fill="url(#dpGradient)"
+                  stroke="#38BDF8"
+                  strokeWidth="1.5"
+                  strokeLinejoin="round"
+                />
+                <circle cx="16" cy="14" r="3" fill="#FFFFFF" />
+                <defs>
+                  <linearGradient id="dpGradient" x1="6" y1="6" x2="26" y2="24" gradientUnits="userSpaceOnUse">
+                    <stop stopColor="#00C2FF" />
+                    <stop offset="1" stopColor="#0284C7" />
+                  </linearGradient>
+                </defs>
+              </svg>
             </div>
+
             {!isCollapsed && (
-              <div className="brand-info-wrap">
-                <div className="brand-title">DocuScan Pro</div>
-                <div className="brand-subtitle">{engineDisplayName} Core</div>
+              <div className="docpilot-brand-text">
+                <span className="docpilot-brand-main">DocPilot</span>
+                <span className="docpilot-brand-ai">AI</span>
               </div>
             )}
           </div>
@@ -108,101 +136,186 @@ export const Sidebar: React.FC<SidebarProps> = ({
           )}
         </div>
 
-        {/* Navigation Sections */}
-        <div className="sidebar-scroll-area">
-          <nav className="sidebar-nav" aria-label="Main Navigation">
-            {/* 1. Dashboard */}
+        {/* 2. Main Navigation Links */}
+        <div className="docpilot-sidebar-nav-scroll">
+          <nav className="docpilot-sidebar-menu" aria-label="DocPilot Navigation">
+            {/* Dashboard (Active Pill with glowing border) */}
             <button
-              className={`nav-pill-item ${currentTab === 'dashboard' ? 'active' : ''}`}
-              onClick={() => handleNavClick('dashboard')}
-              title="Dashboard Overview"
+              className={`docpilot-nav-item ${currentTab === 'dashboard' && appMode === 'ai' ? 'active-glowing' : ''}`}
+              onClick={() => {
+                handleModeClick('ai');
+              }}
+              title="Dashboard"
             >
-              <span className="active-blue-indicator" aria-hidden="true" />
-              <span className="nav-pill-icon">
-                <BarChart3 size={18} />
-              </span>
-              {!isCollapsed && <span className="nav-pill-label">Dashboard</span>}
+              <div className="docpilot-nav-icon">
+                <LayoutDashboard size={18} />
+              </div>
+              {!isCollapsed && <span className="docpilot-nav-label">Dashboard</span>}
             </button>
 
-            {/* 2. Document Vault */}
+            {/* My Documents (Vault) */}
             <button
-              className={`nav-pill-item ${currentTab === 'repository' ? 'active' : ''}`}
+              className={`docpilot-nav-item ${currentTab === 'repository' ? 'active-glowing' : ''}`}
               onClick={() => handleNavClick('repository')}
-              title="Document Vault"
+              title="My Documents"
             >
-              <span className="active-blue-indicator" aria-hidden="true" />
-              <span className="nav-pill-icon">
-                <FolderArchive size={18} />
-              </span>
-              {!isCollapsed && <span className="nav-pill-label">Document Vault</span>}
+              <div className="docpilot-nav-icon">
+                <FileText size={18} />
+              </div>
+              {!isCollapsed && <span className="docpilot-nav-label">My Documents</span>}
             </button>
 
-            <div className="sidebar-divider" />
-
-            {!isCollapsed && <div className="sidebar-section-heading">OPERATING MODES</div>}
-
-            {/* 3. Offline Mode */}
+            {/* Search */}
             <button
-              className={`nav-pill-item mode-item ${appMode === 'offline' && currentTab === 'dashboard' ? 'active offline-active' : ''}`}
-              onClick={() => handleModeClick('offline')}
-              title="Offline Mode (22 Local Document Types)"
+              className="docpilot-nav-item"
+              onClick={() => handleNavClick('repository')}
+              title="Search Documents"
             >
-              <span className="active-blue-indicator" aria-hidden="true" />
-              <span className="nav-pill-icon text-primary">
-                <ShieldCheck size={18} />
-              </span>
-              {!isCollapsed && (
-                <div className="nav-pill-label-group">
-                  <span className="nav-pill-label">Offline Mode</span>
-                  <span className="nav-pill-badge">22 Types</span>
-                </div>
-              )}
+              <div className="docpilot-nav-icon">
+                <Search size={18} />
+              </div>
+              {!isCollapsed && <span className="docpilot-nav-label">Search</span>}
             </button>
 
-            {/* 4. AI Mode */}
+            {/* AI Tools / Mode Switcher */}
             <button
-              className={`nav-pill-item mode-item ${appMode === 'ai' && currentTab === 'dashboard' ? 'active ai-active' : ''}`}
+              className={`docpilot-nav-item ${appMode === 'ai' ? 'highlighted' : ''}`}
               onClick={() => handleModeClick('ai')}
-              title="AI Mode (Intelligent Chat & Classification)"
+              title="AI Tools & Analysis"
             >
-              <span className="active-blue-indicator" aria-hidden="true" />
-              <span className="nav-pill-icon text-ai">
+              <div className="docpilot-nav-icon">
                 <Sparkles size={18} />
-              </span>
+              </div>
               {!isCollapsed && (
-                <div className="nav-pill-label-group">
-                  <span className="nav-pill-label">AI Mode</span>
-                  <span className="nav-pill-badge ai-badge">Neural</span>
+                <div className="docpilot-nav-label-group">
+                  <span className="docpilot-nav-label">AI Tools</span>
+                  <span className="docpilot-mini-tag">Active</span>
                 </div>
               )}
+            </button>
+
+            {/* Offline OCR Engine */}
+            <button
+              className={`docpilot-nav-item ${appMode === 'offline' ? 'active-glowing' : ''}`}
+              onClick={() => handleModeClick('offline')}
+              title="Offline Mode (RapidOCR 22 Document Types)"
+            >
+              <div className="docpilot-nav-icon">
+                <ShieldCheck size={18} />
+              </div>
+              {!isCollapsed && (
+                <div className="docpilot-nav-label-group">
+                  <span className="docpilot-nav-label">Offline OCR</span>
+                  <span className="docpilot-mini-tag green">22 Types</span>
+                </div>
+              )}
+            </button>
+
+            {/* Teams */}
+            <button
+              className="docpilot-nav-item"
+              onClick={() => onSelectTab('dashboard')}
+              title="Teams & Permissions"
+            >
+              <div className="docpilot-nav-icon">
+                <Users size={18} />
+              </div>
+              {!isCollapsed && <span className="docpilot-nav-label">Teams</span>}
+            </button>
+
+            {/* Settings */}
+            <button
+              className="docpilot-nav-item"
+              onClick={() => {
+                onOpenSettings();
+                if (onCloseMobile) onCloseMobile();
+              }}
+              title="Settings & AI Providers"
+            >
+              <div className="docpilot-nav-icon">
+                <Settings size={18} />
+              </div>
+              {!isCollapsed && <span className="docpilot-nav-label">Settings</span>}
             </button>
           </nav>
         </div>
 
-        {/* Sidebar Footer */}
-        <div className="sidebar-footer">
-          {/* 5. Settings */}
-          <button
-            className="nav-pill-item settings-item"
-            onClick={() => {
-              onOpenSettings();
-              if (onCloseMobile) onCloseMobile();
-            }}
-            title="Settings & API Configuration"
-          >
-            <span className="active-blue-indicator" aria-hidden="true" />
-            <span className="nav-pill-icon">
-              <Settings size={18} />
-            </span>
-            {!isCollapsed && <span className="nav-pill-label">Settings</span>}
-          </button>
-
+        {/* 3. Sidebar Bottom Section: Multi-tenant Workspace & User Profile */}
+        <div className="docpilot-sidebar-bottom">
+          {/* Multi-tenant Workspace Capsule */}
           {!isCollapsed && (
-            <div className="sidebar-engine-tag">
-              <Cpu size={13} className="engine-cpu-icon" />
-              <span>{engineDisplayName} • {deviceName}</span>
+            <div className="docpilot-workspace-card">
+              <div
+                className="docpilot-workspace-card-header"
+                onClick={() => setIsProjectsOpen((p) => !p)}
+                style={{ cursor: 'pointer' }}
+              >
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Globe size={13} color="#00C2FF" />
+                  <span className="docpilot-workspace-card-title">Multi-tenant workspace</span>
+                </div>
+                <ChevronDown
+                  size={13}
+                  color="#94A3B8"
+                  style={{
+                    transform: isProjectsOpen ? 'rotate(180deg)' : 'none',
+                    transition: 'transform 0.15s ease',
+                  }}
+                />
+              </div>
+
+              {isProjectsOpen && (
+                <div className="docpilot-projects-list">
+                  <div className="docpilot-projects-lbl">Projects</div>
+                  <div
+                    className={`docpilot-project-item ${activeProject === 'alpha' ? 'active' : ''}`}
+                    onClick={() => setActiveProject('alpha')}
+                  >
+                    <span className="project-badge blue">A</span>
+                    <span className="project-name">Alpha</span>
+                  </div>
+                  <div
+                    className={`docpilot-project-item ${activeProject === 'beta' ? 'active' : ''}`}
+                    onClick={() => setActiveProject('beta')}
+                  >
+                    <span className="project-badge teal">S</span>
+                    <span className="project-name">Beta</span>
+                  </div>
+                  <div
+                    className={`docpilot-project-item ${activeProject === 'delta' ? 'active' : ''}`}
+                    onClick={() => setActiveProject('delta')}
+                  >
+                    <span className="project-badge magenta">R</span>
+                    <span className="project-name">Delta</span>
+                  </div>
+                </div>
+              )}
             </div>
           )}
+
+          {/* User Profile Footer */}
+          <div className="docpilot-user-footer">
+            <button
+              className="docpilot-logout-btn"
+              onClick={handleLogoutClick}
+              title="Sign Out"
+              aria-label="Sign Out"
+            >
+              <LogOut size={16} />
+            </button>
+
+            <div className="docpilot-user-info">
+              <div className="docpilot-user-avatar">
+                {displayName.charAt(0).toUpperCase()}
+              </div>
+              {!isCollapsed && (
+                <div className="docpilot-user-details">
+                  <div className="docpilot-user-name" title={displayName}>{displayName}</div>
+                  <div className="docpilot-user-role">Admin</div>
+                </div>
+              )}
+            </div>
+          </div>
         </div>
       </aside>
     </>

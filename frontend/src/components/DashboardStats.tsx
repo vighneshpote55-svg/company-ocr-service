@@ -1,6 +1,6 @@
 import React from 'react';
-import { Files, Zap, Sparkles, HardDrive } from 'lucide-react';
-import type { DashboardStats as StatsType, EngineInfo, DocumentItem } from '../types';
+import { Files, Zap, Sparkles, HardDrive, ShieldCheck, Cpu } from 'lucide-react';
+import type { DashboardStats as StatsType, EngineInfo, DocumentItem, AIProviderConfig } from '../types';
 import { StatCard } from './StatCard';
 
 interface DashboardStatsProps {
@@ -8,6 +8,7 @@ interface DashboardStatsProps {
   onNavigateTab?: (tab: 'repository' | 'dashboard') => void;
   engineInfo?: EngineInfo | null;
   documents?: DocumentItem[];
+  aiConfig?: AIProviderConfig | null;
 }
 
 function formatBytes(bytes: number): string {
@@ -22,6 +23,7 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
   stats,
   onNavigateTab,
   documents,
+  aiConfig,
 }) => {
   const offlineCount =
     typeof stats.offline_documents === 'number'
@@ -51,53 +53,90 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
       ? `${(stats.total * 0.25).toFixed(1)} MB`
       : '0 B';
 
+  // Integrity metrics
+  const verifiedCount = documents
+    ? documents.filter((d) => d.verification_status === 'verified').length
+    : 0;
+  const reviewCount = documents
+    ? documents.filter((d) => d.verification_status === 'review_required' || d.review_required).length
+    : 0;
+
+  // Active AI Provider info
+  const providerTitle = aiConfig?.mode === 'external'
+    ? (aiConfig.active_provider === 'openrouter' ? 'OpenRouter' : aiConfig.active_provider.toUpperCase())
+    : 'Local Ollama';
+  const modelSubtext = aiConfig?.active_model || 'qwen2.5vl:3b';
+
   return (
-    <div className="analytics-cards-grid">
+    <div className="analytics-cards-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
       {/* 1. Total Documents */}
       <StatCard
-        label="Total Documents"
+        label="Documents"
         value={stats.total_documents ?? stats.total}
         subtext="Indexed in Document Vault"
         icon={<Files size={20} />}
-        iconBg="rgba(37, 99, 235, 0.12)"
+        iconBg="rgba(0, 194, 255, 0.12)"
         iconColor="var(--primary)"
         onClick={() => onNavigateTab?.('repository')}
         badge={{ text: 'Live Vault', type: 'info' }}
       />
 
-      {/* 2. Offline Mode (RapidOCR) */}
+      {/* 2. Offline Processed (RapidOCR) */}
       <StatCard
         label="Offline Processed"
         value={offlineCount}
         subtext="RapidOCR deterministic engine"
         icon={<Zap size={20} />}
-        iconBg="rgba(22, 163, 74, 0.12)"
+        iconBg="rgba(34, 197, 94, 0.12)"
         iconColor="var(--success)"
         onClick={() => onNavigateTab?.('repository')}
         badge={{ text: 'RapidOCR', type: 'success' }}
       />
 
-      {/* 3. AI Mode (Intelligence) */}
+      {/* 3. AI Processed (DocPilot Intelligence) */}
       <StatCard
-        label="AI Intelligence"
+        label="AI Processed"
         value={aiCount}
-        subtext="Local Qwen / External reasoning"
+        subtext="Visual reasoning & extraction"
         icon={<Sparkles size={20} />}
-        iconBg="rgba(124, 58, 237, 0.12)"
+        iconBg="rgba(139, 92, 246, 0.12)"
         iconColor="var(--accent-purple)"
         onClick={() => onNavigateTab?.('repository')}
-        badge={{ text: 'AI Mode', type: 'warning' }}
+        badge={{ text: 'DocPilot AI', type: 'warning' }}
       />
 
       {/* 4. Storage Used */}
       <StatCard
-        label="Storage Used"
+        label="Storage"
         value={storageDisplay}
         subtext="Encrypted document store"
         icon={<HardDrive size={20} />}
         iconBg="rgba(99, 102, 241, 0.12)"
         iconColor="#6366f1"
-        badge={{ text: 'AES-256-GCM', type: 'neutral' }}
+        badge={{ text: 'AES-256', type: 'neutral' }}
+      />
+
+      {/* 5. Integrity Status */}
+      <StatCard
+        label="Integrity Status"
+        value={reviewCount > 0 ? `${reviewCount} Review` : `${verifiedCount} Verified`}
+        subtext={reviewCount > 0 ? `${verifiedCount} verified cleanly` : 'Universal integrity verified'}
+        icon={<ShieldCheck size={20} />}
+        iconBg={reviewCount > 0 ? 'rgba(245, 158, 11, 0.14)' : 'rgba(34, 197, 94, 0.12)'}
+        iconColor={reviewCount > 0 ? 'var(--warning)' : 'var(--success)'}
+        onClick={() => onNavigateTab?.('repository')}
+        badge={{ text: reviewCount > 0 ? 'Action Needed' : 'Passed', type: reviewCount > 0 ? 'warning' : 'success' }}
+      />
+
+      {/* 6. AI Provider */}
+      <StatCard
+        label="AI Provider"
+        value={providerTitle}
+        subtext={modelSubtext}
+        icon={<Cpu size={20} />}
+        iconBg="rgba(139, 92, 246, 0.12)"
+        iconColor="var(--accent-purple)"
+        badge={{ text: aiConfig?.mode === 'external' ? 'Cloud' : 'Offline', type: 'info' }}
       />
     </div>
   );

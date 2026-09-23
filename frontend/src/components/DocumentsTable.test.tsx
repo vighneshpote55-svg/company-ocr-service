@@ -687,5 +687,55 @@ test('Phase 9: DocumentPreview renders Verification Status, Risk Score, and Revi
   assert.ok(html.includes('Balance calculation discrepancy detected.'), 'Must render review reason note');
 });
 
+test('Fix AI Chat Bug: AIChatPanel renders active documentId, filename, and verification_status', () => {
+  const gstDoc = mockThreeDocuments[1]; // GST RC.pdf, id: 2112fd84-5bcd-4f6d-ba3a-84d7d06dca01
+  const aiResult = normalizeAiDocument(gstDoc);
+
+  const html = renderToString(
+    React.createElement(AIChatPanel, {
+      document: aiResult,
+      documentId: gstDoc.id,
+      filename: gstDoc.filename,
+      verification_status: gstDoc.verification_status || 'verified',
+      messages: [
+        {
+          id: 'msg-1',
+          role: 'assistant',
+          content: 'I analyzed GST RC.pdf and identified it as GST Registration Certificate.',
+          timestamp: '12:00 PM',
+        },
+      ],
+      isAiThinking: false,
+      onSendMessage: () => {},
+      onNotify: () => {},
+    })
+  );
+
+  assert.ok(html.includes('GST RC.pdf'), 'Must render active filename in AIChatPanel');
+  assert.ok(html.includes('Status: verified'), 'Must render verification status in AIChatPanel header');
+  assert.ok(html.includes('Ask any question about GST RC.pdf...'), 'Placeholder must reference active document filename');
+});
+
+test('Fix AI Chat Bug: AIModeView passes matching active document ID and filename to AIChatPanel', () => {
+  const gstDoc = mockThreeDocuments[1]; // GST RC.pdf, id: 2112fd84-5bcd-4f6d-ba3a-84d7d06dca01
+
+  const html = renderToString(
+    React.createElement(
+      AuthProvider,
+      null,
+      React.createElement(AIModeView, {
+        selectedDoc: gstDoc,
+        onNotify: () => {},
+      })
+    )
+  );
+
+  // Both preview and chat column must render GST RC.pdf
+  assert.ok(html.includes('GST RC.pdf'), 'AIModeView must render active GST RC.pdf document');
+  assert.ok(html.includes('GST Registration Certificate'), 'Must identify as GST Registration Certificate');
+  assert.ok(html.includes('Summarize Document'), 'Must render Quick Action button Summarize Document');
+  assert.ok(html.includes('Ask any question about GST RC.pdf...'), 'Chat panel must be bound to GST RC.pdf');
+});
+
 
 

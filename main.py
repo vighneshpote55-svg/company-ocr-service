@@ -2657,34 +2657,66 @@ async def process_ai_chat_endpoint(
             detail="message cannot be empty",
         )
 
-    # Set as active session document
-    document_store.set_active_document(target_id)
-    doc = document_store.get_document(target_id)
+    user_id = auth.id if hasattr(auth, "id") else (auth.get("user_id") or auth.get("sub"))
+
+    # Fetch document from user's vault
+    doc = None
+    if user_id:
+        doc = document_repository.get_user_document(user_id, target_id)
+
+    if not doc:
+        in_memory_doc = document_store.get_document(target_id)
+        if in_memory_doc:
+            doc_user = in_memory_doc.get("user_id")
+            default_dev = os.getenv("DEFAULT_DEV_USER_ID", "00000000-0000-0000-0000-000000000001")
+            if not doc_user or not user_id or doc_user == user_id or doc_user == default_dev:
+                doc = in_memory_doc
+
     if not doc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{target_id}' not found in vault",
+            detail="Document not found in your vault.",
         )
 
-    user_id = auth.get("user_id") or auth.get("sub")
-    doc_user = doc.get("user_id")
-    if doc_user and user_id and doc_user != user_id:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Document '{target_id}' not found in vault",
-        )
+    # Set as active session document
+    document_store.set_active_document(target_id)
 
-    doc_text = doc.get("extracted_text") or ""
+    # Load canonical analysis object (single source of truth for AI chat)
+    canonical_analysis = document_store.get_canonical_analysis(target_id)
+    if not canonical_analysis:
+        ai_data = doc.get("ai_analysis") or {}
+        canonical_analysis = {
+            "document_id": target_id,
+            "filename": doc.get("filename") or doc.get("original_filename") or "document",
+            "document_type": doc.get("doc_type") or doc.get("document_type") or "Unknown Document",
+            "ocr_text": doc.get("extracted_text") or doc.get("raw_text") or doc.get("ocr_text") or "",
+            "extracted_fields": doc.get("extracted_fields") or {},
+            "summary": ai_data.get("summary") or doc.get("summary") or "",
+            "verification_status": doc.get("verification_status") or "verified",
+            "risk_score": doc.get("risk_score", 0),
+            "review_required": doc.get("review_required", False),
+            "suspicious_signals": doc.get("suspicious_signals") or [],
+            "human_review_reason": doc.get("human_review_reason") or "",
+        }
+        document_store.set_canonical_analysis(target_id, canonical_analysis)
+
+    doc_text = (canonical_analysis.get("ocr_text") if canonical_analysis else None) or doc.get("extracted_text") or doc.get("raw_text") or doc.get("ocr_text") or ""
+    if not doc_text.strip():
+        in_memory_doc = document_store.get_document(target_id)
+        if in_memory_doc and in_memory_doc.get("extracted_text"):
+            doc_text = in_memory_doc.get("extracted_text")
+
     if not doc_text.strip():
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="Document text is not available for this document. Please re-upload.",
         )
 
-    filename = doc.get("filename", "document")
-    # Load canonical analysis object (single source of truth for AI chat)
-    canonical_analysis = document_store.get_canonical_analysis(target_id)
-    doc_text = (canonical_analysis.get("ocr_text") if canonical_analysis else None) or doc_text
+    # Ensure page demarcation for accurate AI citation
+    if "--- Page " not in doc_text and "Page 1" not in doc_text[:50]:
+        doc_text = f"--- Page 1 ---\n{doc_text}"
+
+    filename = doc.get("filename") or doc.get("original_filename") or "document"
 
     try:
         try:

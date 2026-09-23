@@ -472,7 +472,10 @@ def chat_with_document(
         "    - Analyze only visible inconsistencies. Never use words like 'fake', 'forged', or 'fraudulent'.\n"
         "    - If asked whether this document is genuine or why review is required, respond using the Document Integrity status and visible inconsistencies detected (e.g., 'Verification Status: Review Required. Visible inconsistencies detected. Manual review is recommended.').\n"
         "    - Do not expose internal numeric scoring formulas.\n"
-        "    - Never hallucinate."
+        "    - Never hallucinate.\n"
+        "12. PAGE CITATIONS:\n"
+        "    - Always include specific page citations in square brackets such as [Page 1], [Page 2] for all answers, facts, structured fields, numbers, and dates.\n"
+        "    - Reference the '--- Page X ---' markers in the text to identify the correct page."
     )
 
     messages = [{"role": "system", "content": system_prompt}]
