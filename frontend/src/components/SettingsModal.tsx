@@ -8,10 +8,6 @@ import {
   Lock,
   Key,
   RefreshCw,
-  Server,
-  Fingerprint,
-  UserCheck,
-  ShieldAlert,
   Sparkles,
   Bot,
   Cpu,
@@ -20,6 +16,9 @@ import {
   LogOut,
   CheckCircle2,
   AlertCircle,
+  Sliders,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { api, normalizeOpenRouterConfig } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -45,6 +44,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
   // Tab State: 'ai' vs 'account'
   const [settingsTab, setSettingsTab] = useState<'ai' | 'account'>('ai');
+
+  // Advanced / Administrator Settings Accordion State
+  const [isAdvancedOpen, setIsAdvancedOpen] = useState(false);
 
   // Account Management State
   const [fullNameInput, setFullNameInput] = useState(user?.full_name || '');
@@ -295,9 +297,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               <Settings size={22} className="settings-gear-icon" />
             </div>
             <div className="settings-title-wrap">
-              <h2 className="settings-main-title">API Connection & Auth Settings</h2>
+              <h2 className="settings-main-title">Settings & AI Configuration</h2>
               <p className="settings-main-subtitle">
-                Configure your API endpoint and authentication credentials to connect with the AI service.
+                Configure AI reasoning models, system preferences, and account security.
               </p>
             </div>
           </div>
@@ -340,568 +342,445 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
 
         {settingsTab === 'ai' ? (
           <>
-            {/* 4 Status Cards */}
-            <div className="settings-status-cards-grid">
-          {/* 1. API Connection */}
-          <div className="settings-status-card">
-            <div className="status-card-top">
-              <div className="status-icon-wrap icon-blue">
-                <Server size={18} />
-              </div>
-              <span className="status-pill-badge badge-green">
-                {connectionLatency ? `${connectionLatency}ms` : 'Connected'}
-              </span>
-            </div>
-            <div className="status-card-title">API Connection</div>
-            <p className="status-card-desc">FastAPI Backend live pipeline</p>
-          </div>
-
-          {/* 2. Authentication */}
-          <div className="settings-status-card">
-            <div className="status-card-top">
-              <div className="status-icon-wrap icon-purple">
-                <Fingerprint size={18} />
-              </div>
-              <span className="status-pill-badge badge-green">OAuth2 / JWT</span>
-            </div>
-            <div className="status-card-title">Authentication</div>
-            <p className="status-card-desc">Dynamic token & secret auth</p>
-          </div>
-
-          {/* 3. Client Access */}
-          <div className="settings-status-card">
-            <div className="status-card-top">
-              <div className="status-icon-wrap icon-green">
-                <UserCheck size={18} />
-              </div>
-              <span className="status-pill-badge badge-green">Ready</span>
-            </div>
-            <div className="status-card-title">Client Access</div>
-            <p className="status-card-desc">Client credential grant flow</p>
-          </div>
-
-          {/* 4. Access Control */}
-          <div className="settings-status-card">
-            <div className="status-card-top">
-              <div className="status-icon-wrap icon-amber">
-                <ShieldAlert size={18} />
-              </div>
-              <span className="status-pill-badge badge-green">Active</span>
-            </div>
-            <div className="status-card-title">Access Control</div>
-            <p className="status-card-desc">Zero-trust credential guard</p>
-          </div>
-        </div>
-
-        {/* Settings Body Form */}
-        <div className="settings-panel-body">
-          {/* Section 1: FastAPI Base URL */}
-          <div className="settings-form-section">
-            <label className="settings-input-label" htmlFor="fastapi-base-url">
-              FastAPI Base URL
-            </label>
-            <div className="settings-input-wrapper">
-              <div className="settings-input-left-icon" aria-hidden="true">
-                <Globe size={18} />
-              </div>
-              <input
-                id="fastapi-base-url"
-                type="text"
-                className="settings-input-field"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                placeholder="http://localhost:8000"
-              />
-            </div>
-            <span className="settings-field-hint">
-              Target endpoint for local neural OCR processing and AI document extraction services.
-            </span>
-          </div>
-
-          {/* Section 2: Client Credentials (Client ID & Client Secret) */}
-          <div className="settings-form-section">
-            <div className="settings-section-title-row">
-              <div className="settings-section-heading">Client Credentials Flow</div>
-              <span className="settings-endpoint-pill">POST /auth/token</span>
-            </div>
-
-            <div className="settings-two-col-grid">
-              <div className="settings-field-col">
-                <label className="settings-input-label" htmlFor="client-id-input">
-                  Client ID
-                </label>
-                <div className="settings-input-wrapper">
-                  <div className="settings-input-left-icon" aria-hidden="true">
-                    <Shield size={18} />
+            <div className="settings-panel-body">
+              {/* 1. Live AI Status Banner */}
+              <div className="settings-live-status-banner">
+                <div className="status-banner-main">
+                  <div className="status-pulse-indicator">
+                    <span className={`status-pulse-dot ${activeAiConfig?.mode === 'external' ? 'dot-purple' : 'dot-green'}`} />
+                    <Bot size={20} className="status-bot-icon" />
                   </div>
-                  <input
-                    id="client-id-input"
-                    type="text"
-                    className="settings-input-field"
-                    value={clientId}
-                    onChange={(e) => setClientId(e.target.value)}
-                    placeholder="Enter registered Client ID"
-                  />
-                </div>
-              </div>
-
-              <div className="settings-field-col">
-                <label className="settings-input-label" htmlFor="client-secret-input">
-                  Client Secret
-                </label>
-                <div className="settings-input-wrapper">
-                  <div className="settings-input-left-icon" aria-hidden="true">
-                    <Lock size={18} />
+                  <div className="status-banner-meta">
+                    <div className="status-banner-title-row">
+                      <span className="status-engine-name">
+                        {activeAiConfig?.mode === 'external'
+                          ? `${activeAiConfig.active_provider === 'openrouter' ? 'OpenRouter' : (activeAiConfig.active_provider || '').toUpperCase()} Cloud AI`
+                          : 'Local Ollama Engine'}
+                      </span>
+                      <span className="status-model-chip">
+                        {activeAiConfig?.active_model || (aiProvider === 'local' ? 'qwen2.5vl:3b' : aiModel)}
+                      </span>
+                      <span className="status-connection-badge">
+                        {connectionLatency ? `${connectionLatency}ms` : 'Connected'}
+                      </span>
+                    </div>
+                    <div className="status-banner-subtext">
+                      {activeAiConfig?.mode === 'external'
+                        ? `Cloud Endpoint: ${activeAiConfig.base_url || 'https://openrouter.ai/api/v1'} • ${activeAiConfig.api_key_configured ? 'Key Encrypted' : 'Key Missing'}`
+                        : 'Private air-gapped inference via internal Ollama (qwen2.5vl:3b).'}
+                    </div>
                   </div>
-                  <input
-                    id="client-secret-input"
-                    type="password"
-                    className="settings-input-field"
-                    value={clientSecret}
-                    onChange={(e) => setClientSecret(e.target.value)}
-                    placeholder="••••••••••••••••"
-                  />
                 </div>
-              </div>
-            </div>
 
-            <div className="settings-mint-action-row">
-              <button
-                type="button"
-                className="btn btn-secondary settings-mint-btn"
-                onClick={handleMintToken}
-                disabled={isTesting || !clientId || !clientSecret}
-              >
-                <Sparkles size={15} />
-                <span>Mint JWT Access Token</span>
-              </button>
-              <span className="settings-field-hint-inline">
-                Exchanges client credentials for a signed HMAC-SHA256 JWT bearer token.
-              </span>
-            </div>
-          </div>
-
-          {/* Section 3: Direct Bearer Token & Static X-API-Key */}
-          <div className="settings-form-section">
-            <div className="settings-two-col-grid">
-              <div className="settings-field-col">
-                <label className="settings-input-label" htmlFor="bearer-token-input">
-                  Direct Bearer Token (Optional)
-                </label>
-                <div className="settings-input-wrapper">
-                  <div className="settings-input-left-icon" aria-hidden="true">
-                    <Key size={18} />
-                  </div>
-                  <input
-                    id="bearer-token-input"
-                    type="password"
-                    className="settings-input-field"
-                    value={bearerToken}
-                    onChange={(e) => setBearerToken(e.target.value)}
-                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-                  />
-                </div>
-              </div>
-
-              <div className="settings-field-col">
-                <label className="settings-input-label" htmlFor="api-key-input">
-                  Static X-API-Key (Optional)
-                </label>
-                <div className="settings-input-wrapper">
-                  <div className="settings-input-left-icon" aria-hidden="true">
-                    <Key size={18} />
-                  </div>
-                  <input
-                    id="api-key-input"
-                    type="password"
-                    className="settings-input-field"
-                    value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
-                    placeholder="Static enterprise header key"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Section 4: AI Model Configuration */}
-          <div className="settings-form-section">
-            <div className="settings-section-title-row">
-              <div className="settings-section-heading">AI Model Configuration</div>
-              <span className="settings-endpoint-pill">AI Mode Engine</span>
-            </div>
-
-            {/* Current Active Provider Card (Part 13) */}
-            <div
-              className="settings-active-provider-card"
-              data-testid="settings-current-active-provider"
-              style={{
-                marginBottom: '16px',
-                padding: '12px 16px',
-                borderRadius: '8px',
-                background: activeAiConfig?.mode === 'external' ? '#f5f3ff' : '#f0fdf4',
-                border: activeAiConfig?.mode === 'external' ? '1px solid #c4b5fd' : '1px solid #bbf7d0',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-              }}
-            >
-              <div>
-                <div
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    gap: '8px',
-                    fontSize: '13px',
-                    fontWeight: 600,
-                    color: activeAiConfig?.mode === 'external' ? '#6d28d9' : '#15803d',
-                  }}
-                >
-                  <span
-                    style={{
-                      display: 'inline-block',
-                      width: '8px',
-                      height: '8px',
-                      borderRadius: '50%',
-                      background: activeAiConfig?.mode === 'external' ? '#7c3aed' : '#16a34a',
-                      boxShadow: activeAiConfig?.mode === 'external' ? '0 0 6px #8b5cf6' : '0 0 6px #22c55e',
-                    }}
-                  />
-                  <span>
-                    {activeAiConfig?.mode === 'external'
-                      ? `● External AI Active • ${activeAiConfig.active_provider === 'openrouter' ? 'OpenRouter' : (activeAiConfig.active_provider || '').toUpperCase()} • ${activeAiConfig.active_model}`
-                      : `● Local AI Active • Ollama • ${activeAiConfig?.active_model || 'qwen2.5vl:3b'}`}
-                  </span>
-                </div>
-                <div style={{ fontSize: '11.5px', color: '#64748b', marginTop: '3px' }}>
-                  {activeAiConfig?.mode === 'external'
-                    ? `Endpoint: ${activeAiConfig.base_url || 'Default'} • Key: ${activeAiConfig.api_key_configured ? 'Configured (AES-256 encrypted)' : 'Not configured'}`
-                    : 'Private offline inference via internal Ollama (qwen2.5vl:3b).'}
-                </div>
-              </div>
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  textTransform: 'uppercase',
-                  letterSpacing: '0.04em',
-                  padding: '3px 8px',
-                  borderRadius: '4px',
-                  background: activeAiConfig?.mode === 'external' ? '#ede9fe' : '#dcfce7',
-                  color: activeAiConfig?.mode === 'external' ? '#5b21b6' : '#166534',
-                }}
-              >
-                Active
-              </span>
-            </div>
-
-            {/* EDIT CONFIGURATION SUBHEADING */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'baseline',
-                gap: '8px',
-                marginBottom: '14px',
-                paddingBottom: '6px',
-                borderBottom: '1px solid #e2e8f0',
-              }}
-            >
-              <span style={{ fontSize: '12px', fontWeight: 700, letterSpacing: '0.05em', color: '#475569', textTransform: 'uppercase' }}>
-                Edit Configuration
-              </span>
-              <span style={{ fontSize: '11px', color: '#94a3b8' }}>
-                {isAdmin ? '(Unsaved edits will not affect active AI until saved)' : '(Managed by System Administrator)'}
-              </span>
-            </div>
-
-            {!isAdmin && (
-              <div
-                style={{
-                  padding: '12px 14px',
-                  borderRadius: '10px',
-                  backgroundColor: 'rgba(245, 158, 11, 0.1)',
-                  border: '1px solid rgba(245, 158, 11, 0.25)',
-                  color: '#d97706',
-                  fontSize: '12px',
-                  lineHeight: '1.4',
-                  marginBottom: '16px',
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '10px',
-                }}
-              >
-                <Lock size={16} style={{ flexShrink: 0 }} />
-                <span>Global AI Provider configuration and API keys are restricted to system administrators. Standard users cannot modify these settings.</span>
-              </div>
-            )}
-
-            <div className="settings-two-col-grid">
-              <div className="settings-field-col">
-                <label className="settings-input-label" htmlFor="ai-provider-select">
-                  Provider
-                </label>
-                <div className="settings-input-wrapper">
-                  <div className="settings-input-left-icon" aria-hidden="true">
-                    <Bot size={18} />
-                  </div>
-                  <select
-                    id="ai-provider-select"
-                    className="settings-input-field"
-                    value={aiProvider}
-                    onChange={(e) => {
-                      const val = e.target.value as 'local' | 'external';
-                      setAiProvider(val);
-                      if (val === 'local') {
-                        setAiModel('qwen2.5vl:3b');
-                      } else {
-                        if (!aiModel || aiModel === 'qwen2.5vl:3b') {
-                          setAiModel('nvidia/nemotron-3-ultra-550b-a55b:free');
-                        }
-                        if (!aiBaseUrl) {
-                          setAiBaseUrl('https://openrouter.ai/api/v1');
-                        }
-                      }
-                    }}
+                <div className="status-banner-actions">
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm test-connection-pill-btn"
+                    onClick={handleTestAiConnection}
+                    disabled={isTestingAi}
                   >
-                    <option value="local">Local Ollama (Offline / Private)</option>
-                    <option value="external">External Provider (OpenRouter / OpenAI / Custom)</option>
-                  </select>
+                    <RefreshCw size={13} className={isTestingAi ? 'spin-anim' : ''} />
+                    <span>{isTestingAi ? 'Testing...' : 'Test AI Connection'}</span>
+                  </button>
                 </div>
-                <span className="settings-field-hint">
-                  {aiProvider === 'local'
-                    ? 'Runs locally via Ollama. No external API key required; inference stays private.'
-                    : 'Routes AI Mode analysis to an external cloud or custom OpenAI-compatible endpoint.'}
-                </span>
               </div>
 
-              {aiProvider === 'external' ? (
-                <div className="settings-field-col">
-                  <label className="settings-input-label" htmlFor="external-provider-select">
-                    External Service
-                  </label>
-                  <div className="settings-input-wrapper">
-                    <div className="settings-input-left-icon" aria-hidden="true">
-                      <Globe size={18} />
-                    </div>
-                    <select
-                      id="external-provider-select"
-                      className="settings-input-field"
-                      value={externalProviderName}
-                      onChange={(e) => {
-                        const prov = e.target.value;
-                        setExternalProviderName(prov);
-                        if (prov === 'openrouter') {
-                          setAiModel('nvidia/nemotron-3-ultra-550b-a55b:free');
-                          setAiBaseUrl('https://openrouter.ai/api/v1');
-                        } else if (prov === 'openai') {
-                          setAiModel('gpt-4o-mini');
-                          setAiBaseUrl('https://api.openai.com/v1');
-                        }
-                      }}
-                    >
-                      <option value="openrouter">OpenRouter</option>
-                      <option value="openai">OpenAI</option>
-                      <option value="custom">Custom OpenAI-Compatible</option>
-                    </select>
+              {/* AI Test Status Banner */}
+              {aiTestResult && (
+                <div
+                  className={`settings-feedback-banner ${aiTestResult.ok ? 'feedback-success' : 'feedback-error'}`}
+                  role="alert"
+                >
+                  <div className="feedback-icon">
+                    {aiTestResult.ok ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
                   </div>
-                  <span className="settings-field-hint">
-                    Select OpenRouter, OpenAI, or a custom API gateway.
-                  </span>
-                </div>
-              ) : (
-                <div className="settings-field-col">
-                  <label className="settings-input-label" htmlFor="ai-model-input">
-                    Model
-                  </label>
-                  <div className="settings-input-wrapper">
-                    <div className="settings-input-left-icon" aria-hidden="true">
-                      <Cpu size={18} />
-                    </div>
-                    <input
-                      id="ai-model-input"
-                      type="text"
-                      className="settings-input-field"
-                      value="qwen2.5vl:3b"
-                      disabled
-                    />
-                  </div>
-                  <span className="settings-field-hint">
-                    Default vision model: qwen2.5vl:3b (mandatory local fallback).
-                  </span>
+                  <div className="feedback-message">{aiTestResult.message}</div>
                 </div>
               )}
-            </div>
 
-            {/* External Provider Configuration */}
-            {aiProvider === 'external' && (
-              <>
-                <div className="settings-two-col-grid" style={{ marginTop: '16px' }}>
-                  <div className="settings-field-col">
-                    <label className="settings-input-label" htmlFor="ai-model-input-ext">
-                      Model ID
-                    </label>
-                    <div className="settings-input-wrapper">
-                      <div className="settings-input-left-icon" aria-hidden="true">
-                        <Cpu size={18} />
-                      </div>
-                      <input
-                        id="ai-model-input-ext"
-                        type="text"
-                        className="settings-input-field"
-                        value={aiModel}
-                        onChange={(e) => setAiModel(e.target.value)}
-                        placeholder="nvidia/nemotron-3-ultra-550b-a55b:free"
-                      />
-                    </div>
-                    <span className="settings-field-hint">
-                      Model identifier (e.g. nvidia/nemotron-3-ultra-550b-a55b:free).
-                    </span>
+              {/* 2. Primary Section: AI Model Configuration */}
+              <div className="settings-form-section primary-ai-section">
+                <div className="settings-section-title-row">
+                  <div>
+                    <h3 className="settings-section-heading">AI Model Configuration</h3>
+                    <p className="settings-section-subheading">
+                      Select the primary reasoning model for document extraction and contextual Q&A.
+                    </p>
                   </div>
-
-                  <div className="settings-field-col">
-                    <label className="settings-input-label" htmlFor="ai-base-url-input">
-                      Base URL
-                    </label>
-                    <div className="settings-input-wrapper">
-                      <div className="settings-input-left-icon" aria-hidden="true">
-                        <Globe size={18} />
-                      </div>
-                      <input
-                        id="ai-base-url-input"
-                        type="text"
-                        className="settings-input-field"
-                        value={aiBaseUrl}
-                        onChange={(e) => setAiBaseUrl(e.target.value)}
-                        placeholder="https://openrouter.ai/api/v1"
-                      />
-                    </div>
-                    <span className="settings-field-hint">
-                      API endpoint (e.g. https://openrouter.ai/api/v1).
-                    </span>
-                  </div>
+                  <span className="settings-endpoint-pill">AI Mode Engine</span>
                 </div>
 
-                <div className="settings-two-col-grid" style={{ marginTop: '16px' }}>
+                {!isAdmin && (
+                  <div className="settings-admin-notice">
+                    <Lock size={15} />
+                    <span>AI Provider settings are managed by your administrator.</span>
+                  </div>
+                )}
+
+                <div className="settings-two-col-grid">
                   <div className="settings-field-col">
-                    <label className="settings-input-label" htmlFor="ai-api-key-input">
-                      API Key
+                    <label className="settings-input-label" htmlFor="ai-provider-select">
+                      Provider
                     </label>
                     <div className="settings-input-wrapper">
                       <div className="settings-input-left-icon" aria-hidden="true">
-                        <Key size={18} />
+                        <Bot size={18} />
                       </div>
-                      <input
-                        id="ai-api-key-input"
-                        type="password"
+                      <select
+                        id="ai-provider-select"
                         className="settings-input-field"
-                        value={aiApiKey}
-                        onChange={(e) => setAiApiKey(e.target.value)}
-                        placeholder={isAiKeyConfigured ? '•••••••••••••••• (Configured)' : 'Enter external provider API key'}
-                      />
+                        value={aiProvider}
+                        disabled={!isAdmin}
+                        onChange={(e) => {
+                          const val = e.target.value as 'local' | 'external';
+                          setAiProvider(val);
+                          if (val === 'local') {
+                            setAiModel('qwen2.5vl:3b');
+                          } else {
+                            if (!aiModel || aiModel === 'qwen2.5vl:3b') {
+                              setAiModel('nvidia/nemotron-3-ultra-550b-a55b:free');
+                            }
+                            if (!aiBaseUrl) {
+                              setAiBaseUrl('https://openrouter.ai/api/v1');
+                            }
+                          }
+                        }}
+                      >
+                        <option value="local">Local Ollama (Offline / Private)</option>
+                        <option value="external">External Provider (OpenRouter / OpenAI / Custom)</option>
+                      </select>
                     </div>
                     <span className="settings-field-hint">
-                      API keys are stored exclusively in backend memory and never in browser storage.
+                      {aiProvider === 'local'
+                        ? 'Inference stays local on your machine. Zero external API key or network required.'
+                        : 'Routes document intelligence queries to cloud or custom OpenAI-compatible endpoints.'}
                     </span>
                   </div>
+
+                  {aiProvider === 'local' ? (
+                    <div className="settings-field-col">
+                      <label className="settings-input-label" htmlFor="ai-model-input">
+                        Model <span className="settings-badge-read-only">Deterministic</span>
+                      </label>
+                      <div className="settings-input-wrapper is-disabled">
+                        <div className="settings-input-left-icon" aria-hidden="true">
+                          <Cpu size={18} />
+                        </div>
+                        <input
+                          id="ai-model-input"
+                          type="text"
+                          className="settings-input-field"
+                          value="qwen2.5vl:3b"
+                          disabled
+                          readOnly
+                        />
+                      </div>
+                      <span className="settings-field-hint">
+                        Default vision model: Qwen2.5-VL 3B (verified for air-gapped document intelligence).
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="settings-field-col">
+                      <label className="settings-input-label" htmlFor="external-provider-select">
+                        External Service
+                      </label>
+                      <div className="settings-input-wrapper">
+                        <div className="settings-input-left-icon" aria-hidden="true">
+                          <Globe size={18} />
+                        </div>
+                        <select
+                          id="external-provider-select"
+                          className="settings-input-field"
+                          value={externalProviderName}
+                          disabled={!isAdmin}
+                          onChange={(e) => {
+                            const prov = e.target.value;
+                            setExternalProviderName(prov);
+                            if (prov === 'openrouter') {
+                              setAiModel('nvidia/nemotron-3-ultra-550b-a55b:free');
+                              setAiBaseUrl('https://openrouter.ai/api/v1');
+                            } else if (prov === 'openai') {
+                              setAiModel('gpt-4o-mini');
+                              setAiBaseUrl('https://api.openai.com/v1');
+                            }
+                          }}
+                        >
+                          <option value="openrouter">OpenRouter</option>
+                          <option value="openai">OpenAI</option>
+                          <option value="custom">Custom OpenAI-Compatible</option>
+                        </select>
+                      </div>
+                      <span className="settings-field-hint">
+                        Select provider gateway for model dispatch.
+                      </span>
+                    </div>
+                  )}
                 </div>
 
-                {externalProviderName === 'openrouter' && (
-                  <div
-                    style={{
-                      marginTop: '14px',
-                      padding: '12px 16px',
-                      background: '#f8fafc',
-                      borderRadius: '8px',
-                      border: '1px solid #cbd5e1',
-                      fontSize: '12.5px',
-                      lineHeight: '1.6',
-                    }}
-                  >
-                    <div style={{ fontWeight: 600, color: '#1e293b', marginBottom: '4px' }}>
-                      OpenRouter Recommended Configuration:
+                {/* External Provider Detailed Inputs */}
+                {aiProvider === 'external' && (
+                  <div className="external-provider-fields" style={{ marginTop: '1rem' }}>
+                    <div className="settings-two-col-grid">
+                      <div className="settings-field-col">
+                        <label className="settings-input-label" htmlFor="ai-model-input-ext">
+                          Model ID
+                        </label>
+                        <div className="settings-input-wrapper">
+                          <div className="settings-input-left-icon" aria-hidden="true">
+                            <Cpu size={18} />
+                          </div>
+                          <input
+                            id="ai-model-input-ext"
+                            type="text"
+                            className="settings-input-field"
+                            value={aiModel}
+                            disabled={!isAdmin}
+                            onChange={(e) => setAiModel(e.target.value)}
+                            placeholder="e.g. nvidia/nemotron-3-ultra-550b-a55b:free"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="settings-field-col">
+                        <label className="settings-input-label" htmlFor="ai-base-url-input">
+                          Endpoint Base URL
+                        </label>
+                        <div className="settings-input-wrapper">
+                          <div className="settings-input-left-icon" aria-hidden="true">
+                            <Globe size={18} />
+                          </div>
+                          <input
+                            id="ai-base-url-input"
+                            type="text"
+                            className="settings-input-field"
+                            value={aiBaseUrl}
+                            disabled={!isAdmin}
+                            onChange={(e) => setAiBaseUrl(e.target.value)}
+                            placeholder="https://openrouter.ai/api/v1"
+                          />
+                        </div>
+                      </div>
                     </div>
-                    <div style={{ color: '#475569' }}>
-                      • <strong>Provider:</strong> OpenRouter<br />
-                      • <strong>Model:</strong> <code>nvidia/nemotron-3-ultra-550b-a55b:free</code><br />
-                      • <strong>Base URL:</strong> <code>https://openrouter.ai/api/v1</code>
+
+                    <div style={{ marginTop: '1rem' }}>
+                      <label className="settings-input-label" htmlFor="ai-api-key-input">
+                        API Key
+                      </label>
+                      <div className="settings-input-wrapper">
+                        <div className="settings-input-left-icon" aria-hidden="true">
+                          <Key size={18} />
+                        </div>
+                        <input
+                          id="ai-api-key-input"
+                          type="password"
+                          className="settings-input-field"
+                          value={aiApiKey}
+                          disabled={!isAdmin}
+                          onChange={(e) => setAiApiKey(e.target.value)}
+                          placeholder={isAiKeyConfigured ? '•••••••••••••••• (Configured in Memory)' : 'Enter external provider API key'}
+                        />
+                      </div>
+                      <span className="settings-field-hint">
+                        Sensitive keys are encrypted and stored in backend memory only (never written to browser storage).
+                      </span>
                     </div>
                   </div>
                 )}
-              </>
-            )}
+              </div>
 
-            {/* AI Test Connection Action */}
-            <div className="settings-mint-action-row" style={{ marginTop: '16px' }}>
+              {/* 3. Collapsible Accordion: Advanced / Administrator Settings */}
+              <div className="settings-advanced-accordion">
+                <button
+                  type="button"
+                  className="settings-advanced-toggle"
+                  onClick={() => setIsAdvancedOpen(!isAdvancedOpen)}
+                  aria-expanded={isAdvancedOpen}
+                >
+                  <div className="advanced-toggle-left">
+                    <Sliders size={16} className="advanced-icon" />
+                    <div className="advanced-title-group">
+                      <span className="advanced-title">Advanced / Administrator Settings</span>
+                      <span className="advanced-subtext">FastAPI endpoint, client credentials & access tokens</span>
+                    </div>
+                  </div>
+                  <div className="advanced-toggle-right">
+                    <span className="settings-role-tag admin">Admin</span>
+                    {isAdvancedOpen ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                  </div>
+                </button>
+
+                {isAdvancedOpen && (
+                  <div className="settings-advanced-content">
+                    {/* Backend Base URL */}
+                    <div className="settings-field-group">
+                      <label className="settings-input-label" htmlFor="fastapi-base-url">
+                        FastAPI Base URL
+                      </label>
+                      <div className="settings-input-wrapper">
+                        <div className="settings-input-left-icon" aria-hidden="true">
+                          <Globe size={18} />
+                        </div>
+                        <input
+                          id="fastapi-base-url"
+                          type="text"
+                          className="settings-input-field"
+                          value={baseUrl}
+                          disabled={!isAdmin}
+                          onChange={(e) => setBaseUrl(e.target.value)}
+                          placeholder="http://localhost:8000"
+                        />
+                      </div>
+                      <span className="settings-field-hint">
+                        Target endpoint for backend OCR and AI services.
+                      </span>
+                    </div>
+
+                    {/* Client Credentials */}
+                    <div className="settings-two-col-grid" style={{ marginTop: '1rem' }}>
+                      <div className="settings-field-col">
+                        <label className="settings-input-label" htmlFor="client-id-input">
+                          Client ID
+                        </label>
+                        <div className="settings-input-wrapper">
+                          <div className="settings-input-left-icon" aria-hidden="true">
+                            <Shield size={18} />
+                          </div>
+                          <input
+                            id="client-id-input"
+                            type="text"
+                            className="settings-input-field"
+                            value={clientId}
+                            disabled={!isAdmin}
+                            onChange={(e) => setClientId(e.target.value)}
+                            placeholder="Client ID"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="settings-field-col">
+                        <label className="settings-input-label" htmlFor="client-secret-input">
+                          Client Secret
+                        </label>
+                        <div className="settings-input-wrapper">
+                          <div className="settings-input-left-icon" aria-hidden="true">
+                            <Lock size={18} />
+                          </div>
+                          <input
+                            id="client-secret-input"
+                            type="password"
+                            className="settings-input-field"
+                            value={clientSecret}
+                            disabled={!isAdmin}
+                            onChange={(e) => setClientSecret(e.target.value)}
+                            placeholder="••••••••••••••••"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="settings-mint-action-row" style={{ marginTop: '0.85rem' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={handleMintToken}
+                        disabled={isTesting || !clientId || !clientSecret || !isAdmin}
+                      >
+                        <Sparkles size={14} />
+                        <span>Mint JWT Access Token</span>
+                      </button>
+                      <span className="settings-field-hint-inline">
+                        Exchanges client credentials for a signed HMAC-SHA256 JWT bearer token.
+                      </span>
+                    </div>
+
+                    {/* Direct Bearer Token & Static X-API-Key */}
+                    <div className="settings-two-col-grid" style={{ marginTop: '1rem' }}>
+                      <div className="settings-field-col">
+                        <label className="settings-input-label" htmlFor="bearer-token-input">
+                          Direct Bearer Token (Optional)
+                        </label>
+                        <div className="settings-input-wrapper">
+                          <div className="settings-input-left-icon" aria-hidden="true">
+                            <Key size={18} />
+                          </div>
+                          <input
+                            id="bearer-token-input"
+                            type="password"
+                            className="settings-input-field"
+                            value={bearerToken}
+                            disabled={!isAdmin}
+                            onChange={(e) => setBearerToken(e.target.value)}
+                            placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
+                          />
+                        </div>
+                      </div>
+
+                      <div className="settings-field-col">
+                        <label className="settings-input-label" htmlFor="api-key-input">
+                          Static X-API-Key (Optional)
+                        </label>
+                        <div className="settings-input-wrapper">
+                          <div className="settings-input-left-icon" aria-hidden="true">
+                            <Key size={18} />
+                          </div>
+                          <input
+                            id="api-key-input"
+                            type="password"
+                            className="settings-input-field"
+                            value={apiKey}
+                            disabled={!isAdmin}
+                            onChange={(e) => setApiKey(e.target.value)}
+                            placeholder="Static header key"
+                          />
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Backend Endpoint Ping */}
+                    <div style={{ marginTop: '1.25rem', paddingTop: '1rem', borderTop: '1px solid var(--border-subtle)', display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={handleTestConnection}
+                        disabled={isTesting}
+                      >
+                        <RefreshCw size={13} className={isTesting ? 'spin-anim' : ''} />
+                        <span>{isTesting ? 'Pinging Endpoint...' : 'Ping Backend Endpoint'}</span>
+                      </button>
+                      {testResult && (
+                        <span style={{ fontSize: '0.8rem', color: testResult.ok ? 'var(--success)' : 'var(--danger)', fontWeight: 500 }}>
+                          {testResult.message}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer Buttons */}
+            <div className="settings-panel-footer">
               <button
                 type="button"
-                className="btn btn-secondary settings-mint-btn"
-                onClick={handleTestAiConnection}
-                disabled={isTestingAi}
+                className="btn btn-secondary"
+                onClick={onClose}
               >
-                <RefreshCw size={15} className={isTestingAi ? 'spin-anim' : ''} />
-                <span>{isTestingAi ? 'Testing AI Connection...' : 'Test AI Connection'}</span>
+                <span>Cancel</span>
               </button>
-              <span className="settings-field-hint-inline">
-                {aiProvider === 'local'
-                  ? 'Verifies local Ollama server connectivity and Qwen2.5-VL model availability.'
-                  : 'Pings the external provider endpoint to verify API key and model availability.'}
-              </span>
-            </div>
 
-            {/* AI Connection Test Banner */}
-            {aiTestResult && (
-              <div
-                className={`settings-feedback-banner ${aiTestResult.ok ? 'feedback-success' : 'feedback-error'}`}
-                role="alert"
-                style={{ marginTop: '14px' }}
+              <button
+                type="button"
+                className="btn btn-primary settings-save-btn"
+                onClick={handleSave}
+                disabled={!isAdmin}
+                title={!isAdmin ? 'Only administrators can save configuration changes.' : undefined}
               >
-                <div className="feedback-icon">
-                  {aiTestResult.ok ? <Check size={18} /> : <X size={18} />}
-                </div>
-                <div className="feedback-message">{aiTestResult.message}</div>
-              </div>
-            )}
-          </div>
-
-          {/* Test Status Banner */}
-          {testResult && (
-            <div
-              className={`settings-feedback-banner ${testResult.ok ? 'feedback-success' : 'feedback-error'}`}
-              role="alert"
-            >
-              <div className="feedback-icon">
-                {testResult.ok ? <Check size={18} /> : <X size={18} />}
-              </div>
-              <div className="feedback-message">{testResult.message}</div>
+                <Check size={16} />
+                <span>Save Changes</span>
+              </button>
             </div>
-          )}
-        </div>
-
-        {/* Footer Buttons: Left Test Ping, Right Save Configuration */}
-        <div className="settings-panel-footer">
-          <button
-            type="button"
-            className="btn btn-secondary settings-test-btn"
-            onClick={handleTestConnection}
-            disabled={isTesting}
-          >
-            <RefreshCw size={15} className={isTesting ? 'spin-anim' : ''} />
-            <span>{isTesting ? 'Pinging Endpoint...' : 'Test Connection'}</span>
-          </button>
-
-          <button
-            type="button"
-            className="btn btn-primary settings-save-btn"
-            onClick={handleSave}
-            disabled={!isAdmin}
-            title={!isAdmin ? 'Only administrators can save configuration changes.' : undefined}
-          >
-            <Check size={16} />
-            <span>Save Changes</span>
-          </button>
-        </div>
-      </>
-    ) : (
+          </>
+        ) : (
       /* Account & Security Tab */
       <div className="settings-account-panel">
         {/* Profile Details Card */}
@@ -1063,6 +942,18 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, o
               </div>
             )}
           </div>
+        </div>
+
+        {/* Account Tab Footer */}
+        <div className="settings-panel-footer">
+          <div></div>
+          <button
+            type="button"
+            className="btn btn-secondary"
+            onClick={onClose}
+          >
+            <span>Close</span>
+          </button>
         </div>
       </div>
     )}
