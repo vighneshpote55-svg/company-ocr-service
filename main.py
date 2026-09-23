@@ -1586,13 +1586,39 @@ async def upload_document_endpoint(
                     merged_fields[k] = v
             ai_res["extracted_fields"] = merged_fields
 
+            # Render first page image for visual tampering and layout checks
+            first_page_img = None
+            if doc_res.pages and hasattr(doc_res.pages[0], "image") and doc_res.pages[0].image:
+                first_page_img = doc_res.pages[0].image
+            elif ext == ".pdf":
+                pdf_imgs = render_pdf_pages_to_images(temp_path, dpi=150, max_pages=1)
+                if pdf_imgs:
+                    first_page_img = pdf_imgs[0]
+            else:
+                try:
+                    with Image.open(temp_path) as img:
+                        first_page_img = img.convert("RGB").copy()
+                except Exception:
+                    pass
+
+            qr_fields = {}
+            if first_page_img:
+                try:
+                    qrs = decode_qr_from_image(first_page_img)
+                    for q in qrs:
+                        qr_fields.update(parse_qr_payload("auto", q))
+                except Exception:
+                    pass
+
             # Authenticity Assessment (AI Mode)
             ai_auth = ai_res.get("authenticity") or ai_res.get("authenticity_assessment")
             authenticity = authenticity_manager.assess_document(
                 doc_type="ai_analyzed",
+                image=first_page_img,
                 ocr_lines=doc_res.pages[0].lines if doc_res.pages else [],
                 extracted_fields=merged_fields,
                 raw_text=extracted_text,
+                qr_fields=qr_fields,
                 ai_authenticity_result=ai_auth,
                 is_supported=True,
             )
@@ -1613,6 +1639,7 @@ async def upload_document_endpoint(
                 "verification_status": authenticity["verification_status"],
                 "risk_score": authenticity["risk_score"],
                 "review_required": authenticity["review_required"],
+                "priority": authenticity.get("priority", "normal"),
                 "suspicious_signals": authenticity["suspicious_signals"],
                 "human_review_reason": authenticity["human_review_reason"],
                 "verified_by_ai": True,

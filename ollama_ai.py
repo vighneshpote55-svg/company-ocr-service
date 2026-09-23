@@ -467,7 +467,12 @@ def chat_with_document(
         "7. Return concise grounded answers.\n"
         "8. Never output raw OCR placeholder artifacts or label fragments such as '***/Name', 'Name', or fake values.\n"
         "9. Never return a Bank Name, Branch, or Institution Name as an IFSC code. An IFSC code must be an 11-character alphanumeric code starting with 4 letters and '0' (e.g. UTIB0001435). If no valid IFSC is present, state: 'I could not find an IFSC Code in this document.'\n"
-        "10. Never output Python dictionary syntax such as {'from_date': ...}. Always format dates as clean bullet points with From and To labels."
+        "10. Never output Python dictionary syntax such as {'from_date': ...}. Always format dates as clean bullet points with From and To labels.\n"
+        "11. DOCUMENT INTEGRITY & AUTHENTICITY:\n"
+        "    - Analyze only visible inconsistencies. Never use words like 'fake', 'forged', or 'fraudulent'.\n"
+        "    - If asked whether this document is genuine or why review is required, respond using the Document Integrity status and visible inconsistencies detected (e.g., 'Verification Status: Review Required. Visible inconsistencies detected. Manual review is recommended.').\n"
+        "    - Do not expose internal numeric scoring formulas.\n"
+        "    - Never hallucinate."
     )
 
     messages = [{"role": "system", "content": system_prompt}]

@@ -380,12 +380,15 @@ async def chat_with_document(
             return summary
         return f"This document was analyzed and identified as a {doc_type}."
 
-    # 1b. Authenticity & Document Integrity Query (Phase 9.10)
+    # 1b. Authenticity & Document Integrity Query (Phase 9.10 & Phase 10)
     is_authenticity_query = any(k in q for k in [
         "is this document genuine", "is this document authentic", "is this authentic",
         "is it genuine", "is it authentic", "is this genuine", "is this fake",
         "has this been altered", "has this document been altered", "is this document forged",
-        "document authenticity", "check authenticity", "is this document valid"
+        "document authenticity", "check authenticity", "is this document valid",
+        "why is this review required", "why review required", "why is review required",
+        "why is this marked review required", "what inconsistencies", "what are the inconsistencies",
+        "why review", "why is review"
     ])
     if is_authenticity_query:
         verif_status = (stored_analysis.get("verification_status") if stored_analysis else None) or "verified"
@@ -393,10 +396,10 @@ async def chat_with_document(
         suspicious_signals = (stored_analysis.get("suspicious_signals") if stored_analysis else None) or []
 
         if verif_status == "review_required" or risk_score >= 30:
-            signals_str = ", ".join(suspicious_signals) if suspicious_signals else "different font sizes and unusual alignment"
+            signals_str = ", ".join(suspicious_signals) if suspicious_signals else "visible layout or format discrepancies"
             return (
-                f"I found visible inconsistencies that require manual review, including {signals_str}. "
-                f"Based on these findings, the document is marked Review Required, but I cannot conclude that it is fraudulent."
+                f"Verification Status: Review Required. Visible inconsistencies detected: {signals_str}. "
+                f"Manual review is recommended."
             )
         elif verif_status == "unsupported":
             return (

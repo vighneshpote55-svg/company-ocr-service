@@ -127,7 +127,7 @@ export const AIAnalysisCard: React.FC<AIAnalysisCardProps> = ({
         </div>
       </div>
 
-      {/* Review Required Panel (Phase 9.9) */}
+      {/* Document Integrity Assessment Panel (Phase 10 & 11) */}
       {isReviewRequired && (
         <div
           className="review-required-panel"
@@ -140,19 +140,35 @@ export const AIAnalysisCard: React.FC<AIAnalysisCardProps> = ({
             border: '1px solid rgba(249, 115, 22, 0.25)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.4rem', color: '#fb923c', fontWeight: 600, fontSize: '0.88rem' }}>
-            <ShieldAlert size={16} />
-            <span>Visible inconsistencies detected ({riskScore}% Risk Score)</span>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.4rem' }}>
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: '#fb923c', fontWeight: 600, fontSize: '0.92rem' }}>
+                <ShieldAlert size={16} />
+                <span>Document Integrity Assessment</span>
+              </div>
+              <div style={{ fontSize: '0.76rem', color: 'var(--text-muted)', marginTop: '0.15rem' }}>
+                Objective checks across layout, OCR, security features, and AI reasoning
+              </div>
+            </div>
+            <span style={{ fontSize: '0.78rem', fontWeight: 600, color: '#fb923c', backgroundColor: 'rgba(249, 115, 22, 0.15)', padding: '0.2rem 0.5rem', borderRadius: '4px' }}>
+              Review Required • Risk Score: {riskScore}% ({riskScore}/100)
+            </span>
           </div>
+
+          <div style={{ marginTop: '0.45rem', marginBottom: '0.35rem', fontSize: '0.84rem', fontWeight: 600, color: '#fb923c' }}>
+            Visible inconsistencies detected
+          </div>
+
           {document.human_review_reason && (
             <p style={{ margin: '0 0 0.4rem', fontSize: '0.82rem', color: 'var(--text-main)' }}>
               {document.human_review_reason}
             </p>
           )}
+
           {signals.length > 0 && (
-            <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.8rem', color: 'var(--text-muted)' }}>
+            <ul style={{ margin: 0, paddingLeft: '1.2rem', fontSize: '0.82rem', color: 'var(--text-muted)' }}>
               {signals.map((sig, idx) => (
-                <li key={idx} style={{ marginBottom: '0.2rem' }}>
+                <li key={idx} style={{ marginBottom: '0.25rem' }}>
                   {typeof sig === 'string' ? sig : (sig.description || sig.signal || JSON.stringify(sig))}
                 </li>
               ))}

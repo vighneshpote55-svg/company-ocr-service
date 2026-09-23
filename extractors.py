@@ -1265,9 +1265,29 @@ def extract_salary_slip(doc_res: OCRDocumentResult) -> Tuple[Dict[str, Any], Dic
         fields["employee_name_masked"] = mask_person_name(raw_name)
         confidences["employee_name_masked"] = find_line_confidence(raw_name, all_lines)
 
+    # Gross Salary
+    gross_match = re.search(
+        r"(?:Gross\s*Salary|Gross\s*Pay|Gross\s*Earnings|एकूण\s*वेतन|एकूण\s*रक्कम|सकल\s*वेतन)[\s:：.]+(?:Rs\.?|INR|₹|रु\.?|रुपये)?\s*([\d,]+\.?\d*)",
+        text,
+        re.IGNORECASE,
+    )
+    if gross_match:
+        fields["gross_salary"] = gross_match.group(1).replace(",", "")
+        confidences["gross_salary"] = find_line_confidence(gross_match.group(1), all_lines)
+
+    # Total Deductions
+    ded_match = re.search(
+        r"(?:Total\s*Deductions?|Deductions?|एकूण\s*कपाती|एकूण\s*कपात|कुल\s*कटौती)[\s:：.]+(?:Rs\.?|INR|₹|रु\.?|रुपये)?\s*([\d,]+\.?\d*)",
+        text,
+        re.IGNORECASE,
+    )
+    if ded_match:
+        fields["total_deductions"] = ded_match.group(1).replace(",", "")
+        confidences["total_deductions"] = find_line_confidence(ded_match.group(1), all_lines)
+
     # Net Pay
     net_match = re.search(
-        r"(?:Net\s*Salary|Net\s*Pay|Net\s*Amount|निव्वळ\s*वेतन|निव्वळ\s*देय\s*(?:रक्कम)?|निव्वळ\s*रक्कम|हाती\s*येणारे\s*वेतन|शुद्ध\s*वेतन|कुल\s*शुद्ध\s*देय)[\s:：]+(?:Rs\.?|INR|₹|रु\.?|रुपये)?\s*([\d,]+\.?\d*)",
+        r"(?:Net\s*Salary|Net\s*Pay|Net\s*Amount|निव्वळ\s*वेतन|निव्वळ\s*देय\s*(?:रक्कम)?|निव्वळ\s*रक्कम|हाती\s*येणारे\s*वेतन|शुद्ध\s*वेतन|कुल\s*शुद्ध\s*देय)[\s:：.]+(?:Rs\.?|INR|₹|रु\.?|रुपये)?\s*([\d,]+\.?\d*)",
         text,
         re.IGNORECASE,
     )

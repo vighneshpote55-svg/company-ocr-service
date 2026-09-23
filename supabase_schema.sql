@@ -201,6 +201,22 @@ CREATE INDEX IF NOT EXISTS idx_authenticity_checks_doc_id ON public.authenticity
 CREATE INDEX IF NOT EXISTS idx_authenticity_checks_user_id ON public.authenticity_checks(user_id);
 
 
+-- 10. Document Integrity Checks Table (Phase 10)
+CREATE TABLE IF NOT EXISTS public.document_integrity_checks (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
+    document_id UUID NOT NULL REFERENCES public.documents(id) ON DELETE CASCADE,
+    signal TEXT NOT NULL,
+    category TEXT NOT NULL,
+    score NUMERIC NOT NULL DEFAULT 0,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_doc_integrity_doc_id ON public.document_integrity_checks(document_id);
+CREATE INDEX IF NOT EXISTS idx_doc_integrity_user_id ON public.document_integrity_checks(user_id);
+CREATE INDEX IF NOT EXISTS idx_doc_integrity_created_at ON public.document_integrity_checks(created_at DESC);
+
+
 -- ==============================================================================
 -- ROW LEVEL SECURITY (RLS) POLICIES
 -- ==============================================================================
@@ -331,6 +347,21 @@ CREATE POLICY "Users can insert own authenticity checks" ON public.authenticity_
 
 DROP POLICY IF EXISTS "Users can delete own authenticity checks" ON public.authenticity_checks;
 CREATE POLICY "Users can delete own authenticity checks" ON public.authenticity_checks
+    FOR DELETE USING (auth.uid() = user_id);
+
+-- Document Integrity Checks (Phase 10)
+ALTER TABLE public.document_integrity_checks ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can view own integrity checks" ON public.document_integrity_checks;
+CREATE POLICY "Users can view own integrity checks" ON public.document_integrity_checks
+    FOR SELECT USING (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can insert own integrity checks" ON public.document_integrity_checks;
+CREATE POLICY "Users can insert own integrity checks" ON public.document_integrity_checks
+    FOR INSERT WITH CHECK (auth.uid() = user_id);
+
+DROP POLICY IF EXISTS "Users can delete own integrity checks" ON public.document_integrity_checks;
+CREATE POLICY "Users can delete own integrity checks" ON public.document_integrity_checks
     FOR DELETE USING (auth.uid() = user_id);
 
 -- AI Provider Configs: Any authenticated user can view (safe read), only admins can modify

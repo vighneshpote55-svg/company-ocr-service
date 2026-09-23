@@ -159,6 +159,43 @@ def create_document(
                     except Exception as ex_auth:
                         logger.warning(f"Could not insert into authenticity_checks table: {ex_auth}")
 
+                    # Phase 10: Insert into document_integrity_checks table
+                    try:
+                        integrity_rows = []
+                        if suspicious_signals:
+                            for sig in suspicious_signals:
+                                if isinstance(sig, dict):
+                                    sig_name = sig.get("signal") or sig.get("description", "integrity_signal")
+                                    cat = sig.get("category", "integrity")
+                                    sc = sig.get("score") or sig.get("weight") or 10
+                                else:
+                                    sig_name = str(sig)
+                                    cat = "integrity"
+                                    sc = 10
+                                integrity_rows.append({
+                                    "document_id": doc_id,
+                                    "user_id": user_id,
+                                    "signal": sig_name,
+                                    "category": cat,
+                                    "score": sc,
+                                    "created_at": now_iso,
+                                })
+                        else:
+                            # Baseline audit entry for clean verified documents
+                            integrity_rows.append({
+                                "document_id": doc_id,
+                                "user_id": user_id,
+                                "signal": "All integrity checks passed",
+                                "category": "overall",
+                                "score": 0,
+                                "created_at": now_iso,
+                            })
+
+                        if integrity_rows:
+                            client.table("document_integrity_checks").insert(integrity_rows).execute()
+                    except Exception as ex_integ:
+                        logger.warning(f"Could not insert into document_integrity_checks table: {ex_integ}")
+
                     # 4. Insert into ocr_results if present
                     if ocr_result:
                         ocr_row = {
