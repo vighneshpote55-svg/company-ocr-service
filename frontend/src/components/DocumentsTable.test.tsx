@@ -14,6 +14,9 @@ import { AIModeView } from './AIModeView.tsx';
 import { ExtractedFields } from './ExtractedFields.tsx';
 import { Sidebar } from './Sidebar.tsx';
 import { Header } from './Header.tsx';
+import { DashboardStats } from './DashboardStats.tsx';
+import { ModeSwitcher } from './ModeSwitcher.tsx';
+import { DashboardLayout } from './DashboardLayout.tsx';
 import { AuthProvider } from '../context/AuthContext.tsx';
 import type { DocumentItem, SupportedType, AIProviderConfig } from '../types.ts';
 import { normalizeAiDocument } from '../types.ts';
@@ -796,6 +799,88 @@ test('Final UI Cleanup: Header does not contain Workspace pill or search button'
   assert.ok(html.includes('Settings'), 'Header must include Settings');
   assert.ok(html.includes('docpilot-header-avatar'), 'Header must include avatar');
 });
+
+test('Dashboard UI Redesign: ModeSwitcher shows Offline OCR and AI Mode', () => {
+  const html = renderToString(
+    React.createElement(ModeSwitcher, {
+      mode: 'offline',
+      onModeChange: () => {},
+    })
+  );
+
+  assert.ok(html.includes('Offline OCR'), 'ModeSwitcher must render Offline OCR');
+  assert.ok(html.includes('AI Mode'), 'ModeSwitcher must render AI Mode');
+  assert.ok(!html.includes('Offline Mode'), 'Must not render legacy Offline Mode wording');
+});
+
+test('Dashboard UI Redesign: DashboardStats renders 5 balanced cards and removes AI Provider', () => {
+  const html = renderToString(
+    React.createElement(DashboardStats, {
+      stats: {
+        total: 10,
+        total_documents: 10,
+        ocr_processed: 6,
+        offline_documents: 6,
+        ai_documents: 4,
+        total_storage_bytes: 1048576,
+      },
+      documents: mockThreeDocuments,
+    })
+  );
+
+  assert.ok(html.includes('Documents'), 'Must include Documents card');
+  assert.ok(html.includes('OCR Processed'), 'Must include OCR Processed card');
+  assert.ok(html.includes('AI Analysis'), 'Must include AI Analysis card');
+  assert.ok(html.includes('Storage'), 'Must include Storage card');
+  assert.ok(html.includes('Verified'), 'Must include Verified card');
+  assert.ok(!html.includes('AI Provider'), 'Must NOT include standalone AI Provider card');
+});
+
+test('Dashboard UI Redesign: DashboardLayout renders simplified banner and 2-column split with Recent Documents', () => {
+  const html = renderToString(
+    React.createElement(
+      AuthProvider,
+      null,
+      React.createElement(DashboardLayout, {
+        mode: 'offline',
+        onSelectMode: () => {},
+        currentTab: 'dashboard',
+        onSelectTab: () => {},
+        isBackendConnected: true,
+        isRefreshing: false,
+        onRefresh: () => {},
+        onOpenSettings: () => {},
+        supportedTypes: mockSupportedTypes,
+        stats: {
+          total: 3,
+          total_documents: 3,
+          ocr_processed: 2,
+          offline_documents: 2,
+          ai_documents: 1,
+          total_storage_bytes: 500000,
+        },
+        documents: mockThreeDocuments,
+        onDocumentUploaded: () => {},
+        onDeleteDocument: () => {},
+        onSelectDocument: () => {},
+        onNotify: () => {},
+      })
+    )
+  );
+
+  // Simplified welcome banner
+  assert.ok(html.includes('Welcome back, Incraax Automation 👋'), 'Must render simplified welcome banner title');
+  assert.ok(html.includes('Manage your documents, run OCR, and analyze them with AI.'), 'Must render simplified subtitle');
+  assert.ok(!html.includes('Secure Tenant Isolation'), 'Must NOT render tenant isolation badge');
+  assert.ok(!html.includes('Multi-tenant workspace with isolated Document Vault'), 'Must NOT render multi-tenant text');
+
+  // 2-column split and Recent Documents feed
+  assert.ok(html.includes('dashboard-content-split'), 'Must render 2-column split layout container');
+  assert.ok(html.includes('Recent Documents'), 'Must render Recent Documents feed card');
+  assert.ok(html.includes('View all'), 'Must render View all link');
+  assert.ok(html.includes('WhatsApp Image'), 'Must render recent document filenames');
+});
+
 
 
 

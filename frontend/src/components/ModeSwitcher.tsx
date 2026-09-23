@@ -30,12 +30,12 @@ export const ModeSwitcher: React.FC<ModeSwitcherProps> = ({
         aria-selected={mode === 'offline'}
         className={`mode-switch-btn ${mode === 'offline' ? 'active-offline' : ''}`}
         onClick={() => onModeChange('offline')}
-        title="Offline Mode: 22 predefined document types via local OCR engine"
+        title="Offline OCR: Local OCR engine for documents"
       >
         <span className="mode-btn-icon">
           <ShieldCheck size={16} />
         </span>
-        <span className="mode-btn-text">⚡ Offline Mode</span>
+        <span className="mode-btn-text">Offline OCR</span>
       </button>
 
       <button
@@ -43,12 +43,12 @@ export const ModeSwitcher: React.FC<ModeSwitcherProps> = ({
         aria-selected={mode === 'ai'}
         className={`mode-switch-btn ${mode === 'ai' ? 'active-ai' : ''}`}
         onClick={() => onModeChange('ai')}
-        title="AI Mode: Universal document classification & conversational intelligence"
+        title="AI Mode: Universal document intelligence & analysis"
       >
         <span className="mode-btn-icon">
           <Sparkles size={16} />
         </span>
-        <span className="mode-btn-text">🤖 AI Mode</span>
+        <span className="mode-btn-text">AI Mode</span>
       </button>
     </div>
   );

@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { ShieldCheck } from 'lucide-react';
+import { FileText, Clock, Eye, ArrowRight } from 'lucide-react';
 import type { AppMode, DashboardStats as StatsType, DocumentItem, EngineInfo, SupportedType, AIProviderConfig } from '../types';
-import { useAuth } from '../context/AuthContext';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import type { NavTab } from './Sidebar';
@@ -43,6 +42,34 @@ export interface DashboardLayoutProps {
   inspectContent?: React.ReactNode;
 }
 
+function formatRelativeTime(dateStr?: string): string {
+  if (!dateStr) return 'Recently';
+  try {
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return 'Recently';
+    const diff = (Date.now() - d.getTime()) / 1000;
+    if (diff < 60) return 'Just now';
+    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+    return `${Math.floor(diff / 86400)}d ago`;
+  } catch {
+    return 'Recently';
+  }
+}
+
+function getDocStatusBadge(doc: DocumentItem): { label: string; colorClass: string } {
+  if (doc.status === 'failed' || doc.status === 'error') {
+    return { label: 'Failed', colorClass: 'pill-failed' };
+  }
+  if (doc.status === 'processing') {
+    return { label: 'Processing', colorClass: 'pill-processing' };
+  }
+  if (doc.verification_status === 'review_required' || doc.review_required) {
+    return { label: 'Review Required', colorClass: 'pill-review' };
+  }
+  return { label: 'Verified', colorClass: 'pill-verified' };
+}
+
 export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   mode,
   onSelectMode,
@@ -68,7 +95,6 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
   onClearSelectedDoc,
   inspectContent,
 }) => {
-  const { user } = useAuth();
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
@@ -171,25 +197,21 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               />
             </div>
           ) : (
-            /* 4. Offline Mode Primary Dashboard: Welcome Banner -> Stats -> Centered Workspace -> Recent Ingestions */
+            /* 4. Offline Mode Primary Dashboard: Welcome Banner -> Stats -> 2-Column Responsive Grid */
             <div className="dashboard-view-wrapper">
-              {/* Personalized Welcome Banner */}
+              {/* Simplified Welcome Banner */}
               <div className="dashboard-welcome-banner">
                 <div className="welcome-banner-text">
                   <h2 className="welcome-banner-title">
-                    Welcome back, {user?.full_name || user?.email?.split('@')[0] || 'Member'} 👋
+                    Welcome back, Incraax Automation 👋
                   </h2>
                   <p className="welcome-banner-subtitle">
-                    Multi-tenant workspace with isolated Document Vault, deterministic RapidOCR, and contextual AI reasoning.
+                    Manage your documents, run OCR, and analyze them with AI.
                   </p>
-                </div>
-                <div className="welcome-banner-badge">
-                  <ShieldCheck size={16} />
-                  <span>Secure Tenant Isolation</span>
                 </div>
               </div>
 
-              {/* Dashboard Metric Cards (4 cards: Total, Offline, AI, Storage) */}
+              {/* Dashboard Metric Cards (5 cards in one balanced row) */}
               <DashboardStats
                 stats={stats}
                 engineInfo={engineInfo}
@@ -198,44 +220,101 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
                 onNavigateTab={(tab) => onSelectTab(tab)}
               />
 
-              {/* Centered Large Workspace Card (Offline Mode Upload Card) */}
-              <div className="main-workspace-card-wrapper mode-fade-enter" key={mode}>
-                <UploadCard
-                  supportedTypes={supportedTypes}
-                  onUploadSuccess={onDocumentUploaded}
-                  onError={(msg) => onNotify(msg, 'error')}
-                  onSwitchToAiMode={() => onSelectMode('ai')}
-                  onRefresh={onRefresh}
-                />
-              </div>
-
-              {/* Recent Ingestions Table */}
-              <div className="recent-documents-section">
-                <div className="recent-section-header">
-                  <div>
-                    <h3 className="recent-section-title">Recent Ingestions</h3>
-                    <p className="recent-section-subtitle">
-                      Latest documents verified across active pipelines
-                    </p>
-                  </div>
-                  <button
-                    className="btn btn-ghost view-vault-link-btn"
-                    onClick={() => onSelectTab('repository')}
-                  >
-                    <span>View all in Document Vault</span>
-                    <span aria-hidden="true">→</span>
-                  </button>
+              {/* Primary Dashboard Grid: 2-Column Split (Offline OCR Upload + Recent Documents) */}
+              <div className="dashboard-content-split">
+                {/* Left Column: Primary Offline OCR Action */}
+                <div className="dashboard-primary-column">
+                  <UploadCard
+                    supportedTypes={supportedTypes}
+                    onUploadSuccess={onDocumentUploaded}
+                    onError={(msg) => onNotify(msg, 'error')}
+                    onSwitchToAiMode={() => onSelectMode('ai')}
+                    onRefresh={onRefresh}
+                  />
                 </div>
 
-                <DocumentsTable
-                  documents={documents.slice(0, 5)}
-                  supportedTypes={supportedTypes}
-                  onSelectDocument={onSelectDocument}
-                  onDeleteDocument={onDeleteDocument}
-                  onRefresh={onRefresh}
-                  isLoading={isRefreshing}
-                  engineInfo={engineInfo}
-                />
+                {/* Right Column: Recent Documents Feed */}
+                <div className="dashboard-secondary-column">
+                  <div className="recent-docs-card">
+                    <div className="recent-card-header">
+                      <div className="recent-card-title-wrap">
+                        <h3 className="recent-card-title">Recent Documents</h3>
+                        <span className="recent-count-tag">{documents.length}</span>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn-link view-all-btn"
+                        onClick={() => onSelectTab('repository')}
+                        title="View all documents in Vault"
+                      >
+                        <span>View all</span>
+                        <ArrowRight size={13} />
+                      </button>
+                    </div>
+
+                    <div className="recent-docs-list">
+                      {documents.length === 0 ? (
+                        <div className="recent-docs-empty">
+                          <FileText size={32} className="empty-icon" />
+                          <p className="empty-title">No documents yet</p>
+                          <p className="empty-desc">
+                            Ingested files will appear here for fast inspection.
+                          </p>
+                        </div>
+                      ) : (
+                        documents.slice(0, 5).map((doc) => {
+                          const statusInfo = getDocStatusBadge(doc);
+                          return (
+                            <div
+                              key={doc.id}
+                              className="recent-doc-row"
+                              onClick={() => onSelectDocument(doc)}
+                              role="button"
+                              tabIndex={0}
+                              title={`Inspect ${doc.filename}`}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter' || e.key === ' ') {
+                                  e.preventDefault();
+                                  onSelectDocument(doc);
+                                }
+                              }}
+                            >
+                              <div className="recent-doc-icon-wrap">
+                                <FileText size={18} />
+                              </div>
+                              <div className="recent-doc-details">
+                                <div className="recent-doc-name" title={doc.filename}>
+                                  {doc.filename}
+                                </div>
+                                <div className="recent-doc-meta">
+                                  <span className="recent-doc-time">
+                                    <Clock size={11} />
+                                    {formatRelativeTime(doc.created_at || (doc as any).timestamp)}
+                                  </span>
+                                  <span className={`recent-doc-status-pill ${statusInfo.colorClass}`}>
+                                    {statusInfo.label}
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className="recent-doc-view-btn"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  onSelectDocument(doc);
+                                }}
+                                title="Inspect document"
+                                aria-label={`Inspect ${doc.filename}`}
+                              >
+                                <Eye size={15} />
+                              </button>
+                            </div>
+                          );
+                        })
+                      )}
+                    </div>
+                  </div>
+                </div>
               </div>
             </div>
           )}

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Files, Zap, Sparkles, HardDrive, ShieldCheck, Cpu } from 'lucide-react';
+import { Files, Zap, Sparkles, HardDrive, ShieldCheck } from 'lucide-react';
 import type { DashboardStats as StatsType, EngineInfo, DocumentItem, AIProviderConfig } from '../types';
 import { StatCard } from './StatCard';
 
@@ -23,7 +23,6 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
   stats,
   onNavigateTab,
   documents,
-  aiConfig,
 }) => {
   const offlineCount =
     typeof stats.offline_documents === 'number'
@@ -61,15 +60,9 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
     ? documents.filter((d) => d.verification_status === 'review_required' || d.review_required).length
     : 0;
 
-  // Active AI Provider info
-  const providerTitle = aiConfig?.mode === 'external'
-    ? (aiConfig.active_provider === 'openrouter' ? 'OpenRouter' : aiConfig.active_provider.toUpperCase())
-    : 'Local Ollama';
-  const modelSubtext = aiConfig?.active_model || 'qwen2.5vl:3b';
-
   return (
-    <div className="analytics-cards-grid" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))' }}>
-      {/* 1. Total Documents */}
+    <div className="analytics-cards-grid">
+      {/* 1. Documents */}
       <StatCard
         label="Documents"
         value={stats.total_documents ?? stats.total}
@@ -81,9 +74,9 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
         badge={{ text: 'Live Vault', type: 'info' }}
       />
 
-      {/* 2. Offline Processed (RapidOCR) */}
+      {/* 2. OCR Processed */}
       <StatCard
-        label="Offline Processed"
+        label="OCR Processed"
         value={offlineCount}
         subtext="RapidOCR deterministic engine"
         icon={<Zap size={20} />}
@@ -93,11 +86,11 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
         badge={{ text: 'RapidOCR', type: 'success' }}
       />
 
-      {/* 3. AI Processed (DocPilot Intelligence) */}
+      {/* 3. AI Analysis */}
       <StatCard
-        label="AI Processed"
+        label="AI Analysis"
         value={aiCount}
-        subtext="Visual reasoning & extraction"
+        subtext="Qwen2.5-VL Intelligence"
         icon={<Sparkles size={20} />}
         iconBg="rgba(139, 92, 246, 0.12)"
         iconColor="var(--accent-purple)"
@@ -105,7 +98,7 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
         badge={{ text: 'DocPilot AI', type: 'warning' }}
       />
 
-      {/* 4. Storage Used */}
+      {/* 4. Storage */}
       <StatCard
         label="Storage"
         value={storageDisplay}
@@ -116,29 +109,19 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
         badge={{ text: 'AES-256', type: 'neutral' }}
       />
 
-      {/* 5. Integrity Status */}
+      {/* 5. Verified */}
       <StatCard
-        label="Integrity Status"
-        value={reviewCount > 0 ? `${reviewCount} Review` : `${verifiedCount} Verified`}
-        subtext={reviewCount > 0 ? `${verifiedCount} verified cleanly` : 'Universal integrity verified'}
+        label="Verified"
+        value={verifiedCount}
+        subtext={reviewCount > 0 ? `${reviewCount} need review` : 'Universal integrity verified'}
         icon={<ShieldCheck size={20} />}
         iconBg={reviewCount > 0 ? 'rgba(245, 158, 11, 0.14)' : 'rgba(34, 197, 94, 0.12)'}
         iconColor={reviewCount > 0 ? 'var(--warning)' : 'var(--success)'}
         onClick={() => onNavigateTab?.('repository')}
         badge={{ text: reviewCount > 0 ? 'Action Needed' : 'Passed', type: reviewCount > 0 ? 'warning' : 'success' }}
       />
-
-      {/* 6. AI Provider */}
-      <StatCard
-        label="AI Provider"
-        value={providerTitle}
-        subtext={modelSubtext}
-        icon={<Cpu size={20} />}
-        iconBg="rgba(139, 92, 246, 0.12)"
-        iconColor="var(--accent-purple)"
-        badge={{ text: aiConfig?.mode === 'external' ? 'Cloud' : 'Offline', type: 'info' }}
-      />
     </div>
   );
 };
+
 
