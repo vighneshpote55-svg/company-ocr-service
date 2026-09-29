@@ -124,6 +124,16 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     }
   }, [isDarkMode]);
 
+  useEffect(() => {
+    const handleResize = () => {
+      if (window.innerWidth > 1024 && isMobileSidebarOpen) {
+        setIsMobileSidebarOpen(false);
+      }
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, [isMobileSidebarOpen]);
+
   const toggleTheme = () => {
     setIsDarkMode((prev) => !prev);
   };
