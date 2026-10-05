@@ -43,8 +43,14 @@ _supabase_client = None
 
 
 def is_supabase_configured() -> bool:
-    """Return True if Supabase URL and Secret Key are both present."""
-    return bool(get_supabase_url() and get_supabase_key())
+    """Return True if Supabase URL and Secret Key are both present and not placeholder values."""
+    url = get_supabase_url()
+    key = get_supabase_key()
+    if not url or not key:
+        return False
+    if "your-project-id" in url or "your-supabase" in key or "example.com" in url:
+        return False
+    return True
 
 
 def get_supabase_client():

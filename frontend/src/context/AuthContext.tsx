@@ -86,13 +86,23 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
 
   useEffect(() => {
     if (!isSupabaseConfigured || !supabase) {
-      // In development mode without Supabase, provide fallback admin user
-      setUser({
-        id: '00000000-0000-0000-0000-000000000001',
-        email: 'dev@company.local',
-        full_name: 'Dev Administrator',
-        role: 'admin',
-      });
+      // In local mode without Supabase, check for an existing authenticated session in localStorage
+      try {
+        const savedSession = localStorage.getItem('docpilot_user_session');
+        if (savedSession) {
+          const parsed = JSON.parse(savedSession);
+          if (parsed && parsed.email) {
+            setUser(parsed);
+          } else {
+            setUser(null);
+          }
+        } else {
+          // Starts clean at the Login page for unauthenticated users
+          setUser(null);
+        }
+      } catch {
+        setUser(null);
+      }
       setIsLoading(false);
       return;
     }
@@ -144,9 +154,32 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   }, []);
 
   const login = async (email: string, password: string) => {
-    if (!supabase) {
-      return { error: 'Authentication service is not configured.' };
+    if (!isSupabaseConfigured || !supabase) {
+      if (!email.trim() || !password) {
+        return { error: 'Please enter both an email address and password.' };
+      }
+      const trimmedEmail = email.trim();
+      const isAdmin =
+        trimmedEmail.toLowerCase().includes('admin') ||
+        trimmedEmail.toLowerCase().includes('dev') ||
+        trimmedEmail.toLowerCase().startsWith('admin@');
+
+      const localUser: UserProfile = {
+        id: '00000000-0000-0000-0000-000000000001',
+        email: trimmedEmail,
+        full_name: isAdmin ? 'Administrator' : trimmedEmail.split('@')[0],
+        role: isAdmin ? 'admin' : 'user',
+      };
+
+      try {
+        localStorage.setItem('docpilot_user_session', JSON.stringify(localUser));
+      } catch {
+        // Safe swallow
+      }
+      setUser(localUser);
+      return {};
     }
+
     try {
       const { data, error } = await supabase.auth.signInWithPassword({
         email: email.trim(),
@@ -172,9 +205,26 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
   };
 
   const register = async (email: string, password: string, fullName: string) => {
-    if (!supabase) {
-      return { error: 'Authentication service is not configured.' };
+    if (!isSupabaseConfigured || !supabase) {
+      if (!email.trim() || !password) {
+        return { error: 'Please enter both email and password to create an account.' };
+      }
+      const trimmedEmail = email.trim();
+      const localUser: UserProfile = {
+        id: '00000000-0000-0000-0000-000000000001',
+        email: trimmedEmail,
+        full_name: fullName.trim() || trimmedEmail.split('@')[0],
+        role: 'user',
+      };
+      try {
+        localStorage.setItem('docpilot_user_session', JSON.stringify(localUser));
+      } catch {
+        // Safe swallow
+      }
+      setUser(localUser);
+      return { confirmationRequired: false };
     }
+
     try {
       const { data, error } = await supabase.auth.signUp({
         email: email.trim(),
@@ -203,6 +253,11 @@ export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) =>
       } catch {
         // Safe swallow
       }
+    }
+    try {
+      localStorage.removeItem('docpilot_user_session');
+    } catch {
+      // Safe swallow
     }
     api.setToken(null);
     setSession(null);

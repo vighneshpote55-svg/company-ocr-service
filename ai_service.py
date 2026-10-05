@@ -104,7 +104,13 @@ def classify_document_content(text: str, filename: str = "") -> Dict[str, Any]:
     cls = verifier.classify_document_content(text)
     doc_type = cls.get("doc_type", "unknown")
     document_type = cls.get("document_type", "Unknown Document")
-    confidence = cls.get("confidence", "low")
+    raw_conf = cls.get("confidence")
+    if isinstance(raw_conf, (int, float)):
+        confidence = "high" if raw_conf >= 0.70 else ("medium" if raw_conf >= 0.50 else "low")
+        confidence_score = float(raw_conf)
+    else:
+        confidence = str(cls.get("confidence_level") or raw_conf or "low").lower()
+        confidence_score = 0.95 if confidence == "high" else (0.80 if confidence == "medium" else 0.50)
     evidence = list(cls.get("evidence", []))
     issuer = cls.get("issuer")
 
@@ -113,6 +119,8 @@ def classify_document_content(text: str, filename: str = "") -> Dict[str, Any]:
             "doc_type": "unknown",
             "document_type": "Unknown Document",
             "confidence": "low",
+            "confidence_score": None,
+            "confidence_level": "low",
             "summary": "This document could not be reliably classified into a recognized document type based on its visible content.",
             "evidence": [
                 "No standard institutional headings or classification markers recognized",
@@ -234,6 +242,8 @@ def classify_document_content(text: str, filename: str = "") -> Dict[str, Any]:
         "doc_type": doc_type,
         "document_type": document_type,
         "confidence": confidence,
+        "confidence_score": confidence_score,
+        "confidence_level": confidence,
         "summary": summary,
         "evidence": evidence,
         "reasoning": evidence,

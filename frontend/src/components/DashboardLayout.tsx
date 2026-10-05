@@ -102,9 +102,9 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     try {
       const saved = localStorage.getItem('theme_preference');
       if (saved) return saved === 'dark';
-      return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+      return true; // DocPilot signature dark mode default
     } catch {
-      return false;
+      return true;
     }
   });
 

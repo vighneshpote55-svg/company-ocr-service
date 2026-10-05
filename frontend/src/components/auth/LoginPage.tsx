@@ -1,7 +1,8 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Loader2 } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Loader2, Sparkles, ShieldCheck } from 'lucide-react';
+import { isSupabaseConfigured } from '../../services/supabaseClient';
 
 export const LoginPage: React.FC = () => {
   const [email, setEmail] = useState('');
@@ -11,12 +12,18 @@ export const LoginPage: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const { login } = useAuth();
+  const { login, isAuthenticated } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
 
   // Redirect destination after successful login
   const from = (location.state as { from?: { pathname?: string } })?.from?.pathname || '/';
+
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate(from, { replace: true });
+    }
+  }, [isAuthenticated, navigate, from]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -42,9 +49,34 @@ export const LoginPage: React.FC = () => {
     }
   };
 
+  const handleDemoLogin = async () => {
+    setError(null);
+    setEmail('admin@docpilot.ai');
+    setPassword('admin123');
+    setLoading(true);
+    try {
+      const res = await login('admin@docpilot.ai', 'admin123');
+      if (res.error) {
+        setError(res.error);
+      } else {
+        navigate(from, { replace: true });
+      }
+    } catch {
+      setError('Failed to log in with demo account.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <div>
-      <h2 className="auth-card-title">Sign In</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
+        <h2 className="auth-card-title" style={{ margin: 0 }}>Sign In</h2>
+        <span className="auth-mode-indicator-pill">
+          <ShieldCheck className="w-3.5 h-3.5" />
+          <span>{isSupabaseConfigured ? 'Supabase Auth' : 'Local / Air-Gapped'}</span>
+        </span>
+      </div>
       <p className="auth-card-desc">Enter your credentials to access your document vault.</p>
 
       {error && (
@@ -53,6 +85,29 @@ export const LoginPage: React.FC = () => {
           <span>{error}</span>
         </div>
       )}
+
+      {/* Quick 1-Click Demo Login Banner */}
+      <button
+        type="button"
+        onClick={handleDemoLogin}
+        disabled={loading}
+        className="auth-demo-quick-btn"
+      >
+        <div className="demo-btn-left">
+          <div className="demo-sparkle-icon">
+            <Sparkles className="w-4 h-4" />
+          </div>
+          <div className="demo-btn-texts">
+            <span className="demo-btn-title">1-Click Demo Administrator</span>
+            <span className="demo-btn-sub">admin@docpilot.ai • Full Access</span>
+          </div>
+        </div>
+        <ArrowRight className="w-4 h-4 demo-btn-arrow" />
+      </button>
+
+      <div className="auth-divider">
+        <span>or sign in with email</span>
+      </div>
 
       <form onSubmit={handleSubmit} className="auth-form" noValidate>
         {/* Email Field */}
@@ -66,7 +121,6 @@ export const LoginPage: React.FC = () => {
               id="login-email"
               type="email"
               autoComplete="email"
-              autoFocus
               className="auth-input"
               placeholder="name@company.com"
               value={email}

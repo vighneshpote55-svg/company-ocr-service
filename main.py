@@ -96,7 +96,7 @@ from security import (
     validate_security_configuration,
     verify_client_credentials,
 )
-from auth_dependencies import get_current_user, UserProfile
+from auth_dependencies import get_current_user, UserProfile, require_admin
 from verifier import (
     check_doc_type_mismatch,
     classify_document_content,
@@ -1560,6 +1560,17 @@ async def upload_document_endpoint(
 
             extracted_text = doc_res.full_text or ""
 
+            # Check local Ollama health if in local AI mode
+            active_prov = ai_providers.ai_provider_manager.get_active_provider()
+            if active_prov.is_local:
+                ol_health = ollama_ai.check_ollama_health()
+                if not ol_health.get("reachable") or not ol_health.get("model_installed"):
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        content={"error": ol_health.get("error", "Local Ollama server is unavailable.")},
+                    )
+
             try:
                 ai_res = await ai_service.analyze_document(
                     document_text=extracted_text,
@@ -2065,7 +2076,7 @@ async def get_ai_config_endpoint(
 @app.post("/api/ai/config")
 async def update_ai_config_endpoint(
     payload: AiConfigUpdatePayload,
-    auth: dict = Depends(authenticate_request),
+    auth: UserProfile = Depends(require_admin),
 ):
     """
     Updates runtime AI provider configuration securely on backend.
@@ -2086,7 +2097,7 @@ async def update_ai_config_endpoint(
 @app.post("/api/ai/test-connection")
 async def test_ai_connection_endpoint(
     payload: Optional[AiTestConnectionPayload] = None,
-    auth: dict = Depends(authenticate_request),
+    auth: UserProfile = Depends(require_admin),
 ):
     """
     Tests connectivity to candidate or currently configured AI provider.

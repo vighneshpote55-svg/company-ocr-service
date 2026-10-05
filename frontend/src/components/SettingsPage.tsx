@@ -142,6 +142,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   }, [loadConfig]);
 
   useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
+  }, [activeSection]);
+
+  useEffect(() => {
     if (user?.full_name) {
       setFullNameInput(user.full_name);
     }
@@ -910,7 +914,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                 </div>
 
                 {/* 5. CUSTOM AI */}
-                <div className={`provider-config-card ${isProviderActive('custom') ? 'is-active-card' : ''}`}>
+                <div className={`provider-config-card custom-gateway-card ${isProviderActive('custom') ? 'is-active-card' : ''}`}>
                   <div className="provider-card-header">
                     <div className="provider-card-title-group">
                       <div className="provider-badge-icon custom">
@@ -978,7 +982,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       </select>
                     </div>
 
-                    <div className="provider-field-item">
+                    <div className="provider-field-item full-width">
                       <label htmlFor="custom-key-input">API Key (Optional)</label>
                       <div className="password-input-wrap">
                         <input

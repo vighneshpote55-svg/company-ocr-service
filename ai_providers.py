@@ -253,7 +253,13 @@ def normalize_ai_response(
     combined_text = ((ocr_text or "") + "\n" + str(raw_response.get("summary", ""))).strip()
     canonical_cls = verifier.classify_document_content(combined_text)
 
-    if canonical_cls.get("doc_type") != "unknown":
+    if raw_response.get("document_type") == "Permanent Account Number Card":
+        normalized_type = "Permanent Account Number Card"
+        confidence_score = 0.95
+        conf_raw = str(raw_response.get("confidence") or "high").lower().strip()
+        confidence = conf_raw if conf_raw in ("high", "medium", "low") else "high"
+        evidence = list(raw_response.get("reasoning") or raw_response.get("evidence") or canonical_cls.get("evidence", []))
+    elif canonical_cls.get("doc_type") != "unknown":
         normalized_type = canonical_cls["document_type"]
         confidence_score = canonical_cls.get("confidence")
         conf_raw = str(raw_response.get("confidence") or canonical_cls.get("confidence_level") or "high").lower().strip()

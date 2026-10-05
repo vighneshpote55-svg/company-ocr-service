@@ -13,12 +13,6 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
-# Ensure test secrets are explicitly configured
-os.environ["JWT_SECRET"] = "test-secret-key-for-unit-tests-only-32bytes"
-os.environ["API_KEY"] = "test-static-api-key-2026"
-os.environ["AUTH_MODE"] = "dual"
-os.environ["AUTH_ENABLED"] = "true"
-
 from main import app
 from security import (
     clear_registered_clients,
@@ -32,6 +26,7 @@ from security import (
 def setup_test_auth():
     """Setup test secrets and register standard test client."""
     import main
+    old_env = os.environ.copy()
     main._startup_security_error = None
     os.environ["AUTH_ENABLED"] = "true"
     os.environ["AUTH_MODE"] = "dual"
@@ -42,7 +37,8 @@ def setup_test_auth():
     yield
     clear_registered_clients()
     main._startup_security_error = None
-    os.environ.pop("AUTH_ENABLED", None)
+    os.environ.clear()
+    os.environ.update(old_env)
 
 
 @pytest.fixture

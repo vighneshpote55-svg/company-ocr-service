@@ -342,6 +342,7 @@ const DashboardApp: React.FC = () => {
           setSelectedDoc(null);
           loadData();
           refreshAiConfig();
+          window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
         }}
         currentTab={currentTab}
         onSelectTab={(tab) => {
@@ -349,6 +350,7 @@ const DashboardApp: React.FC = () => {
           setSelectedDoc(null);
           loadData();
           refreshAiConfig();
+          window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
         }}
         isBackendConnected={isBackendConnected}
         isRefreshing={isRefreshing}
@@ -359,6 +361,7 @@ const DashboardApp: React.FC = () => {
         onOpenSettings={() => {
           setCurrentTab('settings');
           setSelectedDoc(null);
+          window.scrollTo({ top: 0, left: 0, behavior: 'instant' });
         }}
         onLogout={async () => {
           await authLogout();

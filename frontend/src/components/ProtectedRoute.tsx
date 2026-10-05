@@ -1,7 +1,6 @@
 import React from 'react';
 import { Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
-import { isSupabaseConfigured } from '../services/supabaseClient';
 
 interface ProtectedRouteProps {
   children: React.ReactNode;
@@ -12,10 +11,6 @@ export const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ children, requir
   const { isAuthenticated, role, isLoading } = useAuth();
   const location = useLocation();
 
-  // If Supabase is not configured in local environment, allow pass-through
-  if (!isSupabaseConfigured) {
-    return <>{children}</>;
-  }
 
   if (isLoading) {
     return (

@@ -241,6 +241,20 @@ async def authenticate_request(
     elif token:
         jwt_candidate = token.strip()
 
+    api_key_candidate = x_api_key or api_key
+    auth_mode = os.getenv("AUTH_MODE", "disabled").lower()
+    configured_api_key = os.getenv("API_KEY")
+    if (auth_mode in ("apikey", "dual") or not jwt_candidate) and api_key_candidate and configured_api_key:
+        if hmac.compare_digest(api_key_candidate, configured_api_key):
+            return {
+                "sub": "api-key-client",
+                "user_id": os.getenv("DEFAULT_DEV_USER_ID", DEFAULT_MOCK_USER_ID),
+                "email": "apikey@company.local",
+                "full_name": "API Key Client",
+                "role": "admin",
+                "auth_method": "api_key",
+            }
+
     if not jwt_candidate:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
