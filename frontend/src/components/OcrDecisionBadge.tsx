@@ -8,7 +8,15 @@ interface OcrDecisionBadgeProps {
 }
 
 export const OcrDecisionBadge: React.FC<OcrDecisionBadgeProps> = ({ document, engineInfo }) => {
-  const isBypassed = !document.ocr_required;
+  const filename = document.filename || (document as any).original_filename || '';
+  const isPdf =
+    document.file_type?.toLowerCase() === '.pdf' ||
+    filename.toLowerCase().endsWith('.pdf');
+
+  const isBypassed =
+    document.text_source === 'text_layer' ||
+    (isPdf && document.ocr_required === false);
+
   const isError = document.status === 'error' || document.status === 'failed';
   const isUnknown =
     document.doc_type === 'unknown' ||

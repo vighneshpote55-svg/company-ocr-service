@@ -283,10 +283,10 @@ DOC_SIGNATURES = {
     "aadhaar": [
         r"UNIQUE IDENTIFICATION AUTHORITY OF INDIA|UIDAI",
         r"UNIQUE IDENTIFICATION.*GOVERNMENT OF INDIA|GOVERNMENT OF INDIA.*UNIQUE IDENTIFICATION",
-        r"AADHAAR|AADHAR|माझे\s*आधार|मेरा\s*आधार",
-        r"MERA AADHAAR|MERA AADHAR",
+        r"AADHAAR\s+CARD|AADHAR\s+CARD|आधार\s*कार्ड",
+        r"MERA AADHAAR|MERA AADHAR|मेरा\s*आधार|माझे\s*आधार",
         r"GOVERNMENT OF INDIA.*AADHAAR|GOVT OF INDIA.*AADHAAR|भारतीय\s*विशिष्ट\s*(?:ओळख|पहचान)\s*प्राधिकरण",
-        r"\bXXXX\s+XXXX\s+[0-9]{4}\b|\b[0-9]{4}\s+[0-9]{4}\s+[0-9]{4}\b",
+        r"\bXXXX\s+XXXX\s+[0-9]{4}\b|\b[2-9][0-9]{3}\s+[0-9]{4}\s+[0-9]{4}\b",
     ],
     "cancelled_cheque": [
         r"CANCELLED",
@@ -560,9 +560,10 @@ DOC_PRIMARY_SIGNATURES: Dict[str, List[str]] = {
     "aadhaar": [
         r"UNIQUE IDENTIFICATION AUTHORITY OF INDIA|UIDAI|भारतीय\s*विशिष्ट\s*(?:ओळख|पहचान)\s*प्राधिकरण",
         r"UNIQUE IDENTIFICATION.*GOVERNMENT OF INDIA|GOVERNMENT OF INDIA.*UNIQUE IDENTIFICATION",
-        r"\bAADHAAR\b|\bAADHAR\b|माझे\s*आधार|मेरा\s*आधार|आमचा\s*आधार|आधार\s*क्रमांक|आधार\s*कार्ड",
+        r"AADHAAR\s+CARD|AADHAR\s+CARD|आधार\s*कार्ड|माझे\s*आधार|मेरा\s*आधार|आमचा\s*आधार|आधार\s*क्रमांक",
         r"MERA AADHAAR|MERI PEHCHAN|मेरी पहचान|MERA AADHAR",
         r"HELP@UIDAI\.GOV\.IN|WWW\.UIDAI\.GOV\.IN|WWW\.EAADHAAR\.UIDAI\.GOV\.IN",
+        r"\bXXXX\s+XXXX\s+[0-9]{4}\b|\b[2-9][0-9]{3}\s+[0-9]{4}\s+[0-9]{4}\b",
     ],
     "cancelled_cheque": [
         r"\bCANCELLED\b|C\s*A\s*N\s*C\s*E\s*L\s*L\s*E\s*D",
