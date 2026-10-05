@@ -21,7 +21,6 @@ import {
   Eye,
   EyeOff,
   Activity,
-  Monitor,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
@@ -53,36 +52,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
 
   const [activeSection, setActiveSection] = useState<SettingsSection>('ai_providers');
   const [activeConfig, setActiveConfig] = useState<AIProviderConfig | null>(null);
-
-  // UI Scale Preference State
-  const [currentScale, setCurrentScale] = useState<string>(() => {
-    try {
-      return localStorage.getItem('ui_scaling_preference') || '100';
-    } catch {
-      return '100';
-    }
-  });
-
-  const handleSetScale = (scale: string) => {
-    setCurrentScale(scale);
-    try {
-      localStorage.setItem('ui_scaling_preference', scale);
-      const ratio = scale === '100' ? 1 : Number(scale) / 100;
-      (document.documentElement.style as any).zoom = ratio === 1 ? '' : String(ratio);
-      window.dispatchEvent(new CustomEvent('docpilot_scale_changed', { detail: scale }));
-      onNotify(`Interface scaling adjusted to ${scale}%`, 'success');
-    } catch {
-      // safe swallow
-    }
-  };
-
-  useEffect(() => {
-    const handleScaleEvent = (e: any) => {
-      if (e.detail) setCurrentScale(e.detail);
-    };
-    window.addEventListener('docpilot_scale_changed', handleScaleEvent);
-    return () => window.removeEventListener('docpilot_scale_changed', handleScaleEvent);
-  }, []);
 
   // Provider Card Form States
   // 1. Ollama
@@ -1387,55 +1356,6 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
           {/* SECTION 6: GENERAL */}
           {activeSection === 'general' && (
             <div className="settings-section-view">
-              {/* Interface Display & Scaling */}
-              <div className="settings-subcard">
-                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '8px' }}>
-                  <Monitor className="w-5 h-5" style={{ color: 'var(--primary)' }} />
-                  <h3 className="subcard-title" style={{ margin: 0 }}>Interface Display & Resolution Scaling</h3>
-                </div>
-                <p className="subcard-desc">
-                  Adjust interface density and scaling for high-DPI screens, 150% Windows scaling, compact laptops (1080p / 1366x768), 2K, and 4K displays.
-                </p>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: '12px', marginTop: '16px' }}>
-                  {[
-                    { val: '100', label: '100% (Standard)', desc: 'Standard density for native 1080p, 1440p, or unscaled screens' },
-                    { val: '125', label: '125% (Medium)', desc: 'Optimized for 14" enterprise laptops with medium scaling' },
-                    { val: '150', label: '150% (High-DPI / Large)', desc: 'Best for 150% Windows scaling, 4K monitors, and high readability' },
-                  ].map((opt) => (
-                    <button
-                      key={opt.val}
-                      type="button"
-                      onClick={() => handleSetScale(opt.val)}
-                      className={`settings-scale-btn ${currentScale === opt.val ? 'active' : ''}`}
-                      style={{
-                        padding: '14px 16px',
-                        borderRadius: '12px',
-                        border: currentScale === opt.val ? '2px solid var(--primary)' : '1px solid var(--border-subtle)',
-                        background: currentScale === opt.val ? 'rgba(37, 99, 235, 0.08)' : 'var(--bg-subtle)',
-                        color: 'var(--text-main)',
-                        cursor: 'pointer',
-                        textAlign: 'left',
-                        transition: 'all 0.18s ease',
-                      }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '4px' }}>
-                        <span style={{ fontWeight: 700, fontSize: '14px', color: currentScale === opt.val ? 'var(--primary)' : 'var(--text-main)' }}>
-                          {opt.label}
-                        </span>
-                        {currentScale === opt.val && (
-                          <span style={{ fontSize: '11px', fontWeight: 700, padding: '2px 8px', borderRadius: '9999px', background: 'var(--primary)', color: '#FFFFFF' }}>
-                            Active
-                          </span>
-                        )}
-                      </div>
-                      <div style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.4 }}>
-                        {opt.desc}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </div>
-
               <div className="settings-subcard">
                 <h3 className="subcard-title">System & Environment Information</h3>
                 <div className="quota-row">

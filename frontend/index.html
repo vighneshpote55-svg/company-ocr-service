@@ -20,14 +20,6 @@
             document.documentElement.setAttribute('data-theme', 'light');
             document.documentElement.classList.remove('dark');
           }
-
-          var savedScale = localStorage.getItem('ui_scaling_preference');
-          if (savedScale && savedScale !== '100' && savedScale !== 'auto') {
-            var num = parseFloat(savedScale);
-            if (!isNaN(num) && num >= 75 && num <= 200) {
-              document.documentElement.style.zoom = (num / 100).toString();
-            }
-          }
         } catch (e) {}
       })();
     </script>

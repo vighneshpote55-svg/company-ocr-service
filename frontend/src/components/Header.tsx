@@ -45,34 +45,6 @@ export const Header: React.FC<HeaderProps> = ({
   const { user, logout: authLogout } = useAuth();
   const [showNotifications, setShowNotifications] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
-  const [uiScale, setUiScale] = useState<string>(() => {
-    try {
-      return localStorage.getItem('ui_scaling_preference') || '100';
-    } catch {
-      return '100';
-    }
-  });
-
-  const handleCycleScale = () => {
-    const next = uiScale === '100' ? '125' : uiScale === '125' ? '150' : '100';
-    setUiScale(next);
-    try {
-      localStorage.setItem('ui_scaling_preference', next);
-      const ratio = next === '100' ? 1 : Number(next) / 100;
-      (document.documentElement.style as any).zoom = ratio === 1 ? '' : String(ratio);
-      window.dispatchEvent(new CustomEvent('docpilot_scale_changed', { detail: next }));
-    } catch {
-      // safe swallow
-    }
-  };
-
-  useEffect(() => {
-    const handleScaleEvent = (e: any) => {
-      if (e.detail) setUiScale(e.detail);
-    };
-    window.addEventListener('docpilot_scale_changed', handleScaleEvent);
-    return () => window.removeEventListener('docpilot_scale_changed', handleScaleEvent);
-  }, []);
 
   const notificationsRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
@@ -209,18 +181,6 @@ export const Header: React.FC<HeaderProps> = ({
             {isDarkMode ? <Sun size={16} /> : <Moon size={16} />}
           </button>
         )}
-
-        {/* UI Scale / Zoom Adjustment Button */}
-        <button
-          className="docpilot-header-icon-btn scale-toggle-btn"
-          onClick={handleCycleScale}
-          title={`Interface Scaling: ${uiScale}% (Click to cycle: 100% → 125% → 150%)`}
-          aria-label="Adjust Interface Scaling"
-        >
-          <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '-0.02em' }}>
-            {uiScale}%
-          </span>
-        </button>
 
         {/* Settings */}
         <button
