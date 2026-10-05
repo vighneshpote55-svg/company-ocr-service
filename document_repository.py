@@ -703,7 +703,11 @@ def get_user_statistics(user_id: str) -> Dict[str, Any]:
                     by_doc_type[dt] = by_doc_type.get(dt, 0) + 1
 
                 return {
+                    "total": total,
                     "total_documents": total,
+                    "ocr_processed": offline_count,
+                    "completed": processed_count,
+                    "failed": failed_count,
                     "offline_documents": offline_count,
                     "ai_documents": ai_count,
                     "processed_documents": processed_count,

@@ -1143,10 +1143,10 @@ async def get_auth_me_endpoint(
 
 @app.get("/api/stats")
 async def get_dashboard_stats(
-    auth: dict = Depends(authenticate_request),
+    current_user: UserProfile = Depends(get_current_user),
 ):
     """Retrieve aggregate document statistics scoped to the authenticated user."""
-    user_id = auth.get("user_id") or auth.get("sub")
+    user_id = current_user.id
     if supabase_client.is_supabase_configured() and user_id:
         return document_repository.get_user_statistics(user_id)
     return document_store.get_stats(user_id=user_id)

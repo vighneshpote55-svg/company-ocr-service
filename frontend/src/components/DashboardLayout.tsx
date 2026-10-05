@@ -1,6 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useContext } from 'react';
 import { FileText, Clock, Eye, ArrowRight } from 'lucide-react';
 import type { AppMode, DashboardStats as StatsType, DocumentItem, EngineInfo, SupportedType, AIProviderConfig } from '../types';
+import { AuthContext } from '../context/AuthContext';
 import { Header } from './Header';
 import { Sidebar } from './Sidebar';
 import type { NavTab } from './Sidebar';
@@ -138,6 +139,11 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
     setIsDarkMode((prev) => !prev);
   };
 
+  const auth = useContext(AuthContext);
+  const userName =
+    auth?.user?.full_name ||
+    (auth?.user?.email ? auth.user.email.split('@')[0] : 'Incraax Automation');
+
   return (
     <div className={`app-layout ${isSidebarCollapsed ? 'layout-collapsed' : ''}`}>
       {/* Shared Sidebar with Collapsible & Mobile Drawer Support */}
@@ -222,7 +228,7 @@ export const DashboardLayout: React.FC<DashboardLayoutProps> = ({
               <div className="dashboard-welcome-banner">
                 <div className="welcome-banner-text">
                   <h2 className="welcome-banner-title">
-                    Welcome back, Incraax Automation 👋
+                    Welcome back, {userName} 👋
                   </h2>
                   <p className="welcome-banner-subtitle">
                     Manage your documents, run OCR, and analyze them with AI.

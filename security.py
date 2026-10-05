@@ -225,7 +225,15 @@ async def authenticate_request(
         DEFAULT_MOCK_USER_ID,
     )
 
-    if not is_auth_required():
+    jwt_candidate = None
+    if authorization and authorization.lower().startswith("bearer "):
+        jwt_candidate = authorization[7:].strip()
+    elif token:
+        jwt_candidate = token.strip()
+
+    api_key_candidate = x_api_key or api_key
+
+    if not is_auth_required() and not jwt_candidate and not api_key_candidate:
         return {
             "sub": os.getenv("DEFAULT_DEV_USER_ID", DEFAULT_MOCK_USER_ID),
             "user_id": os.getenv("DEFAULT_DEV_USER_ID", DEFAULT_MOCK_USER_ID),
@@ -234,14 +242,6 @@ async def authenticate_request(
             "role": "admin",
             "auth_method": "dev_bypass",
         }
-
-    jwt_candidate = None
-    if authorization and authorization.lower().startswith("bearer "):
-        jwt_candidate = authorization[7:].strip()
-    elif token:
-        jwt_candidate = token.strip()
-
-    api_key_candidate = x_api_key or api_key
     auth_mode = os.getenv("AUTH_MODE", "disabled").lower()
     configured_api_key = os.getenv("API_KEY")
     if (auth_mode in ("apikey", "dual") or not jwt_candidate) and api_key_candidate and configured_api_key:

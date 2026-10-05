@@ -24,22 +24,31 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
   onNavigateTab,
   documents,
 }) => {
+  const totalDocs =
+    typeof stats.total_documents === 'number' && stats.total_documents > 0
+      ? stats.total_documents
+      : typeof stats.total === 'number' && stats.total > 0
+      ? stats.total
+      : documents?.length || 0;
+
   const offlineCount =
-    typeof stats.offline_documents === 'number'
+    typeof stats.offline_documents === 'number' && stats.offline_documents > 0
       ? stats.offline_documents
+      : typeof stats.ocr_processed === 'number' && stats.ocr_processed > 0
+      ? stats.ocr_processed
       : documents && documents.length > 0
-      ? documents.filter((d) => (d as any).mode === 'offline' || d.ocr_required).length
-      : stats.ocr_processed || 0;
+      ? documents.filter((d) => (d as any).mode === 'offline' || (d as any).mode === undefined || d.ocr_required).length
+      : 0;
 
   const aiCount =
-    typeof stats.ai_documents === 'number'
+    typeof stats.ai_documents === 'number' && stats.ai_documents > 0
       ? stats.ai_documents
       : documents && documents.length > 0
-      ? documents.filter((d) => (d as any).mode === 'ai').length
+      ? documents.filter((d) => (d as any).mode === 'ai' || (d as any).doc_type === 'ai_analyzed').length
       : 0;
 
   const totalStorageBytes =
-    typeof stats.total_storage_bytes === 'number'
+    typeof stats.total_storage_bytes === 'number' && stats.total_storage_bytes > 0
       ? stats.total_storage_bytes
       : documents && documents.length > 0
       ? documents.reduce((acc, d) => acc + (d.file_size || 0), 0)
@@ -48,8 +57,8 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
   const storageDisplay =
     totalStorageBytes > 0
       ? formatBytes(totalStorageBytes)
-      : stats.total > 0
-      ? `${(stats.total * 0.25).toFixed(1)} MB`
+      : totalDocs > 0
+      ? `${(totalDocs * 0.25).toFixed(1)} MB`
       : '0 B';
 
   // Integrity metrics
@@ -65,7 +74,7 @@ export const DashboardStats: React.FC<DashboardStatsProps> = ({
       {/* 1. Documents */}
       <StatCard
         label="Documents"
-        value={stats.total_documents ?? stats.total}
+        value={totalDocs}
         subtext="Indexed in Document Vault"
         icon={<Files size={20} />}
         iconBg="rgba(0, 194, 255, 0.12)"
