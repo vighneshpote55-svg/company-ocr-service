@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useAuth } from '../../context/AuthContext';
-import { Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Loader2, Sparkles, ShieldCheck } from 'lucide-react';
+import { Mail, Lock, Eye, EyeOff, ArrowRight, AlertCircle, Loader2, ShieldCheck } from 'lucide-react';
 import { isSupabaseConfigured } from '../../services/supabaseClient';
 
 export const LoginPage: React.FC = () => {
@@ -49,25 +49,6 @@ export const LoginPage: React.FC = () => {
     }
   };
 
-  const handleDemoLogin = async () => {
-    setError(null);
-    setEmail('admin@docpilot.ai');
-    setPassword('admin123');
-    setLoading(true);
-    try {
-      const res = await login('admin@docpilot.ai', 'admin123');
-      if (res.error) {
-        setError(res.error);
-      } else {
-        navigate(from, { replace: true });
-      }
-    } catch {
-      setError('Failed to log in with demo account.');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '6px' }}>
@@ -85,29 +66,6 @@ export const LoginPage: React.FC = () => {
           <span>{error}</span>
         </div>
       )}
-
-      {/* Quick 1-Click Demo Login Banner */}
-      <button
-        type="button"
-        onClick={handleDemoLogin}
-        disabled={loading}
-        className="auth-demo-quick-btn"
-      >
-        <div className="demo-btn-left">
-          <div className="demo-sparkle-icon">
-            <Sparkles className="w-4 h-4" />
-          </div>
-          <div className="demo-btn-texts">
-            <span className="demo-btn-title">1-Click Demo Administrator</span>
-            <span className="demo-btn-sub">admin@docpilot.ai • Full Access</span>
-          </div>
-        </div>
-        <ArrowRight className="w-4 h-4 demo-btn-arrow" />
-      </button>
-
-      <div className="auth-divider">
-        <span>or sign in with email</span>
-      </div>
 
       <form onSubmit={handleSubmit} className="auth-form" noValidate>
         {/* Email Field */}
