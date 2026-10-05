@@ -597,7 +597,7 @@ DOC_PRIMARY_SIGNATURES: Dict[str, List[str]] = {
         r"LICENSE UNDER FSS ACT|REGISTRATION UNDER FSS ACT",
     ],
     "shop_establishment": [
-        r"SHOP & ESTABLISHMENT|SHOPS & ESTABLISHMENTS|SHOPS AND ESTABLISHMENTS|दुकान\s*(?:आणि|व|एवं)\s*(?:आस्थापना|स्थापना)|दु\s*क\s*ाने\s*(?:आणि|व)\s*आ\s*(?:थापना|स्थापना)",
+        r"SHOP\s*&\s*ESTABLISHMENT|SHOPS\s*&\s*ESTABLISHMENTS|SHOPS?\s+AND\s+ESTABLISHMENTS?|दुकान\s*(?:आणि|व|एवं)\s*(?:आस्थापना|स्थापना)|दु\s*क\s*ाने\s*(?:आणि|व)\s*आ\s*(?:थापना|स्थापना)",
         r"MAHARASHTRA SHOPS AND COMMERCIAL|आस्थापना\s*नोंदणी|स्थापना\s*पंजीकरण|Form\s*[-–]\s*[\"'\u2018\u2019]?[फगFG][\"'\u2018\u2019]?",
     ],
     "bank_statement": [
@@ -781,7 +781,7 @@ def classify_document_content(
             continue
 
         # Mutual exclusion checks
-        if doc_type == "bank_statement" and any("PASSBOOK" in ev or "PASS BOOK" in ev or "पासबुक" in ev for ev in primary_matches):
+        if doc_type in ("bank_statement", "cancelled_cheque") and any(k in norm_upper for k in ["PASSBOOK", "PASS BOOK", "पासबुक"]):
             continue
         if doc_type == "employment_contract" and any(k in norm_upper for k in ["SALARY SLIP", "PAYSLIP", "PAY SLIP", "वेतन पावती"]):
             continue
