@@ -21,14 +21,20 @@ import {
   Eye,
   EyeOff,
   Activity,
+  Copy,
+  Trash2,
+  Plus,
+  Code,
+  Lock,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { useAuth } from '../context/AuthContext';
-import type { AIProviderConfig, DashboardStats as StatsType, DocumentItem } from '../types';
+import type { AIProviderConfig, DashboardStats as StatsType, DocumentItem, ApiKeyItem } from '../types';
 
 export type SettingsSection =
   | 'ai_providers'
   | 'model_settings'
+  | 'api_keys'
   | 'advanced'
   | 'quotas'
   | 'account'
@@ -101,6 +107,16 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [isUpdatingProfile, setIsUpdatingProfile] = useState(false);
   const [profileStatus, setProfileStatus] = useState<{ ok: boolean; message: string } | null>(null);
   const [passwordStatus, setPasswordStatus] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // API Keys Management State
+  const [apiKeys, setApiKeys] = useState<ApiKeyItem[]>([]);
+  const [loadingApiKeys, setLoadingApiKeys] = useState(false);
+  const [newKeyName, setNewKeyName] = useState('DocPilot AI Service');
+  const [creatingKey, setCreatingKey] = useState(false);
+  const [newlyCreatedKey, setNewlyCreatedKey] = useState<string | null>(null);
+  const [copiedKey, setCopiedKey] = useState(false);
+  const [activeCodeTab, setActiveCodeTab] = useState<'curl' | 'python' | 'node'>('curl');
+  const [copiedSnippet, setCopiedSnippet] = useState(false);
 
   // Key Visibility Toggles
   const [showKeys, setShowKeys] = useState<Record<string, boolean>>({});
@@ -336,6 +352,66 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
     }
   };
 
+  // API Key Management Handlers
+  const fetchApiKeys = useCallback(async () => {
+    setLoadingApiKeys(true);
+    try {
+      const res = await api.getApiKeys();
+      setApiKeys(res.keys || []);
+    } catch (err: any) {
+      console.error('Failed to fetch API keys:', err);
+    } finally {
+      setLoadingApiKeys(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (activeSection === 'api_keys') {
+      fetchApiKeys();
+    }
+  }, [activeSection, fetchApiKeys]);
+
+  const handleCreateApiKey = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newKeyName.trim()) return;
+    setCreatingKey(true);
+    try {
+      const res = await api.createApiKey(newKeyName.trim());
+      setNewlyCreatedKey(res.key);
+      setNewKeyName('');
+      onNotify('API Key created successfully! Make sure to copy it now.', 'success');
+      await fetchApiKeys();
+    } catch (err: any) {
+      onNotify(`Failed to create API key: ${err.message}`, 'error');
+    } finally {
+      setCreatingKey(false);
+    }
+  };
+
+  const handleRevokeApiKey = async (keyId: string, keyName: string) => {
+    if (
+      !window.confirm(
+        `Are you sure you want to revoke API key "${keyName}"? Any external services using this key will immediately lose access.`
+      )
+    ) {
+      return;
+    }
+    try {
+      await api.revokeApiKey(keyId);
+      onNotify(`API Key "${keyName}" revoked.`, 'info');
+      await fetchApiKeys();
+    } catch (err: any) {
+      onNotify(`Failed to revoke API key: ${err.message}`, 'error');
+    }
+  };
+
+  const handleCopyKey = (key: string) => {
+    navigator.clipboard.writeText(key);
+    setCopiedKey(true);
+    setTimeout(() => setCopiedKey(false), 2000);
+    onNotify('API key copied to clipboard!', 'info');
+  };
+
   // Active status helper
   const isProviderActive = (name: string) => {
     if (!activeConfig) return false;
@@ -388,6 +464,18 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
               <div className="nav-btn-text">
                 <span className="nav-btn-title">Model Settings</span>
                 <span className="nav-btn-sub">Parameters & Fallbacks</span>
+              </div>
+            </button>
+
+            <button
+              type="button"
+              className={`settings-nav-btn ${activeSection === 'api_keys' ? 'active' : ''}`}
+              onClick={() => setActiveSection('api_keys')}
+            >
+              <Key size={17} />
+              <div className="nav-btn-text">
+                <span className="nav-btn-title">API Keys & DocPilot AI</span>
+                <span className="nav-btn-sub">Offline OCR Integration</span>
               </div>
             </button>
 
@@ -1103,6 +1191,317 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                       <span>Save Model Parameters</span>
                     </button>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* SECTION: API KEYS & DOCPILOT AI */}
+          {activeSection === 'api_keys' && (
+            <div className="settings-section-view">
+              {/* 1. Header Hero Card */}
+              <div className="settings-subcard">
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: '1rem' }}>
+                  <div>
+                    <h3 className="subcard-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                      <Key size={20} style={{ color: 'var(--primary)' }} />
+                      DocPilot AI & Offline OCR API Access
+                    </h3>
+                    <p className="subcard-desc" style={{ marginBottom: '12px' }}>
+                      Connect DocPilot AI and external services to this offline OCR microservice using API keys.
+                      Documents processed via <code>/api/v1/ocr</code> execute 100% locally with RapidOCR, extracting text, fields, and authenticity indicators without cloud AI dependencies.
+                    </p>
+                  </div>
+                </div>
+
+                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
+                  <span className="provider-chip-pill local">⚡ RapidOCR Engine (Offline)</span>
+                  <span className="provider-chip-pill local">🛡️ Zero Cloud Data Leakage</span>
+                  <span className="provider-chip-pill cloud">📑 22 Rule-Based Extractors</span>
+                  <span className="provider-chip-pill gateway">🔍 Checksum & Font Verification</span>
+                </div>
+              </div>
+
+              {/* 2. Create API Key Card */}
+              <div className="settings-subcard" style={{ marginTop: '1.5rem' }}>
+                <h3 className="subcard-title" style={{ fontSize: '1.1rem' }}>Generate New API Key</h3>
+                <p className="subcard-desc">
+                  Create a new secret key for DocPilot AI or automated document pipelines.
+                </p>
+
+                <form onSubmit={handleCreateApiKey} style={{ display: 'flex', gap: '12px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                  <div className="settings-field-group" style={{ flex: '1', minWidth: '240px' }}>
+                    <label htmlFor="new-key-name-input">Key Identifier / Name</label>
+                    <input
+                      id="new-key-name-input"
+                      type="text"
+                      value={newKeyName}
+                      onChange={(e) => setNewKeyName(e.target.value)}
+                      placeholder="e.g., DocPilot AI Microservice"
+                      required
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    className="btn btn-primary"
+                    disabled={creatingKey || !newKeyName.trim()}
+                    style={{ height: '42px', padding: '0 20px', display: 'flex', alignItems: 'center', gap: '8px' }}
+                  >
+                    <Plus size={16} />
+                    <span>{creatingKey ? 'Generating...' : 'Create Secret Key'}</span>
+                  </button>
+                </form>
+
+                {/* Newly Created Secret Key Banner */}
+                {newlyCreatedKey && (
+                  <div
+                    style={{
+                      marginTop: '1.25rem',
+                      padding: '16px 20px',
+                      borderRadius: '12px',
+                      background: 'rgba(16, 185, 129, 0.08)',
+                      border: '1px solid rgba(16, 185, 129, 0.3)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '8px', color: '#10b981', fontWeight: 700, fontSize: '0.92rem', marginBottom: '6px' }}>
+                      <CheckCircle2 size={18} />
+                      <span>API Key Generated Successfully</span>
+                    </div>
+                    <p style={{ fontSize: '0.82rem', color: 'var(--text-muted)', margin: '0 0 10px 0' }}>
+                      Please copy this key immediately. For security reasons, <strong>it will never be displayed again</strong>.
+                    </p>
+                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                      <code
+                        style={{
+                          flex: 1,
+                          padding: '10px 14px',
+                          borderRadius: '8px',
+                          background: 'var(--bg-card)',
+                          border: '1px solid var(--border-subtle)',
+                          fontFamily: 'monospace',
+                          fontSize: '0.9rem',
+                          wordBreak: 'break-all',
+                          color: 'var(--text-main)',
+                        }}
+                      >
+                        {newlyCreatedKey}
+                      </code>
+                      <button
+                        type="button"
+                        className="btn btn-secondary btn-sm"
+                        onClick={() => handleCopyKey(newlyCreatedKey)}
+                        style={{ height: '40px', padding: '0 16px', display: 'flex', alignItems: 'center', gap: '6px' }}
+                      >
+                        {copiedKey ? <Check size={14} style={{ color: 'var(--success)' }} /> : <Copy size={14} />}
+                        <span>{copiedKey ? 'Copied!' : 'Copy Key'}</span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* 3. Existing Keys Table Card */}
+              <div className="settings-subcard" style={{ marginTop: '1.5rem' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '14px' }}>
+                  <div>
+                    <h3 className="subcard-title" style={{ fontSize: '1.1rem' }}>Active API Keys</h3>
+                    <p className="subcard-desc" style={{ margin: 0 }}>
+                      Keys currently authorized to call the offline OCR endpoints.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={fetchApiKeys}
+                    disabled={loadingApiKeys}
+                    title="Refresh keys list"
+                  >
+                    <RefreshCw size={13} className={loadingApiKeys ? 'spin-anim' : ''} />
+                    <span>Refresh</span>
+                  </button>
+                </div>
+
+                {loadingApiKeys && apiKeys.length === 0 ? (
+                  <div style={{ padding: '24px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                    Loading API keys...
+                  </div>
+                ) : apiKeys.length === 0 ? (
+                  <div style={{ padding: '32px 20px', textAlign: 'center', border: '1px dashed var(--border-subtle)', borderRadius: '12px', background: 'var(--bg-card)' }}>
+                    <Key size={32} style={{ opacity: 0.3, margin: '0 auto 12px auto', display: 'block' }} />
+                    <p style={{ fontWeight: 600, color: 'var(--text-main)', marginBottom: '4px' }}>No API keys found</p>
+                    <p style={{ fontSize: '0.85rem', color: 'var(--text-muted)', margin: 0 }}>
+                      Generate an API key above to connect DocPilot AI with this offline OCR engine.
+                    </p>
+                  </div>
+                ) : (
+                  <div style={{ overflowX: 'auto' }}>
+                    <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', fontSize: '0.88rem' }}>
+                      <thead>
+                        <tr style={{ borderBottom: '1px solid var(--border-subtle)', color: 'var(--text-muted)', fontSize: '0.75rem', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                          <th style={{ padding: '10px 12px' }}>Name</th>
+                          <th style={{ padding: '10px 12px' }}>Secret Key</th>
+                          <th style={{ padding: '10px 12px' }}>Created</th>
+                          <th style={{ padding: '10px 12px' }}>Last Used</th>
+                          <th style={{ padding: '10px 12px' }}>Status</th>
+                          <th style={{ padding: '10px 12px', textAlign: 'right' }}>Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {apiKeys.map((k) => (
+                          <tr key={k.id} style={{ borderBottom: '1px solid var(--border-subtle)' }}>
+                            <td style={{ padding: '14px 12px', fontWeight: 600, color: 'var(--text-main)' }}>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <Lock size={14} style={{ color: 'var(--primary)' }} />
+                                <span>{k.name}</span>
+                              </div>
+                            </td>
+                            <td style={{ padding: '14px 12px' }}>
+                              <code style={{ fontFamily: 'monospace', padding: '3px 7px', background: 'var(--bg-card)', borderRadius: '4px', border: '1px solid var(--border-subtle)' }}>
+                                {k.prefix}••••••••
+                              </code>
+                            </td>
+                            <td style={{ padding: '14px 12px', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                              {k.created_at ? new Date(k.created_at).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+                            </td>
+                            <td style={{ padding: '14px 12px', color: 'var(--text-muted)', fontSize: '0.82rem' }}>
+                              {k.last_used_at ? new Date(k.last_used_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Never'}
+                            </td>
+                            <td style={{ padding: '14px 12px' }}>
+                              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '2px 8px', borderRadius: '12px', fontSize: '0.72rem', fontWeight: 700, background: 'rgba(16, 185, 129, 0.1)', color: '#10b981' }}>
+                                <Check size={11} /> Active
+                              </span>
+                            </td>
+                            <td style={{ padding: '14px 12px', textAlign: 'right' }}>
+                              <button
+                                type="button"
+                                className="btn btn-danger btn-sm"
+                                onClick={() => handleRevokeApiKey(k.id, k.name)}
+                                title="Revoke API key"
+                                style={{ padding: '6px 10px', height: 'auto' }}
+                              >
+                                <Trash2 size={13} />
+                                <span>Revoke</span>
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* 4. DocPilot AI Offline OCR Integration Guide & Code Snippets */}
+              <div className="settings-subcard" style={{ marginTop: '1.5rem' }}>
+                <h3 className="subcard-title" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  <Code size={18} style={{ color: 'var(--primary)' }} />
+                  DocPilot AI Integration Quickstart
+                </h3>
+                <p className="subcard-desc">
+                  Follow these steps to connect your DocPilot AI workflow with this offline OCR service.
+                </p>
+
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+                  <div style={{ padding: '16px', borderRadius: '10px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                      1. Health & Ping
+                    </div>
+                    <code style={{ fontSize: '0.85rem', color: 'var(--text-main)', display: 'block', marginBottom: '6px' }}>GET /api/v1/ping</code>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
+                      Verifies key validity and returns active engine information (RapidOCR, version, device).
+                    </p>
+                  </div>
+
+                  <div style={{ padding: '16px', borderRadius: '10px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                      2. Offline OCR Pipeline
+                    </div>
+                    <code style={{ fontSize: '0.85rem', color: 'var(--text-main)', display: 'block', marginBottom: '6px' }}>POST /api/v1/ocr</code>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
+                      Accepts multipart <code>file</code> upload. Returns extracted text, fields, type, confidence, and authenticity checks.
+                    </p>
+                  </div>
+
+                  <div style={{ padding: '16px', borderRadius: '10px', background: 'var(--bg-card)', border: '1px solid var(--border-subtle)' }}>
+                    <div style={{ fontSize: '0.78rem', fontWeight: 700, color: 'var(--primary)', textTransform: 'uppercase', marginBottom: '4px' }}>
+                      3. Authentication Header
+                    </div>
+                    <code style={{ fontSize: '0.85rem', color: 'var(--text-main)', display: 'block', marginBottom: '6px' }}>X-API-Key: dp_live_...</code>
+                    <p style={{ fontSize: '0.8rem', color: 'var(--text-muted)', margin: 0 }}>
+                      Pass via <code>X-API-Key</code> header or standard <code>Authorization: Bearer &lt;key&gt;</code>.
+                    </p>
+                  </div>
+                </div>
+
+                {/* Code Tabs */}
+                <div style={{ display: 'flex', gap: '8px', borderBottom: '1px solid var(--border-subtle)', marginBottom: '12px', paddingBottom: '8px' }}>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${activeCodeTab === 'curl' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setActiveCodeTab('curl')}
+                  >
+                    cURL
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${activeCodeTab === 'python' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setActiveCodeTab('python')}
+                  >
+                    Python (requests)
+                  </button>
+                  <button
+                    type="button"
+                    className={`btn btn-sm ${activeCodeTab === 'node' ? 'btn-primary' : 'btn-secondary'}`}
+                    onClick={() => setActiveCodeTab('node')}
+                  >
+                    Node.js / TS (axios)
+                  </button>
+                </div>
+
+                {/* Snippet Display */}
+                <div style={{ position: 'relative' }}>
+                  <button
+                    type="button"
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => {
+                      const snippet =
+                        activeCodeTab === 'curl'
+                          ? `curl -X POST "http://localhost:8000/api/v1/ocr" \\\n  -H "X-API-Key: YOUR_API_KEY" \\\n  -F "file=@/path/to/document.pdf"`
+                          : activeCodeTab === 'python'
+                          ? `import requests\n\nAPI_KEY = "YOUR_API_KEY"\nurl = "http://localhost:8000/api/v1/ocr"\n\nwith open("document.pdf", "rb") as f:\n    res = requests.post(\n        url,\n        headers={"X-API-Key": API_KEY},\n        files={"file": f}\n    )\n\ndata = res.json()\nprint("Doc Type:", data.get("doc_type"))\nprint("OCR Engine:", data.get("engine"))\nprint("Fields:", data.get("extracted_fields"))\nprint("Authenticity:", data.get("authenticity"))`
+                          : `import FormData from 'form-data';\nimport fs from 'fs';\nimport axios from 'axios';\n\nconst form = new FormData();\nform.append('file', fs.createReadStream('document.pdf'));\n\nconst response = await axios.post('http://localhost:8000/api/v1/ocr', form, {\n  headers: {\n    ...form.getHeaders(),\n    'X-API-Key': 'YOUR_API_KEY',\n  },\n});\n\nconsole.log('Result:', response.data);`;
+                      navigator.clipboard.writeText(snippet);
+                      setCopiedSnippet(true);
+                      setTimeout(() => setCopiedSnippet(false), 2000);
+                      onNotify('Code snippet copied to clipboard!', 'info');
+                    }}
+                    style={{ position: 'absolute', top: '10px', right: '10px', zIndex: 2 }}
+                  >
+                    {copiedSnippet ? <Check size={13} style={{ color: 'var(--success)' }} /> : <Copy size={13} />}
+                    <span>{copiedSnippet ? 'Copied' : 'Copy'}</span>
+                  </button>
+
+                  <pre
+                    style={{
+                      margin: 0,
+                      padding: '16px 20px',
+                      borderRadius: '8px',
+                      background: 'var(--bg-card)',
+                      border: '1px solid var(--border-subtle)',
+                      fontFamily: 'monospace',
+                      fontSize: '0.85rem',
+                      lineHeight: '1.5',
+                      color: 'var(--text-main)',
+                      overflowX: 'auto',
+                    }}
+                  >
+                    {activeCodeTab === 'curl' &&
+                      `curl -X POST "http://localhost:8000/api/v1/ocr" \\\n  -H "X-API-Key: YOUR_API_KEY" \\\n  -F "file=@/path/to/document.pdf"`}
+                    {activeCodeTab === 'python' &&
+                      `import requests\n\nAPI_KEY = "YOUR_API_KEY"\nurl = "http://localhost:8000/api/v1/ocr"\n\nwith open("document.pdf", "rb") as f:\n    res = requests.post(\n        url,\n        headers={"X-API-Key": API_KEY},\n        files={"file": f}\n    )\n\ndata = res.json()\nprint("Doc Type:", data.get("doc_type"))\nprint("OCR Engine:", data.get("engine"))\nprint("Fields:", data.get("extracted_fields"))\nprint("Authenticity:", data.get("authenticity"))`}
+                    {activeCodeTab === 'node' &&
+                      `import FormData from 'form-data';\nimport fs from 'fs';\nimport axios from 'axios';\n\nconst form = new FormData();\nform.append('file', fs.createReadStream('document.pdf'));\n\nconst response = await axios.post('http://localhost:8000/api/v1/ocr', form, {\n  headers: {\n    ...form.getHeaders(),\n    'X-API-Key': 'YOUR_API_KEY',\n  },\n});\n\nconsole.log('Result:', response.data);`}
+                  </pre>
                 </div>
               </div>
             </div>

@@ -242,6 +242,25 @@ async def authenticate_request(
             "role": "admin",
             "auth_method": "dev_bypass",
         }
+    # Dynamic API Key Check (DocPilot AI & External Services)
+    candidate_key = api_key_candidate or jwt_candidate
+    if candidate_key:
+        try:
+            import api_key_manager
+            key_info = api_key_manager.verify_api_key(candidate_key)
+            if key_info:
+                return {
+                    "sub": key_info.get("user_id", DEFAULT_MOCK_USER_ID),
+                    "user_id": key_info.get("user_id", DEFAULT_MOCK_USER_ID),
+                    "email": key_info.get("user_email", "client@docpilot.ai"),
+                    "full_name": key_info.get("name", "DocPilot AI Client"),
+                    "role": "admin",
+                    "auth_method": "api_key",
+                    "api_key_id": key_info.get("id"),
+                }
+        except Exception:
+            pass
+
     auth_mode = os.getenv("AUTH_MODE", "disabled").lower()
     configured_api_key = os.getenv("API_KEY")
     if (auth_mode in ("apikey", "dual") or not jwt_candidate) and api_key_candidate and configured_api_key:

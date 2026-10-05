@@ -96,7 +96,7 @@ from security import (
     validate_security_configuration,
     verify_client_credentials,
 )
-from auth_dependencies import get_current_user, UserProfile, require_admin
+from auth_dependencies import get_current_user, UserProfile, require_admin, require_api_key_or_token
 from verifier import (
     check_doc_type_mismatch,
     classify_document_content,
@@ -109,6 +109,7 @@ from verifier import (
     DOC_TYPE_METADATA,
 )
 from authenticity_checker import authenticity_manager
+import api_key_manager
 
 # Configuration & Constants
 TEMP_DIR = os.getenv("OCR_TEMP_DIR", os.path.join(tempfile.gettempdir(), "company_ocr_temp"))
@@ -1141,6 +1142,57 @@ async def get_auth_me_endpoint(
     }
 
 
+# ==============================================================================
+# API Key Management for DocPilot AI & External Microservices
+# ==============================================================================
+
+class CreateApiKeyPayload(BaseModel):
+    name: str = Field(..., min_length=1, max_length=100, description="Descriptive name for the API key")
+
+
+@app.get("/api/api-keys")
+async def get_user_api_keys_endpoint(
+    current_user: UserProfile = Depends(get_current_user),
+):
+    """List API keys owned by the current user."""
+    keys = api_key_manager.list_api_keys(user_id=current_user.id)
+    return {"keys": keys}
+
+
+@app.post("/api/api-keys")
+async def create_user_api_key_endpoint(
+    payload: CreateApiKeyPayload,
+    current_user: UserProfile = Depends(get_current_user),
+):
+    """Generate a new secure API key for DocPilot AI or an external client."""
+    record, raw_key = api_key_manager.create_api_key(
+        name=payload.name,
+        user_id=current_user.id,
+        user_email=current_user.email or "",
+    )
+    return {
+        "success": True,
+        "key": raw_key,
+        "record": record,
+        "message": "API key generated successfully. Copy and securely store this key now, as it cannot be retrieved again."
+    }
+
+
+@app.delete("/api/api-keys/{key_id}")
+async def revoke_user_api_key_endpoint(
+    key_id: str,
+    current_user: UserProfile = Depends(get_current_user),
+):
+    """Revoke and delete an API key."""
+    success = api_key_manager.revoke_api_key(key_id=key_id, user_id=current_user.id)
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="API key not found or not owned by current user."
+        )
+    return {"success": True, "message": "API key revoked successfully."}
+
+
 @app.get("/api/stats")
 async def get_dashboard_stats(
     current_user: UserProfile = Depends(get_current_user),
@@ -1513,6 +1565,277 @@ def persist_document(
     )
 
 
+async def execute_offline_ocr_pipeline(
+    temp_path: str,
+    filename: str,
+    ext: str,
+    file_bytes: bytes,
+    doc_type: Optional[str] = None,
+    expected_data: Optional[str] = None,
+    user_id: Optional[str] = None,
+    req_start: Optional[float] = None,
+) -> Dict[str, Any]:
+    """
+    Centralized Offline OCR & Verification Pipeline:
+    - Runs local RapidOCR neural text detection & recognition on CPU (0 cloud dependencies)
+    - Normalizes text and classifies across 25 supported document types
+    - Runs rule-based extractors (22 types) with format checksum validations
+    - Assesses authenticity & security flags
+    - Encrypts and persists document to storage
+    """
+    if req_start is None:
+        req_start = time.time()
+
+    requested_type = (doc_type or "").strip().lower()
+    init_langs = get_languages_for_doc_type(requested_type) if requested_type and requested_type != "auto" else None
+    logging_utils.log_event(logger, logging.INFO, event="ocr_started", doc_type=requested_type or "auto", filename=filename)
+    ocr_t0 = time.time()
+    try:
+        if ext == ".pdf":
+            doc_res = ocr_engine.process_pdf(temp_path, languages=init_langs)
+        else:
+            doc_res = ocr_engine.process_file(temp_path, languages=init_langs)
+        ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
+        logging_utils.log_event(
+            logger,
+            logging.INFO,
+            event="ocr_completed",
+            duration_ms=ocr_dur_ms,
+            pages=len(doc_res.pages) if doc_res.pages else 1,
+            status="success",
+        )
+    except Exception as ex:
+        ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
+        logging_utils.log_event(
+            logger,
+            logging.ERROR,
+            event="ocr_completed",
+            duration_ms=ocr_dur_ms,
+            status="failed",
+        )
+        logger.error("OCR extraction exception: %s", ex, exc_info=True)
+        doc_res = OCRDocumentResult(
+            pages=[],
+            full_text="",
+            average_confidence=0.0,
+            ocr_required=True,
+            text_source="none",
+            engine_error=f"ocr_extraction_failed: {str(ex)}",
+        )
+
+    ocr_required = getattr(doc_res, "ocr_required", True)
+    text_source = getattr(doc_res, "text_source", "none")
+
+    has_text = bool(doc_res.full_text and doc_res.full_text.strip())
+    has_lines = any(bool(p.lines) for p in doc_res.pages) if doc_res.pages else False
+    has_engine_error = bool(getattr(doc_res, "engine_error", None))
+
+    raw_fields: Dict[str, Any] = {}
+    sanitized_fields: Dict[str, Any] = {}
+    field_confs: Dict[str, float] = {}
+    checksum_valid = True
+    checksum_reason: Optional[str] = None
+    cross_check_results = None
+
+    if has_engine_error or not has_text or doc_res.average_confidence == 0.0 or not has_lines:
+        failure_detail = getattr(doc_res, "engine_error", None) or "OCR engine returned no text or zero confidence: I couldn't extract enough text to identify this document."
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=failure_detail,
+        )
+
+    # 2. Text Normalization & Content Classification
+    doc_res.full_text = normalize_ocr_text(doc_res.full_text)
+    classification = classify_document_content(doc_res.full_text)
+
+    if not requested_type or requested_type == "auto":
+        resolved_type = classification.get("doc_type", "unknown")
+        auto_langs = get_languages_for_doc_type(resolved_type)
+        if auto_langs and len(auto_langs) > 1:
+            dev_chars_now = len(re.findall(r"[\u0900-\u097F]", doc_res.full_text))
+            if doc_res.ocr_required or dev_chars_now < 10:
+                try:
+                    if ext == ".pdf":
+                        doc_res = ocr_engine.process_pdf(temp_path, languages=auto_langs)
+                    else:
+                        doc_res = ocr_engine.process_file(temp_path, languages=auto_langs)
+                    doc_res.full_text = normalize_ocr_text(doc_res.full_text)
+                    classification = classify_document_content(doc_res.full_text)
+                    resolved_type = classification.get("doc_type", resolved_type)
+                except Exception as ex:
+                    logger.warning("Secondary Devanagari pass failed: %s", ex)
+        elif resolved_type == "unknown" and doc_res.ocr_required:
+            try:
+                fallback_langs = ["en", "hi", "mr"]
+                if ext == ".pdf":
+                    retry_res = ocr_engine.process_pdf(temp_path, languages=fallback_langs)
+                else:
+                    retry_res = ocr_engine.process_file(temp_path, languages=fallback_langs)
+                retry_res.full_text = normalize_ocr_text(retry_res.full_text)
+                retry_classification = classify_document_content(retry_res.full_text)
+                if retry_classification["doc_type"] != "unknown":
+                    doc_res = retry_res
+                    classification = retry_classification
+                    resolved_type = retry_classification["doc_type"]
+                elif len(re.findall(r"[\u0900-\u097F]", retry_res.full_text)) > len(re.findall(r"[\u0900-\u097F]", doc_res.full_text)):
+                    doc_res = retry_res
+            except Exception as ex:
+                logger.warning("Regional fallback pass failed: %s", ex)
+    else:
+        resolved_type = requested_type
+
+    meta = DOC_TYPE_METADATA.get(resolved_type, {})
+    detected_doc_title = classification.get("document_type") or meta.get("name") or (
+        resolved_type.replace("_", " ").title() if resolved_type != "unknown" else "Unknown Document"
+    )
+    detected_issuer = classification.get("issuer") or meta.get("issuer")
+
+    first_page_img: Optional[Image.Image] = None
+    if doc_res.pages and doc_res.pages[0].image:
+        first_page_img = doc_res.pages[0].image
+    elif ext == ".pdf":
+        pdf_imgs = render_pdf_pages_to_images(temp_path)
+        if pdf_imgs:
+            first_page_img = pdf_imgs[0]
+    else:
+        try:
+            with Image.open(temp_path) as img:
+                first_page_img = img.convert("RGB").copy()
+        except Exception:
+            pass
+
+    # 3. Field Extraction & Verification
+    if resolved_type != "unknown":
+        try:
+            raw_fields, field_confs = extract_document_fields_raw(resolved_type, doc_res)
+            if resolved_type == "cancelled_cheque":
+                ocr_func = None
+                if first_page_img:
+                    ocr_func = lambda img: (ocr_engine.process_image(img).full_text, None)
+                micr_data = extract_micr_from_cheque(
+                    cheque_img=first_page_img or Image.new("RGB", (100, 100)),
+                    ocr_func=ocr_func,
+                    ocr_full_text=doc_res.full_text,
+                    full_page_fields=raw_fields,
+                )
+                raw_fields["micr_line"] = micr_data.get("micr_line")
+                raw_fields["micr_confidence"] = micr_data.get("micr_confidence", "low")
+                if micr_data.get("micr_code"):
+                    raw_fields["micr_code"] = micr_data["micr_code"]
+                if micr_data.get("account_number_masked"):
+                    raw_fields["micr_account_number_masked"] = micr_data["account_number_masked"]
+                if micr_data.get("tran_code"):
+                    raw_fields["tran_code"] = micr_data["tran_code"]
+                if micr_data.get("cheque_number") and not raw_fields.get("cheque_number"):
+                    raw_fields["cheque_number"] = micr_data["cheque_number"]
+                if "micr_match" in micr_data:
+                    raw_fields["micr_match"] = micr_data["micr_match"]
+                if micr_data.get("micr_disagreements"):
+                    raw_fields["micr_disagreements"] = micr_data["micr_disagreements"]
+
+            checksum_valid, checksum_reason = validate_document_checksums(resolved_type, raw_fields)
+            if expected_data:
+                try:
+                    expected_dict = json.loads(expected_data)
+                    if isinstance(expected_dict, dict):
+                        cross_check_results = perform_cross_check(raw_fields, expected_dict)
+                except Exception:
+                    pass
+            sanitized_fields, field_confs = sanitize_extracted_fields(resolved_type, raw_fields, field_confs)
+
+            if resolved_type == "bank_statement" and sanitized_fields.get("bank_name"):
+                detected_issuer = sanitized_fields["bank_name"]
+            elif resolved_type == "salary_slip" and sanitized_fields.get("employer_name"):
+                detected_issuer = sanitized_fields["employer_name"]
+            elif resolved_type == "utility_bill" and sanitized_fields.get("utility_provider"):
+                detected_issuer = sanitized_fields["utility_provider"]
+            elif resolved_type == "income_certificate" and sanitized_fields.get("issuing_authority"):
+                detected_issuer = sanitized_fields["issuing_authority"]
+        except Exception as ex:
+            checksum_valid = False
+            checksum_reason = f"Extraction error: {str(ex)}"
+    else:
+        sanitized_fields = {"document_type": "Unknown Document"}
+
+    # 4. Authenticity Assessment
+    qr_fields = {}
+    if first_page_img:
+        try:
+            qrs = decode_qr_from_image(first_page_img)
+            for q in qrs:
+                qr_fields.update(parse_qr_payload(resolved_type, q))
+        except Exception:
+            pass
+
+    authenticity = authenticity_manager.assess_document(
+        doc_type=resolved_type,
+        image=first_page_img,
+        ocr_lines=doc_res.pages[0].lines if doc_res.pages else [],
+        extracted_fields=raw_fields,
+        raw_text=doc_res.full_text,
+        qr_fields=qr_fields,
+        is_supported=(resolved_type != "unknown"),
+    )
+
+    doc_status = determine_document_status(
+        checksum_valid=checksum_valid,
+        average_confidence=doc_res.average_confidence,
+        vault_mode=True,
+    )
+
+    thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
+
+    result_payload = {
+        "doc_type": resolved_type,
+        "document_type": detected_doc_title,
+        "issuer": detected_issuer,
+        "classification": classification,
+        "evidence": classification.get("evidence", []),
+        "ocr_required": ocr_required,
+        "text_source": text_source,
+        "status": doc_status,
+        "confidence": doc_res.average_confidence,
+        "pages": len(doc_res.pages),
+        "reason": checksum_reason,
+        "extracted_fields": sanitized_fields,
+        "field_confidences": field_confs,
+        "extracted_text": doc_res.full_text,
+        "checksum_valid": checksum_valid,
+        "checksum_reason": checksum_reason,
+        "cross_check": cross_check_results,
+        "verification_status": authenticity["verification_status"],
+        "risk_score": authenticity["risk_score"],
+        "review_required": authenticity["review_required"],
+        "suspicious_signals": authenticity["suspicious_signals"],
+        "human_review_reason": authenticity["human_review_reason"],
+        "verified_by_ai": False,
+    }
+
+    saved_record = persist_document(
+        file_bytes=file_bytes,
+        filename=filename,
+        result_data=result_payload,
+        thumbnail_bytes=thumb_bytes,
+        user_id=user_id,
+        mode="offline",
+    )
+
+    logging_utils.log_event(
+        logger,
+        logging.INFO,
+        event="document_processed",
+        document_type=detected_doc_title,
+        ocr_engine="RapidOCR",
+        ai_model="none",
+        processing_time_ms=int((time.time() - req_start) * 1000),
+        verification_status=authenticity["verification_status"],
+        risk_score=authenticity["risk_score"],
+        status="success",
+    )
+
+    return saved_record
+
+
 @app.post("/api/upload")
 async def upload_document_endpoint(
     file: UploadFile = File(...),
@@ -1723,261 +2046,109 @@ async def upload_document_endpoint(
         # ====================================================================
         # Offline Mode Branch (RapidOCR + ONNX) - 100% Unchanged
         # ====================================================================
-        requested_type = (doc_type or "").strip().lower()
-        init_langs = get_languages_for_doc_type(requested_type) if requested_type and requested_type != "auto" else None
-        logging_utils.log_event(logger, logging.INFO, event="ocr_started", doc_type=requested_type or "auto", filename=filename)
-        ocr_t0 = time.time()
-        try:
-            if ext == ".pdf":
-                doc_res = ocr_engine.process_pdf(temp_path, languages=init_langs)
-            else:
-                doc_res = ocr_engine.process_file(temp_path, languages=init_langs)
-            ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
-            logging_utils.log_event(
-                logger,
-                logging.INFO,
-                event="ocr_completed",
-                duration_ms=ocr_dur_ms,
-                pages=len(doc_res.pages) if doc_res.pages else 1,
-                status="success",
-            )
-        except Exception as ex:
-            ocr_dur_ms = int((time.time() - ocr_t0) * 1000)
-            logging_utils.log_event(
-                logger,
-                logging.ERROR,
-                event="ocr_completed",
-                duration_ms=ocr_dur_ms,
-                status="failed",
-            )
-            logger.error("OCR extraction exception in /api/ingest: %s", ex, exc_info=True)
-            doc_res = OCRDocumentResult(
-                pages=[],
-                full_text="",
-                average_confidence=0.0,
-                ocr_required=True,
-                text_source="none",
-                engine_error=f"ocr_extraction_failed: {str(ex)}",
-            )
-
-        ocr_required = getattr(doc_res, "ocr_required", True)
-        text_source = getattr(doc_res, "text_source", "none")
-
-        has_text = bool(doc_res.full_text and doc_res.full_text.strip())
-        has_lines = any(bool(p.lines) for p in doc_res.pages) if doc_res.pages else False
-        has_engine_error = bool(getattr(doc_res, "engine_error", None))
-
-        raw_fields: Dict[str, Any] = {}
-        sanitized_fields: Dict[str, Any] = {}
-        field_confs: Dict[str, float] = {}
-        checksum_valid = True
-        checksum_reason: Optional[str] = None
-        cross_check_results = None
-
-        if has_engine_error or not has_text or doc_res.average_confidence == 0.0 or not has_lines:
-            failure_detail = getattr(doc_res, "engine_error", None) or "OCR engine returned no text or zero confidence: I couldn't extract enough text to identify this document."
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-                detail=failure_detail,
-            )
-
-        # 2. Text Normalization & Shared Content Classification
-        doc_res.full_text = normalize_ocr_text(doc_res.full_text)
-        classification = classify_document_content(doc_res.full_text)
-
-        if not requested_type or requested_type == "auto":
-            resolved_type = classification.get("doc_type", "unknown")
-            # If resolved_type uses Devanagari passes and the initial pass was English-only,
-            # and OCR was actually required, execute the bilingual pass now
-            auto_langs = get_languages_for_doc_type(resolved_type)
-            if auto_langs and len(auto_langs) > 1:
-                dev_chars_now = len(re.findall(r"[\u0900-\u097F]", doc_res.full_text))
-                if doc_res.ocr_required or dev_chars_now < 10:
-                    try:
-                        if ext == ".pdf":
-                            doc_res = ocr_engine.process_pdf(temp_path, languages=auto_langs)
-                        else:
-                            doc_res = ocr_engine.process_file(temp_path, languages=auto_langs)
-                        doc_res.full_text = normalize_ocr_text(doc_res.full_text)
-                        classification = classify_document_content(doc_res.full_text)
-                        resolved_type = classification.get("doc_type", resolved_type)
-                    except Exception as ex:
-                        logger.warning("Secondary Devanagari pass in /api/upload failed: %s", ex)
-            elif resolved_type == "unknown" and doc_res.ocr_required:
-                try:
-                    fallback_langs = ["en", "hi", "mr"]
-                    if ext == ".pdf":
-                        retry_res = ocr_engine.process_pdf(temp_path, languages=fallback_langs)
-                    else:
-                        retry_res = ocr_engine.process_file(temp_path, languages=fallback_langs)
-                    retry_res.full_text = normalize_ocr_text(retry_res.full_text)
-                    retry_classification = classify_document_content(retry_res.full_text)
-                    if retry_classification["doc_type"] != "unknown":
-                        doc_res = retry_res
-                        classification = retry_classification
-                        resolved_type = retry_classification["doc_type"]
-                    elif len(re.findall(r"[\u0900-\u097F]", retry_res.full_text)) > len(re.findall(r"[\u0900-\u097F]", doc_res.full_text)):
-                        doc_res = retry_res
-                except Exception as ex:
-                    logger.warning("Regional fallback pass in /api/upload failed: %s", ex)
-        else:
-            resolved_type = requested_type
-
-        meta = DOC_TYPE_METADATA.get(resolved_type, {})
-        detected_doc_title = classification.get("document_type") or meta.get("name") or (
-            resolved_type.replace("_", " ").title() if resolved_type != "unknown" else "Unknown Document"
-        )
-        detected_issuer = classification.get("issuer") or meta.get("issuer")
-
-        first_page_img: Optional[Image.Image] = None
-        if doc_res.pages and doc_res.pages[0].image:
-            first_page_img = doc_res.pages[0].image
-        elif ext == ".pdf":
-            pdf_imgs = render_pdf_pages_to_images(temp_path)
-            if pdf_imgs:
-                first_page_img = pdf_imgs[0]
-        else:
-            try:
-                with Image.open(temp_path) as img:
-                    first_page_img = img.convert("RGB").copy()
-            except Exception:
-                pass
-
-        # 3. Field Extraction & Verification
-        if resolved_type != "unknown":
-            try:
-                raw_fields, field_confs = extract_document_fields_raw(resolved_type, doc_res)
-                if resolved_type == "cancelled_cheque":
-                    ocr_func = None
-                    if first_page_img:
-                        ocr_func = lambda img: (ocr_engine.process_image(img).full_text, None)
-                    micr_data = extract_micr_from_cheque(
-                        cheque_img=first_page_img or Image.new("RGB", (100, 100)),
-                        ocr_func=ocr_func,
-                        ocr_full_text=doc_res.full_text,
-                        full_page_fields=raw_fields,
-                    )
-                    raw_fields["micr_line"] = micr_data.get("micr_line")
-                    raw_fields["micr_confidence"] = micr_data.get("micr_confidence", "low")
-                    if micr_data.get("micr_code"):
-                        raw_fields["micr_code"] = micr_data["micr_code"]
-                    if micr_data.get("account_number_masked"):
-                        raw_fields["micr_account_number_masked"] = micr_data["account_number_masked"]
-                    if micr_data.get("tran_code"):
-                        raw_fields["tran_code"] = micr_data["tran_code"]
-                    if micr_data.get("cheque_number") and not raw_fields.get("cheque_number"):
-                        raw_fields["cheque_number"] = micr_data["cheque_number"]
-                    if "micr_match" in micr_data:
-                        raw_fields["micr_match"] = micr_data["micr_match"]
-                    if micr_data.get("micr_disagreements"):
-                        raw_fields["micr_disagreements"] = micr_data["micr_disagreements"]
-
-                checksum_valid, checksum_reason = validate_document_checksums(resolved_type, raw_fields)
-                # 4. Optional Cross-check on raw unmasked fields
-                if expected_data:
-                    try:
-                        expected_dict = json.loads(expected_data)
-                        if isinstance(expected_dict, dict):
-                            cross_check_results = perform_cross_check(raw_fields, expected_dict)
-                    except Exception:
-                        pass
-                sanitized_fields, field_confs = sanitize_extracted_fields(resolved_type, raw_fields, field_confs)
-
-                # Context-specific issuer detection
-                if resolved_type == "bank_statement" and sanitized_fields.get("bank_name"):
-                    detected_issuer = sanitized_fields["bank_name"]
-                elif resolved_type == "salary_slip" and sanitized_fields.get("employer_name"):
-                    detected_issuer = sanitized_fields["employer_name"]
-                elif resolved_type == "utility_bill" and sanitized_fields.get("utility_provider"):
-                    detected_issuer = sanitized_fields["utility_provider"]
-                elif resolved_type == "income_certificate" and sanitized_fields.get("issuing_authority"):
-                    detected_issuer = sanitized_fields["issuing_authority"]
-            except Exception as ex:
-                checksum_valid = False
-                checksum_reason = f"Extraction error: {str(ex)}"
-        else:
-            sanitized_fields = {"document_type": "Unknown Document"}
-
-        # 5. Authenticity Assessment (Offline Mode)
-        qr_fields = {}
-        if first_page_img:
-            try:
-                qrs = decode_qr_from_image(first_page_img)
-                for q in qrs:
-                    qr_fields.update(parse_qr_payload(resolved_type, q))
-            except Exception:
-                pass
-
-        authenticity = authenticity_manager.assess_document(
-            doc_type=resolved_type,
-            image=first_page_img,
-            ocr_lines=doc_res.pages[0].lines if doc_res.pages else [],
-            extracted_fields=raw_fields,
-            raw_text=doc_res.full_text,
-            qr_fields=qr_fields,
-            is_supported=(resolved_type != "unknown"),
-        )
-
-        doc_status = determine_document_status(
-            checksum_valid=checksum_valid,
-            average_confidence=doc_res.average_confidence,
-            vault_mode=True,
-        )
-
-        # 6. Generate Thumbnail Preview
-        thumb_bytes = render_thumbnail(temp_path, is_pdf=(ext == ".pdf"))
-
-        # 7. Package Result Data (Strictly sanitized fields, no raw PII)
-        result_payload = {
-            "doc_type": resolved_type,
-            "document_type": detected_doc_title,
-            "issuer": detected_issuer,
-            "classification": classification,
-            "evidence": classification.get("evidence", []),
-            "ocr_required": ocr_required,
-            "text_source": text_source,
-            "status": doc_status,
-            "confidence": doc_res.average_confidence,
-            "pages": len(doc_res.pages),
-            "reason": checksum_reason,
-            "extracted_fields": sanitized_fields,
-            "field_confidences": field_confs,
-            "extracted_text": doc_res.full_text,
-            "checksum_valid": checksum_valid,
-            "checksum_reason": checksum_reason,
-            "cross_check": cross_check_results,
-            "verification_status": authenticity["verification_status"],
-            "risk_score": authenticity["risk_score"],
-            "review_required": authenticity["review_required"],
-            "suspicious_signals": authenticity["suspicious_signals"],
-            "human_review_reason": authenticity["human_review_reason"],
-            "verified_by_ai": False,
-        }
-
-        # 8. Persist to Document Store
-        saved_record = persist_document(
-            file_bytes=file_bytes,
+        return await execute_offline_ocr_pipeline(
+            temp_path=temp_path,
             filename=filename,
-            result_data=result_payload,
-            thumbnail_bytes=thumb_bytes,
+            ext=ext,
+            file_bytes=file_bytes,
+            doc_type=doc_type,
+            expected_data=expected_data,
             user_id=auth.get("user_id") or auth.get("sub"),
-            mode="offline",
+            req_start=req_start,
         )
+    finally:
+        if os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
 
-        logging_utils.log_event(
-            logger,
-            logging.INFO,
-            event="document_processed",
-            document_type=detected_doc_title,
-            ocr_engine="RapidOCR",
-            ai_model="none",
-            processing_time_ms=int((time.time() - req_start) * 1000),
-            verification_status=authenticity["verification_status"],
-            risk_score=authenticity["risk_score"],
-            status="success",
+
+# ==============================================================================
+# Dedicated API Integration for DocPilot AI & External Microservices
+# ==============================================================================
+
+@app.get("/api/v1/ping")
+async def docpilot_ping_v1(
+    current_user: UserProfile = Depends(require_api_key_or_token),
+):
+    """Health & authentication validation endpoint for DocPilot AI."""
+    info = get_ocr_engine_info()
+    return {
+        "status": "connected",
+        "service": "DocPilot Offline OCR Engine",
+        "version": "2.0.0",
+        "ocr_engine": info.get("display_name", "RapidOCR"),
+        "ocr_engine_status": info.get("status", "ready"),
+        "mode": "offline",
+        "supported_documents_count": len(SUPPORTED_DOC_TYPES) - 1,
+        "authenticated_client": {
+            "user_id": current_user.id,
+            "email": current_user.email,
+            "name": current_user.full_name,
+            "role": current_user.role,
+        }
+    }
+
+
+@app.post("/api/v1/ocr")
+async def docpilot_offline_ocr_endpoint(
+    file: UploadFile = File(..., description="Document file to OCR (PNG, JPG, PDF, etc.)"),
+    doc_type: Optional[str] = Form("auto", description="Target document type or 'auto' for automatic classification"),
+    expected_data: Optional[str] = Form(None, description="Optional JSON string with expected field values for cross-checking"),
+    current_user: UserProfile = Depends(require_api_key_or_token),
+    _rate_limit: None = Depends(rate_limit_upload),
+):
+    """
+    Dedicated Offline OCR API Endpoint for DocPilot AI:
+    - Zero cloud AI dependencies: air-gapped RapidOCR neural pass + 22 rule extractors
+    - Authenticated via X-API-Key or Bearer token
+    - Returns structured fields, classification confidence, and authenticity check
+    """
+    req_start = time.time()
+    file_bytes = await file.read()
+    clean_filename, ext = validate_upload_security(file, file_bytes)
+
+    temp_path = os.path.join(TEMP_DIR, f"v1_ocr_{uuid.uuid4()}{ext}")
+    with open(temp_path, "wb") as f:
+        f.write(file_bytes)
+
+    try:
+        saved_record = await execute_offline_ocr_pipeline(
+            temp_path=temp_path,
+            filename=clean_filename,
+            ext=ext,
+            file_bytes=file_bytes,
+            doc_type=doc_type,
+            expected_data=expected_data,
+            user_id=current_user.id,
+            req_start=req_start,
         )
-
-        return saved_record
+        dur_ms = int((time.time() - req_start) * 1000)
+        return {
+            "success": True,
+            "document_id": saved_record.get("id"),
+            "filename": saved_record.get("filename", clean_filename),
+            "doc_type": saved_record.get("doc_type", "unknown"),
+            "document_type": saved_record.get("document_type", "Unknown Document"),
+            "issuer": saved_record.get("issuer"),
+            "confidence": saved_record.get("confidence"),
+            "status": saved_record.get("status"),
+            "extracted_fields": saved_record.get("extracted_fields", {}),
+            "field_confidences": saved_record.get("field_confidences", {}),
+            "extracted_text": saved_record.get("extracted_text", ""),
+            "verification_status": saved_record.get("verification_status", "unsupported"),
+            "risk_score": saved_record.get("risk_score", 0),
+            "review_required": saved_record.get("review_required", False),
+            "suspicious_signals": saved_record.get("suspicious_signals", []),
+            "checksum_valid": saved_record.get("checksum_valid", True),
+            "checksum_reason": saved_record.get("checksum_reason"),
+            "ocr_engine": "RapidOCR",
+            "mode": "offline",
+            "pages": saved_record.get("pages", 1),
+            "processing_time_ms": dur_ms,
+            "client_name": current_user.full_name or "DocPilot AI",
+        }
     finally:
         if os.path.exists(temp_path):
             try:

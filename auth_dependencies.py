@@ -58,13 +58,23 @@ def is_auth_required() -> bool:
 
 def extract_token(
     authorization: Optional[str] = Header(None, alias="Authorization"),
-    token_query: Optional[str] = Query(None, alias="token")
+    token_query: Optional[str] = Query(None, alias="token"),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    api_key_query: Optional[str] = Query(None, alias="api_key"),
 ) -> Optional[str]:
-    """Extract Bearer token from Authorization header or URL token parameter."""
-    if authorization and authorization.lower().startswith("bearer "):
-        return authorization[7:].strip()
+    """Extract Bearer token or API Key from Headers or URL parameters."""
+    if x_api_key:
+        return x_api_key.strip()
+    if authorization:
+        auth_lower = authorization.lower()
+        if auth_lower.startswith("bearer "):
+            return authorization[7:].strip()
+        if auth_lower.startswith("api-key ") or auth_lower.startswith("apikey "):
+            return authorization.split(" ", 1)[1].strip()
     if token_query:
         return token_query.strip()
+    if api_key_query:
+        return api_key_query.strip()
     return None
 
 
@@ -192,9 +202,36 @@ async def get_current_user(
         logger.warning(f"[AUTH_LOG] path={req_path} user_id=None auth_result=failed reason=missing_token status_code=401")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Authentication credentials were not provided (Bearer JWT required).",
+            detail="Authentication credentials were not provided (Bearer JWT or API Key required).",
             headers={"WWW-Authenticate": "Bearer"},
         )
+
+    # 1. Check if token is an API key (DocPilot AI integration or external client)
+    try:
+        import api_key_manager
+        key_info = api_key_manager.verify_api_key(token)
+        if key_info:
+            raw_uid = key_info.get("user_id")
+            try:
+                import uuid
+                uuid.UUID(str(raw_uid))
+                safe_uid = str(raw_uid)
+            except (ValueError, TypeError, AttributeError):
+                safe_uid = os.getenv("DEFAULT_DEV_USER_ID", DEFAULT_MOCK_USER_ID)
+
+            user = UserProfile(
+                id=safe_uid,
+                email=key_info.get("user_email", "client@docpilot.ai"),
+                full_name=key_info.get("name", "DocPilot AI Client"),
+                role="admin",  # API Key clients have execution permissions
+            )
+            if request and hasattr(request, "state"):
+                request.state.user_id = user.id
+                request.state.api_key_id = key_info.get("id")
+            logger.info(f"[AUTH_LOG] path={req_path} user_id={user.id} auth_result=api_key status_code=200")
+            return user
+    except Exception as ex:
+        logger.warning("API key verification check failed: %s", ex)
 
     claims = verify_supabase_jwt(token)
     user_id = claims.get("sub")
@@ -250,3 +287,20 @@ async def require_admin(
             detail="You do not have permission to perform this administrative action."
         )
     return current_user
+
+
+async def require_api_key_or_token(
+    request: Request = None,
+    token: Optional[str] = Depends(extract_token)
+) -> UserProfile:
+    """Strict authentication dependency for external API integrations (DocPilot AI, etc.). Requires valid API key or Bearer token."""
+    req_path = request.url.path if request and hasattr(request, "url") else "unknown"
+    if not token:
+        logger.warning(f"[AUTH_LOG] path={req_path} user_id=None auth_result=failed reason=missing_token status_code=401")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please provide a valid API key via X-API-Key header or Authorization: Bearer <key>.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return await get_current_user(request=request, token=token)
+

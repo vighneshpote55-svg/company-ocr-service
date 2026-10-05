@@ -11,6 +11,7 @@ import type {
   OfflineUploadResult,
   AIProviderConfig,
   AIConnectionTestResult,
+  ApiKeyItem,
 } from '../types';
 export type { AIProviderConfig, AIProviderStatus, AIConnectionTestResult } from '../types';
 import { normalizeAiDocument } from '../types';
@@ -895,6 +896,42 @@ export class ApiService {
 
     const data = await res.json();
     return data.response;
+  }
+
+  public async getApiKeys(): Promise<{ keys: ApiKeyItem[] }> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/api-keys'), {
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to fetch API keys' }));
+      throw new Error(err.detail || `Failed to fetch API keys (HTTP ${res.status})`);
+    }
+    return res.json();
+  }
+
+  public async createApiKey(name: string): Promise<{ success: boolean; key: string; record: ApiKeyItem }> {
+    const res = await this.fetchWithAuth(this.getUrl('/api/api-keys'), {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to create API key' }));
+      throw new Error(err.detail || `Failed to create API key (HTTP ${res.status})`);
+    }
+    return res.json();
+  }
+
+  public async revokeApiKey(keyId: string): Promise<{ success: boolean }> {
+    const res = await this.fetchWithAuth(this.getUrl(`/api/api-keys/${keyId}`), {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({ detail: 'Failed to revoke API key' }));
+      throw new Error(err.detail || `Failed to revoke API key (HTTP ${res.status})`);
+    }
+    return res.json();
   }
 
   public getFileUrl(docId: string, download = false): string {

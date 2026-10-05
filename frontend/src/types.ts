@@ -24,6 +24,16 @@ export interface SupportedType {
   category: string;
 }
 
+export interface ApiKeyItem {
+  id: string;
+  name: string;
+  prefix: string;
+  created_at: string;
+  last_used_at: string | null;
+  user_email?: string;
+  is_active: boolean;
+}
+
 export interface DashboardStats {
   total: number;
   total_documents?: number;

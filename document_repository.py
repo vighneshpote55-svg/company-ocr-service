@@ -68,6 +68,13 @@ def create_document(
     file_size = len(file_bytes)
     now_iso = datetime.now(timezone.utc).isoformat()
 
+    # Ensure user_id is a valid UUID for PostgreSQL UUID schema
+    try:
+        uuid.UUID(str(user_id))
+        safe_user_id = str(user_id)
+    except (ValueError, TypeError, AttributeError):
+        safe_user_id = os.getenv("DEFAULT_DEV_USER_ID", "00000000-0000-0000-0000-000000000001")
+
     # 1. Encrypt the file data
     encrypted_bytes = encryption.encrypt_data(file_bytes)
 
@@ -77,7 +84,7 @@ def create_document(
             try:
                 # Storage path: documents/<user_id>/<doc_id>/<doc_id>.enc
                 storage_filename = f"{doc_id}.enc"
-                storage_path = f"documents/{user_id}/{doc_id}/{storage_filename}"
+                storage_path = f"documents/{safe_user_id}/{doc_id}/{storage_filename}"
 
                 # Upload encrypted bytes to Supabase private storage
                 upload_encrypted_file(storage_path, encrypted_bytes)
@@ -85,7 +92,7 @@ def create_document(
                 # Insert into documents table
                 doc_row = {
                     "id": doc_id,
-                    "user_id": user_id,
+                    "user_id": safe_user_id,
                     "original_filename": original_filename,
                     "file_type": file_type,
                     "storage_path": storage_path,
