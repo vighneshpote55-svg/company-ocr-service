@@ -24,15 +24,19 @@ export function getStoredBaseUrl(): string {
   try {
     if (typeof localStorage !== 'undefined') {
       const raw = localStorage.getItem(STORAGE_KEY_BASE_URL);
-      if (raw) return raw;
+      if (raw && raw !== 'http://localhost:8000') return raw;
     }
   } catch (e) {
     // Ignore storage read error
   }
   if (typeof window !== 'undefined' && window.location) {
-    return window.location.port === '5173' ? 'http://localhost:8000' : window.location.origin;
+    const port = window.location.port;
+    if (port === '5173' || port === '5174') {
+      return 'http://localhost:8001';
+    }
+    return window.location.origin;
   }
-  return 'http://localhost:8000';
+  return 'http://localhost:8001';
 }
 
 export function saveStoredBaseUrl(url: string): void {

@@ -92,7 +92,7 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
   const [maxTokens, setMaxTokens] = useState(1500);
 
   // Advanced Credentials State
-  const [fastApiBaseUrl, setFastApiBaseUrl] = useState(api.getBaseUrl() || 'http://localhost:8000');
+  const [fastApiBaseUrl, setFastApiBaseUrl] = useState(api.getBaseUrl() || 'http://localhost:8001');
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [bearerToken, setBearerToken] = useState(api.getToken() || '');
@@ -1466,10 +1466,10 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                     onClick={() => {
                       const snippet =
                         activeCodeTab === 'curl'
-                          ? `curl -X POST "http://localhost:8000/api/v1/ocr" \\\n  -H "X-API-Key: YOUR_API_KEY" \\\n  -F "file=@/path/to/document.pdf"`
+                          ? `curl -X POST "${fastApiBaseUrl}/api/v1/ocr" \\\n  -H "X-API-Key: YOUR_API_KEY" \\\n  -F "file=@/path/to/document.pdf"`
                           : activeCodeTab === 'python'
-                          ? `import requests\n\nAPI_KEY = "YOUR_API_KEY"\nurl = "http://localhost:8000/api/v1/ocr"\n\nwith open("document.pdf", "rb") as f:\n    res = requests.post(\n        url,\n        headers={"X-API-Key": API_KEY},\n        files={"file": f}\n    )\n\ndata = res.json()\nprint("Doc Type:", data.get("doc_type"))\nprint("OCR Engine:", data.get("engine"))\nprint("Fields:", data.get("extracted_fields"))\nprint("Authenticity:", data.get("authenticity"))`
-                          : `import FormData from 'form-data';\nimport fs from 'fs';\nimport axios from 'axios';\n\nconst form = new FormData();\nform.append('file', fs.createReadStream('document.pdf'));\n\nconst response = await axios.post('http://localhost:8000/api/v1/ocr', form, {\n  headers: {\n    ...form.getHeaders(),\n    'X-API-Key': 'YOUR_API_KEY',\n  },\n});\n\nconsole.log('Result:', response.data);`;
+                          ? `import requests\n\nAPI_KEY = "YOUR_API_KEY"\nurl = "${fastApiBaseUrl}/api/v1/ocr"\n\nwith open("document.pdf", "rb") as f:\n    res = requests.post(\n        url,\n        headers={"X-API-Key": API_KEY},\n        files={"file": f}\n    )\n\ndata = res.json()\nprint("Doc Type:", data.get("doc_type"))\nprint("OCR Engine:", data.get("engine"))\nprint("Fields:", data.get("extracted_fields"))\nprint("Authenticity:", data.get("authenticity"))`
+                          : `import FormData from 'form-data';\nimport fs from 'fs';\nimport axios from 'axios';\n\nconst form = new FormData();\nform.append('file', fs.createReadStream('document.pdf'));\n\nconst response = await axios.post('${fastApiBaseUrl}/api/v1/ocr', form, {\n  headers: {\n    ...form.getHeaders(),\n    'X-API-Key': 'YOUR_API_KEY',\n  },\n});\n\nconsole.log('Result:', response.data);`;
                       navigator.clipboard.writeText(snippet);
                       setCopiedSnippet(true);
                       setTimeout(() => setCopiedSnippet(false), 2000);
@@ -1496,11 +1496,11 @@ export const SettingsPage: React.FC<SettingsPageProps> = ({
                     }}
                   >
                     {activeCodeTab === 'curl' &&
-                      `curl -X POST "http://localhost:8000/api/v1/ocr" \\\n  -H "X-API-Key: YOUR_API_KEY" \\\n  -F "file=@/path/to/document.pdf"`}
+                      `curl -X POST "${fastApiBaseUrl}/api/v1/ocr" \\\n  -H "X-API-Key: YOUR_API_KEY" \\\n  -F "file=@/path/to/document.pdf"`}
                     {activeCodeTab === 'python' &&
-                      `import requests\n\nAPI_KEY = "YOUR_API_KEY"\nurl = "http://localhost:8000/api/v1/ocr"\n\nwith open("document.pdf", "rb") as f:\n    res = requests.post(\n        url,\n        headers={"X-API-Key": API_KEY},\n        files={"file": f}\n    )\n\ndata = res.json()\nprint("Doc Type:", data.get("doc_type"))\nprint("OCR Engine:", data.get("engine"))\nprint("Fields:", data.get("extracted_fields"))\nprint("Authenticity:", data.get("authenticity"))`}
+                      `import requests\n\nAPI_KEY = "YOUR_API_KEY"\nurl = "${fastApiBaseUrl}/api/v1/ocr"\n\nwith open("document.pdf", "rb") as f:\n    res = requests.post(\n        url,\n        headers={"X-API-Key": API_KEY},\n        files={"file": f}\n    )\n\ndata = res.json()\nprint("Doc Type:", data.get("doc_type"))\nprint("OCR Engine:", data.get("engine"))\nprint("Fields:", data.get("extracted_fields"))\nprint("Authenticity:", data.get("authenticity"))`}
                     {activeCodeTab === 'node' &&
-                      `import FormData from 'form-data';\nimport fs from 'fs';\nimport axios from 'axios';\n\nconst form = new FormData();\nform.append('file', fs.createReadStream('document.pdf'));\n\nconst response = await axios.post('http://localhost:8000/api/v1/ocr', form, {\n  headers: {\n    ...form.getHeaders(),\n    'X-API-Key': 'YOUR_API_KEY',\n  },\n});\n\nconsole.log('Result:', response.data);`}
+                      `import FormData from 'form-data';\nimport fs from 'fs';\nimport axios from 'axios';\n\nconst form = new FormData();\nform.append('file', fs.createReadStream('document.pdf'));\n\nconst response = await axios.post('${fastApiBaseUrl}/api/v1/ocr', form, {\n  headers: {\n    ...form.getHeaders(),\n    'X-API-Key': 'YOUR_API_KEY',\n  },\n});\n\nconsole.log('Result:', response.data);`}
                   </pre>
                 </div>
               </div>
